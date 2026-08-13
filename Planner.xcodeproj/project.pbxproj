@@ -26,6 +26,7 @@
 		A4000000000000000000000D /* PersistenceTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000011 /* PersistenceTestCase.swift */; };
 		A4000000000000000000000E /* ModelConstraintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000012 /* ModelConstraintTests.swift */; };
 		A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000013 /* DeadlineFetchTests.swift */; };
+		A40000000000000000000010 /* Calendar+Month.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000014 /* Calendar+Month.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +62,7 @@
 		A30000000000000000000011 /* PersistenceTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTestCase.swift; sourceTree = "<group>"; };
 		A30000000000000000000012 /* ModelConstraintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConstraintTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000013 /* DeadlineFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineFetchTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000014 /* Calendar+Month.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Calendar+Month.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				A3000000000000000000000C /* Logger+Planner.swift */,
+				A30000000000000000000014 /* Calendar+Month.swift */,
 			);
 			path = Support;
 			sourceTree = "<group>";
@@ -278,6 +281,7 @@
 				A40000000000000000000014 /* InspectorViewController.swift in Sources */,
 				A4000000000000000000000B /* ModelController.swift in Sources */,
 				A4000000000000000000000C /* SelectionModel.swift in Sources */,
+				A40000000000000000000010 /* Calendar+Month.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

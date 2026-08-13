@@ -21,12 +21,14 @@ final class ModelController {
 
     // MARK: - Create
 
+    @discardableResult
     func createProject() throws -> Project {
         let now = Date()
+        let sortIndex = Self.nextSortIndex(in: fetchedProjects())
         let project = Project(context: ctx)
         project.uuid = UUID()
         project.title = "Untitled Project"
-        project.sortIndex = Self.nextSortIndex(in: fetchedProjects())
+        project.sortIndex = sortIndex
         project.createdAt = now
         project.updatedAt = now
         ctx.processPendingChanges()
@@ -35,6 +37,7 @@ final class ModelController {
         return project
     }
 
+    @discardableResult
     func createTask(in project: Project) throws -> TaskItem {
         let task = makeTask(sortIndex: Self.nextSortIndex(in: fetchedSiblings(in: project)))
         task.project = project
@@ -45,10 +48,12 @@ final class ModelController {
         return task
     }
 
+    @discardableResult
     func createSubtask(under parent: TaskItem) throws -> TaskItem {
         let task = makeTask(sortIndex: Self.nextSortIndex(in: fetchedSiblings(under: parent)))
         if wouldIntroduceCycle(child: task, parent: parent) {
             ctx.delete(task)
+            ctx.processPendingChanges()
             throw ModelError.cycle
         }
         task.parentTask = parent
@@ -59,6 +64,7 @@ final class ModelController {
         return task
     }
 
+    @discardableResult
     func createSibling(of task: TaskItem) throws -> TaskItem {
         if let project = task.project {
             return try createTask(in: project)
@@ -71,6 +77,7 @@ final class ModelController {
         preconditionFailure("TaskItem missing parent; ModelController invariant violated")
     }
 
+    @discardableResult
     func createTask(under parent: OutlineNode) throws -> TaskItem {
         switch parent {
         case let project as Project: return try createTask(in: project)
@@ -252,23 +259,6 @@ final class ModelController {
     private func saveOrThrow() throws {
         guard persistence.saveViewContext(presentingWindow: presentingWindow) else {
             throw ModelError.saveFailed
-        }
-    }
-}
-
-extension Calendar {
-    func startOfMonth(for date: Date) -> Date {
-        self.date(from: dateComponents([.year, .month], from: date))!
-    }
-
-    func daysInMonthGrid(for date: Date) -> [Date] {
-        let monthStart = startOfMonth(for: date)
-        let weekday = component(.weekday, from: monthStart)
-        var leading = weekday - firstWeekday
-        if leading < 0 { leading += 7 }
-        let gridStart = startOfDay(for: self.date(byAdding: .day, value: -leading, to: monthStart)!)
-        return (0..<42).map { offset in
-            startOfDay(for: self.date(byAdding: .day, value: offset, to: gridStart)!)
         }
     }
 }

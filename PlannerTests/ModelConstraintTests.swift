@@ -72,6 +72,22 @@ final class ModelConstraintTests: PersistenceTestCase {
         XCTAssertNil(c.project)
     }
 
+    func testCreateSubtaskRefusesCycle() throws {
+        let project = try model.createProject()
+        let a = try model.createTask(in: project)
+        let b = try model.createSubtask(under: a)
+        // Seed A→B→A so the parent walk is already cyclic.
+        a.project = nil
+        a.parentTask = b
+
+        let taskCount = try fetchAllTasks().count
+        XCTAssertThrowsError(try model.createSubtask(under: b)) { error in
+            XCTAssertEqual(error as? ModelError, .cycle)
+        }
+        XCTAssertEqual(try fetchAllTasks().count, taskCount)
+        XCTAssertFalse(persistence.viewContext.registeredObjects.contains { $0.isInserted })
+    }
+
     func testDeleteProjectCascadesTasksAndSubtasks() throws {
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -96,6 +112,13 @@ final class ModelConstraintTests: PersistenceTestCase {
         let remaining = try fetchAllTasks()
         XCTAssertEqual(remaining.map(\.uuid), [sibling.uuid])
         XCTAssertEqual(remaining.first?.project, project)
+    }
+
+    func testCreateProjectSortIndexAppends() throws {
+        let first = try model.createProject()
+        let second = try model.createProject()
+        let third = try model.createProject()
+        XCTAssertEqual([first, second, third].map(\.sortIndex), [0, 1, 2])
     }
 
     func testSortIndexAppendsAndUuidTieBreaks() throws {
