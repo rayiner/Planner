@@ -29,9 +29,8 @@ final class PersistenceController {
         }
 
         if inMemory {
+            // History tracking requires SQLite; /dev/null discards the file.
             description.url = URL(fileURLWithPath: "/dev/null")
-            // Do NOT set description.type = NSInMemoryStoreType.
-            // History tracking is SQLite-only.
         }
 
         description.shouldAddStoreAsynchronously = false
@@ -45,10 +44,6 @@ final class PersistenceController {
         container.loadPersistentStores { _, error in
             loadError = error
         }
-        // shouldAddStoreAsynchronously == false: the store is attached
-        // (or has failed) before loadPersistentStores returns. Do not
-        // DispatchGroup.wait() on the main queue — that deadlocks if the
-        // completion is bounced back to main.
         storeLoadError = loadError
 
         if let storeLoadError {
