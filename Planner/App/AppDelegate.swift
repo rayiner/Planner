@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = ModelController(persistence: persistence)
         let selection = SelectionModel()
+        self.persistence = persistence
+        self.model = model
+        self.selection = selection
+
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
@@ -44,9 +48,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
 
         model.presentingWindow = window
-        self.persistence = persistence
-        self.model = model
-        self.selection = selection
         self.window = window
     }
 

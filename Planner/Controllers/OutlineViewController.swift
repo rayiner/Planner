@@ -350,8 +350,8 @@ extension OutlineViewController: NSOutlineViewDelegate {
         let identifier = NSUserInterfaceItemIdentifier("TitleCell")
         let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
             ?? makeTitleCell(identifier: identifier)
-        if let node = item as? OutlineNode, let field = cell.textField {
-            applyTitle(node, to: field)
+        if let node = item as? OutlineNode, let titleCell = cell as? TitleCellView {
+            titleCell.setTitle(node.title, completed: (node as? TaskItem)?.isCompleted == true)
         }
         return cell
     }
@@ -368,8 +368,8 @@ extension OutlineViewController: NSOutlineViewDelegate {
         persistExpansion()
     }
 
-    private func makeTitleCell(identifier: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let cell = NSTableCellView()
+    private func makeTitleCell(identifier: NSUserInterfaceItemIdentifier) -> TitleCellView {
+        let cell = TitleCellView()
         cell.identifier = identifier
 
         let field = NSTextField(labelWithString: "")
@@ -390,17 +390,35 @@ extension OutlineViewController: NSOutlineViewDelegate {
         ])
         return cell
     }
+}
 
-    private func applyTitle(_ node: OutlineNode, to field: NSTextField) {
-        let completed = (node as? TaskItem)?.isCompleted == true
-        var attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-            .foregroundColor: completed ? NSColor.secondaryLabelColor : NSColor.labelColor,
-        ]
-        if completed {
-            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+private final class TitleCellView: NSTableCellView {
+    private var titleText = ""
+    private var isCompleted = false
+
+    func setTitle(_ title: String, completed: Bool) {
+        titleText = title
+        isCompleted = completed
+        refreshTitle()
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { refreshTitle() }
+    }
+
+    private func refreshTitle() {
+        guard let field = textField else { return }
+        if isCompleted {
+            var attributes: [NSAttributedString.Key: Any] = [
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+            ]
+            if backgroundStyle != .emphasized {
+                attributes[.foregroundColor] = NSColor.secondaryLabelColor
+            }
+            field.attributedStringValue = NSAttributedString(string: titleText, attributes: attributes)
+        } else {
+            field.stringValue = titleText
         }
-        field.attributedStringValue = NSAttributedString(string: node.title, attributes: attributes)
         field.isEditable = false
     }
 }
