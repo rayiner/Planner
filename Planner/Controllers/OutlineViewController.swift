@@ -13,6 +13,7 @@ final class OutlineViewController: NSViewController {
     private let emptyStateLabel = NSTextField(labelWithString: "No Projects — ⌘N to add one.")
     private var projects: [Project] = []
     private var isApplyingProgrammaticSelection = false
+    private var isUpdatingUI = false
 
     init(
         persistence: PersistenceController,
@@ -157,6 +158,18 @@ final class OutlineViewController: NSViewController {
             return
         }
 
+        let hasInserts = !insertedProjects.isEmpty || !insertedTasks.isEmpty
+        let hasDeletes = !deletedProjects.isEmpty || !deletedTasks.isEmpty
+        if hasInserts && hasDeletes {
+            reloadFromStore()
+            return
+        }
+
+        if hasDeletes, applySurgicalDeletes(projects: deletedProjects, tasks: deletedTasks) {
+            updateEmptyState()
+            return
+        }
+
         if applySurgicalInserts(
             projects: insertedProjects,
             tasks: insertedTasks,
@@ -221,6 +234,39 @@ final class OutlineViewController: NSViewController {
         }
 
         return false
+    }
+
+    private func applySurgicalDeletes(projects deletedProjects: [Project], tasks deletedTasks: [TaskItem]) -> Bool {
+        if !deletedProjects.isEmpty {
+            let indexes = deletedProjects.compactMap { project in
+                projects.firstIndex { $0.objectID == project.objectID }
+            }
+            guard indexes.count == deletedProjects.count else { return false }
+            for index in indexes.sorted(by: >) {
+                projects.remove(at: index)
+                outlineView.removeItems(at: IndexSet(integer: index), inParent: nil, withAnimation: [])
+            }
+            return true
+        }
+
+        let deletedIDs = Set(deletedTasks.map(\.objectID))
+        let roots = deletedTasks.filter { task in
+            guard let parent = task.parentTask else { return true }
+            return !deletedIDs.contains(parent.objectID)
+        }
+
+        var parents: [ObjectIdentifier: OutlineNode] = [:]
+        for task in roots {
+            guard let parent = task.outlineParent else { return false }
+            guard let object = parent as? NSManagedObject, !object.isDeleted else { return false }
+            parents[ObjectIdentifier(object)] = parent
+        }
+        guard !parents.isEmpty else { return false }
+
+        for parent in parents.values {
+            outlineView.reloadItem(parent, reloadChildren: true)
+        }
+        return true
     }
 
     private func reloadDisplayIfNeeded(_ object: NSManagedObject) {
@@ -351,9 +397,32 @@ extension OutlineViewController: NSOutlineViewDelegate {
         let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
             ?? makeTitleCell(identifier: identifier)
         if let node = item as? OutlineNode, let titleCell = cell as? TitleCellView {
+            isUpdatingUI = true
+            titleCell.isUpdatingCompleteControl = true
             titleCell.setTitle(node.title, completed: (node as? TaskItem)?.isCompleted == true)
+            if let task = node as? TaskItem {
+                titleCell.completeButton.isHidden = false
+                titleCell.completeButton.state = task.isCompleted ? .on : .off
+            } else {
+                titleCell.completeButton.isHidden = true
+                titleCell.completeButton.state = .off
+            }
+            titleCell.isUpdatingCompleteControl = false
+            isUpdatingUI = false
         }
         return cell
+    }
+
+    @objc private func toggleCompleted(_ sender: NSButton) {
+        guard !isUpdatingUI else { return }
+        var ancestor: NSView? = sender
+        while let view = ancestor {
+            if let cell = view as? TitleCellView, cell.isUpdatingCompleteControl { return }
+            ancestor = view.superview
+        }
+        let row = outlineView.row(for: sender)
+        guard row >= 0, let task = outlineView.item(atRow: row) as? TaskItem else { return }
+        try? model.setCompleted(sender.state == .on, on: task)
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -372,6 +441,15 @@ extension OutlineViewController: NSOutlineViewDelegate {
         let cell = TitleCellView()
         cell.identifier = identifier
 
+        let completeButton = NSButton()
+        completeButton.setButtonType(.switch)
+        completeButton.title = ""
+        completeButton.imagePosition = .imageOnly
+        completeButton.controlSize = .small
+        completeButton.target = self
+        completeButton.action = #selector(toggleCompleted(_:))
+        completeButton.setContentHuggingPriority(.required, for: .horizontal)
+
         let field = NSTextField(labelWithString: "")
         field.lineBreakMode = .byTruncatingTail
         field.cell?.truncatesLastVisibleLine = true
@@ -379,20 +457,28 @@ extension OutlineViewController: NSOutlineViewDelegate {
         field.isSelectable = true
         field.drawsBackground = false
         field.isBordered = false
-        field.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(field)
+
+        let stack = NSStackView(views: [completeButton, field])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(stack)
         cell.textField = field
+        cell.completeButton = completeButton
 
         NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
     }
 }
 
 private final class TitleCellView: NSTableCellView {
+    var completeButton: NSButton!
+    var isUpdatingCompleteControl = false
     private var titleText = ""
     private var isCompleted = false
 

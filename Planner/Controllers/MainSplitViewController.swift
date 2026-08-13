@@ -40,6 +40,10 @@ final class MainSplitViewController: NSSplitViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -58,6 +62,13 @@ final class MainSplitViewController: NSSplitViewController {
 
         addSplitViewItem(sidebarItem)
         addSplitViewItem(rightItem)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(plannerSelectionDidChange),
+            name: .plannerSelectionDidChange,
+            object: selection
+        )
     }
 
     override func viewWillAppear() {
@@ -93,6 +104,163 @@ final class MainSplitViewController: NSSplitViewController {
         window.toolbar = toolbar
         window.toolbarStyle = .unifiedCompact
     }
+
+    // MARK: - Commands
+
+    @objc func newProject(_ sender: Any?) {
+        do {
+            let project = try model.createProject()
+            selection.selectNode(uuid: project.uuid)
+        } catch {
+            // saveFailed already presented; do not retarget selection.
+        }
+    }
+
+    @objc func newTask(_ sender: Any?) {
+        guard !isFirstResponderTextInput else { return }
+        do {
+            let created: TaskItem
+            if let project = selectedOutlineNode as? Project {
+                created = try model.createTask(in: project)
+            } else if let task = selectedOutlineNode as? TaskItem {
+                created = try model.createSibling(of: task)
+            } else {
+                return
+            }
+            selection.selectNode(uuid: created.uuid)
+        } catch {
+            // saveFailed already presented; do not retarget selection.
+        }
+    }
+
+    @objc func newSubtask(_ sender: Any?) {
+        guard !isFirstResponderTextInput else { return }
+        guard let task = selectedOutlineNode as? TaskItem else { return }
+        do {
+            let created = try model.createSubtask(under: task)
+            selection.selectNode(uuid: created.uuid)
+        } catch {
+            // saveFailed already presented; do not retarget selection.
+        }
+    }
+
+    @objc func deleteSelected(_ sender: Any?) {
+        guard !isFirstResponderTextInput else { return }
+        guard let node = selectedOutlineNode else { return }
+        confirmDelete(node) { [weak self] confirmed in
+            guard confirmed else { return }
+            self?.performConfirmedDelete(node)
+        }
+    }
+
+    @objc func revealToday(_ sender: Any?) {
+        selection.setVisibleMonth(Date())
+    }
+
+    /// Tests pass a result to skip the confirmation sheet.
+    func deleteSelected(confirmed: Bool) {
+        guard let node = selectedOutlineNode else { return }
+        guard confirmed else { return }
+        performConfirmedDelete(node)
+    }
+
+    static func deleteConfirmationMessage(for node: OutlineNode) -> String {
+        if node is Project {
+            return "Delete “\(node.title)” and all of its tasks?"
+        }
+        if let task = node as? TaskItem, !task.subtasks.isEmpty {
+            return "Delete “\(node.title)” and all of its subtasks?"
+        }
+        return "Delete “\(node.title)”?"
+    }
+
+    static func isTextInputResponder(_ responder: NSResponder?) -> Bool {
+        if responder is NSTextView { return true }
+        if responder is NSText { return true }
+        if let field = responder as? NSTextField {
+            return field.currentEditor() != nil
+        }
+        return false
+    }
+
+    private var selectedOutlineNode: OutlineNode? {
+        guard let uuid = selection.selectedNodeUUID else { return nil }
+        return try? model.node(uuid: uuid)
+    }
+
+    private var isFirstResponderTextInput: Bool {
+        Self.isTextInputResponder(view.window?.firstResponder)
+    }
+
+    private func confirmDelete(_ node: OutlineNode, completion: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = Self.deleteConfirmationMessage(for: node)
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Delete")
+        alert.buttons.last?.hasDestructiveAction = true
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                completion(response == .alertSecondButtonReturn)
+            }
+        } else {
+            completion(alert.runModal() == .alertSecondButtonReturn)
+        }
+    }
+
+    private func performConfirmedDelete(_ node: OutlineNode) {
+        let nextUUID = uuidToSelectAfterDeleting(node)
+        do {
+            try model.delete(node)
+            selection.selectNode(uuid: nextUUID)
+        } catch {
+            // saveFailed already presented; selection and tree stay put.
+        }
+    }
+
+    private func uuidToSelectAfterDeleting(_ node: OutlineNode) -> UUID? {
+        let siblings: [OutlineNode]
+        if let parent = node.outlineParent {
+            siblings = parent.outlineChildren
+        } else {
+            siblings = (try? model.allProjects()) ?? []
+        }
+        if let index = siblings.firstIndex(where: { $0.uuid == node.uuid }), index > 0 {
+            return siblings[index - 1].uuid
+        }
+        return node.outlineParent?.uuid
+    }
+
+    @objc private func plannerSelectionDidChange(_ notification: Notification) {
+        view.window?.toolbar?.validateVisibleItems()
+    }
+
+    private func isCommandEnabled(for action: Selector?) -> Bool {
+        switch action {
+        case #selector(newProject(_:)), #selector(revealToday(_:)):
+            return true
+        case #selector(newTask(_:)):
+            return !isFirstResponderTextInput
+                && (selectedOutlineNode is Project || selectedOutlineNode is TaskItem)
+        case #selector(newSubtask(_:)):
+            return !isFirstResponderTextInput && selectedOutlineNode is TaskItem
+        case #selector(deleteSelected(_:)):
+            return !isFirstResponderTextInput && selectedOutlineNode != nil
+        default:
+            return false
+        }
+    }
+}
+
+extension MainSplitViewController: NSMenuItemValidation, NSToolbarItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        isCommandEnabled(for: item.action)
+    }
+
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        isCommandEnabled(for: item.action)
+    }
 }
 
 extension NSToolbarItem.Identifier {
@@ -124,31 +292,35 @@ extension MainSplitViewController: NSToolbarDelegate {
             item.paletteLabel = "Add Project"
             item.toolTip = "Add Project"
             item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "Add Project")
+            item.action = #selector(newProject(_:))
         case .addTask:
             item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Add Task"
             item.paletteLabel = "Add Task"
             item.toolTip = "Add Task"
             item.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: "Add Task")
+            item.action = #selector(newTask(_:))
         case .addSubtask:
             item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Add Subtask"
             item.paletteLabel = "Add Subtask"
             item.toolTip = "Add Subtask"
             item.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: "Add Subtask")
+            item.action = #selector(newSubtask(_:))
         case .today:
             item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Today"
             item.paletteLabel = "Today"
             item.toolTip = "Today"
             item.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: "Today")
+            item.action = #selector(revealToday(_:))
         default:
             return nil
         }
 
+        item.target = self
         item.isBordered = true
-        item.autovalidates = false
-        item.isEnabled = false
+        item.autovalidates = true
         return item
     }
 }
