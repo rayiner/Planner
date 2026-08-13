@@ -9,6 +9,7 @@ final class PlannerOutlineView: NSOutlineView {
     func menu(forRow row: Int) -> NSMenu {
         if row >= 0 {
             selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            window?.makeFirstResponder(self)
             switch item(atRow: row) {
             case is Project:
                 return Self.makeMenu([

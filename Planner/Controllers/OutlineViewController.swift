@@ -193,6 +193,12 @@ final class OutlineViewController: NSViewController {
         for object in updated {
             reloadDisplayIfNeeded(object)
         }
+        let refreshed = objects(in: notification, key: NSRefreshedObjectsKey)
+        for object in refreshed {
+            if object is Project || object is TaskItem {
+                outlineView.reloadItem(object)
+            }
+        }
     }
 
     private func applySurgicalInserts(
@@ -422,7 +428,11 @@ extension OutlineViewController: NSOutlineViewDelegate {
         }
         let row = outlineView.row(for: sender)
         guard row >= 0, let task = outlineView.item(atRow: row) as? TaskItem else { return }
-        try? model.setCompleted(sender.state == .on, on: task)
+        do {
+            try model.setCompleted(sender.state == .on, on: task)
+        } catch {
+            sender.state = task.isCompleted ? .on : .off
+        }
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -454,7 +464,8 @@ extension OutlineViewController: NSOutlineViewDelegate {
         field.lineBreakMode = .byTruncatingTail
         field.cell?.truncatesLastVisibleLine = true
         field.isEditable = false
-        field.isSelectable = true
+        field.isSelectable = false
+        field.refusesFirstResponder = true
         field.drawsBackground = false
         field.isBordered = false
 
@@ -462,6 +473,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 4
+        stack.detachesHiddenViews = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(stack)
         cell.textField = field

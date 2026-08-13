@@ -157,6 +157,9 @@ final class MainSplitViewController: NSSplitViewController {
         selection.setVisibleMonth(Date())
     }
 
+    /// Tests assign a responder so validation/actions see a text input without hosting the split in a window.
+    var firstResponderForValidation: NSResponder?
+
     /// Tests pass a result to skip the confirmation sheet.
     func deleteSelected(confirmed: Bool) {
         guard let node = selectedOutlineNode else { return }
@@ -175,12 +178,20 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     static func isTextInputResponder(_ responder: NSResponder?) -> Bool {
-        if responder is NSTextView { return true }
-        if responder is NSText { return true }
         if let field = responder as? NSTextField {
-            return field.currentEditor() != nil
+            return isEditingTextField(field)
+        }
+        if let text = responder as? NSText {
+            if let field = text.delegate as? NSTextField {
+                return isEditingTextField(field)
+            }
+            return true
         }
         return false
+    }
+
+    private static func isEditingTextField(_ field: NSTextField) -> Bool {
+        field.isEditable && field.currentEditor() != nil
     }
 
     private var selectedOutlineNode: OutlineNode? {
@@ -189,7 +200,7 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     private var isFirstResponderTextInput: Bool {
-        Self.isTextInputResponder(view.window?.firstResponder)
+        Self.isTextInputResponder(firstResponderForValidation ?? view.window?.firstResponder)
     }
 
     private func confirmDelete(_ node: OutlineNode, completion: @escaping (Bool) -> Void) {

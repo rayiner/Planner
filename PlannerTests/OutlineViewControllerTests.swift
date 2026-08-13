@@ -96,11 +96,14 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(projectButton?.isHidden == true)
 
         let taskRow = outline.outlineView.row(forItem: task)
-        let taskCell = outline.outlineView.view(atColumn: 0, row: taskRow, makeIfNecessary: true)!
+        let taskCell = outline.outlineView.view(atColumn: 0, row: taskRow, makeIfNecessary: true) as! NSTableCellView
         let taskButton = completeButton(in: taskCell)
         XCTAssertNotNil(taskButton)
         XCTAssertFalse(taskButton?.isHidden == true)
         XCTAssertEqual(taskButton?.state, .off)
+
+        XCTAssertEqual(taskCell.textField?.isSelectable, false)
+        XCTAssertEqual(taskCell.textField?.refusesFirstResponder, true)
 
         taskButton?.state = .on
         _ = taskButton?.sendAction(taskButton?.action, to: taskButton?.target)
@@ -108,6 +111,59 @@ final class OutlineViewControllerTests: PersistenceTestCase {
 
         let reloaded = outline.outlineView.view(atColumn: 0, row: taskRow, makeIfNecessary: true)!
         XCTAssertEqual(completeButton(in: reloaded)?.state, .on)
+    }
+
+    func testCompleteCheckboxDoesNotRollUpParentOrChild() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let parent = try model.createTask(in: project)
+        let child = try model.createSubtask(under: parent)
+        outline.outlineView.expandItem(project)
+        outline.outlineView.expandItem(parent)
+
+        let parentRow = outline.outlineView.row(forItem: parent)
+        let parentButton = completeButton(
+            in: outline.outlineView.view(atColumn: 0, row: parentRow, makeIfNecessary: true)!
+        )
+        parentButton?.state = .on
+        _ = parentButton?.sendAction(parentButton?.action, to: parentButton?.target)
+        XCTAssertTrue(parent.isCompleted)
+        XCTAssertFalse(child.isCompleted)
+
+        let childRow = outline.outlineView.row(forItem: child)
+        let childCell = outline.outlineView.view(atColumn: 0, row: childRow, makeIfNecessary: true)!
+        XCTAssertEqual(completeButton(in: childCell)?.state, .off)
+
+        try model.setCompleted(false, on: parent)
+        let childButton = completeButton(in: childCell)
+        childButton?.state = .on
+        _ = childButton?.sendAction(childButton?.action, to: childButton?.target)
+        XCTAssertTrue(child.isCompleted)
+        XCTAssertFalse(parent.isCompleted)
+        let parentReloaded = outline.outlineView.view(atColumn: 0, row: parentRow, makeIfNecessary: true)!
+        XCTAssertEqual(completeButton(in: parentReloaded)?.state, .off)
+    }
+
+    func testCompleteSaveFailedRestoresCheckbox() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        outline.outlineView.expandItem(project)
+
+        let row = outline.outlineView.row(forItem: task)
+        let button = completeButton(
+            in: outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true)!
+        )
+        XCTAssertEqual(button?.state, .off)
+
+        persistence.failNextSave = true
+        button?.state = .on
+        _ = button?.sendAction(button?.action, to: button?.target)
+
+        XCTAssertFalse(task.isCompleted)
+        XCTAssertEqual(button?.state, .off)
+        let reloaded = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true)!
+        XCTAssertEqual(completeButton(in: reloaded)?.state, .off)
     }
 
     func testDeletingLastSubtaskRemovesDisclosureTriangle() throws {

@@ -189,6 +189,37 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(MainSplitViewController.isTextInputResponder(NSText()))
         let label = NSTextField(labelWithString: "x")
         XCTAssertFalse(MainSplitViewController.isTextInputResponder(label))
+        let selectableTitle = NSTextField(labelWithString: "Untitled Task")
+        selectableTitle.isSelectable = true
+        selectableTitle.isEditable = false
+        XCTAssertFalse(MainSplitViewController.isTextInputResponder(selectableTitle))
+        let editable = NSTextField(string: "hello")
+        editable.isEditable = true
+        XCTAssertFalse(MainSplitViewController.isTextInputResponder(editable))
+    }
+
+    func testTextInputFirstResponderDisablesMutatingCommands() throws {
+        let selection = SelectionModel()
+        let (split, _) = makeSplit(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+
+        split.firstResponderForValidation = NSTextView()
+
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
+        XCTAssertFalse(split.validateToolbarItem(
+            toolbarItem(.addTask, action: #selector(MainSplitViewController.newTask(_:)))
+        ))
+
+        split.deleteSelected(nil)
+        XCTAssertNotNil(try model.task(uuid: task.uuid))
+
+        split.firstResponderForValidation = nil
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
     }
 
     func testDeleteConfirmationMessages() throws {
