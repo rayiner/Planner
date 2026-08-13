@@ -14,6 +14,12 @@ final class OutlineViewController: NSViewController {
     private var projects: [Project] = []
     private var isApplyingProgrammaticSelection = false
     private var isUpdatingUI = false
+    private var renameTimer: Timer?
+    private weak var editingField: TitleTextField?
+    private var isCancellingTitleEdit = false
+
+    /// Tests observe begin-edit attempts; `editColumn` requires a window.
+    var beginEditingTitleHandler: ((OutlineNode) -> Void)?
 
     init(
         persistence: PersistenceController,
@@ -91,6 +97,7 @@ final class OutlineViewController: NSViewController {
         outlineView.floatsGroupRows = false
         outlineView.focusRingType = .none
         outlineView.backgroundColor = .clear
+        outlineView.action = #selector(outlineSingleClicked)
         outlineView.doubleAction = #selector(toggleClickedRow)
         outlineView.target = self
 
@@ -278,6 +285,7 @@ final class OutlineViewController: NSViewController {
     private func reloadDisplayIfNeeded(_ object: NSManagedObject) {
         let keys = Set(object.changedValues().keys)
         guard keys.contains("title") || keys.contains("isCompleted") else { return }
+        guard outlineView.currentEditor() == nil else { return }
         if object is Project || object is TaskItem {
             outlineView.reloadItem(object)
         }
@@ -335,7 +343,37 @@ final class OutlineViewController: NSViewController {
         selection.selectNode(uuid: item?.uuid)
     }
 
+    @objc private func outlineSingleClicked() {
+        defer { outlineView.pendingRenameRow = -1 }
+        guard NSApp.currentEvent?.clickCount == 1 else { return }
+        let row = outlineView.clickedRow
+        guard outlineView.pendingRenameRow == row,
+              row >= 0,
+              outlineView.currentEditor() == nil,
+              isClickInsideTitleField(row: row)
+        else { return }
+
+        scheduleDelayedRename(at: row)
+    }
+
+    func scheduleDelayedRename(at row: Int) {
+        cancelPendingRename()
+        renameTimer = Timer.scheduledTimer(withTimeInterval: Self.renameDelay, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.renameTimerFired(row: row)
+            }
+        }
+    }
+
+    private func renameTimerFired(row: Int) {
+        renameTimer = nil
+        guard row >= 0, let node = outlineView.item(atRow: row) as? OutlineNode else { return }
+        beginEditingTitle(of: node)
+    }
+
     @objc private func toggleClickedRow() {
+        cancelPendingRename()
+        outlineView.pendingRenameRow = -1
         let row = outlineView.clickedRow
         guard row >= 0 else { return }
         let item = outlineView.item(atRow: row)
@@ -344,6 +382,19 @@ final class OutlineViewController: NSViewController {
         } else {
             outlineView.expandItem(item)
         }
+    }
+
+    private static var renameDelay: TimeInterval {
+        max(0.5, NSEvent.doubleClickInterval + 0.05)
+    }
+
+    private func isClickInsideTitleField(row: Int) -> Bool {
+        guard let event = NSApp.currentEvent,
+              let field = titleField(atRow: row, makeIfNecessary: false)
+        else { return false }
+        let locationInOutline = outlineView.convert(event.locationInWindow, from: nil)
+        let locationInField = field.convert(locationInOutline, from: outlineView)
+        return field.bounds.contains(locationInField)
     }
 
     // MARK: - Expansion
@@ -379,6 +430,53 @@ final class OutlineViewController: NSViewController {
             collectExpanded(from: child, into: &uuids)
         }
     }
+
+    // MARK: - Inline rename
+
+    func cancelPendingRename() {
+        renameTimer?.invalidate()
+        renameTimer = nil
+    }
+
+    func beginEditingSelectedTitle() {
+        guard let node = outlineView.item(atRow: outlineView.selectedRow) as? OutlineNode else { return }
+        beginEditingTitle(of: node)
+    }
+
+    func beginEditingTitle(of node: OutlineNode) {
+        beginEditingTitleHandler?(node)
+        if let parent = node.outlineParent { outlineView.expandItem(parent) }
+        let row = outlineView.row(forItem: node)
+        guard row >= 0 else { return }
+        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outlineView.scrollRowToVisible(row)
+        guard let field = titleField(atRow: row, makeIfNecessary: true) else { return }
+        field.allowsFirstResponder = true
+        editingField = field
+        outlineView.editColumn(0, row: row, with: nil, select: true)
+        if outlineView.currentEditor() == nil {
+            endTitleEditing()
+        }
+    }
+
+    func endTitleEditing() {
+        editingField?.allowsFirstResponder = false
+        editingField = nil
+        for row in 0..<outlineView.numberOfRows {
+            titleField(atRow: row, makeIfNecessary: false)?.allowsFirstResponder = false
+        }
+    }
+
+    private func titleField(atRow row: Int, makeIfNecessary: Bool) -> TitleTextField? {
+        (outlineView.view(atColumn: 0, row: row, makeIfNecessary: makeIfNecessary) as? NSTableCellView)?
+            .textField as? TitleTextField
+    }
+
+    private func node(for field: NSView) -> OutlineNode? {
+        let row = outlineView.row(for: field)
+        guard row >= 0 else { return nil }
+        return outlineView.item(atRow: row) as? OutlineNode
+    }
 }
 
 extension OutlineViewController: NSOutlineViewDataSource {
@@ -402,6 +500,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
         let identifier = NSUserInterfaceItemIdentifier("TitleCell")
         let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
             ?? makeTitleCell(identifier: identifier)
+        (cell.textField as? TitleTextField)?.allowsFirstResponder = false
         if let node = item as? OutlineNode, let titleCell = cell as? TitleCellView {
             isUpdatingUI = true
             titleCell.isUpdatingCompleteControl = true
@@ -436,6 +535,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
+        cancelPendingRename()
         publishOutlineSelection()
     }
 
@@ -460,14 +560,18 @@ extension OutlineViewController: NSOutlineViewDelegate {
         completeButton.action = #selector(toggleCompleted(_:))
         completeButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        let field = NSTextField(labelWithString: "")
+        let field = TitleTextField()
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.backgroundColor = .clear
         field.lineBreakMode = .byTruncatingTail
         field.cell?.truncatesLastVisibleLine = true
-        field.isEditable = false
-        field.isSelectable = false
-        field.refusesFirstResponder = true
-        field.drawsBackground = false
-        field.isBordered = false
+        field.cell?.sendsActionOnEndEditing = true
+        field.allowsFirstResponder = false
+        field.delegate = self
 
         let stack = NSStackView(views: [completeButton, field])
         stack.orientation = .horizontal
@@ -505,7 +609,7 @@ private final class TitleCellView: NSTableCellView {
     }
 
     private func refreshTitle() {
-        guard let field = textField else { return }
+        guard let field = textField, field.currentEditor() == nil else { return }
         if isCompleted {
             var attributes: [NSAttributedString.Key: Any] = [
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue,
@@ -517,6 +621,43 @@ private final class TitleCellView: NSTableCellView {
         } else {
             field.stringValue = titleText
         }
-        field.isEditable = false
+    }
+}
+
+extension OutlineViewController: NSTextFieldDelegate {
+    func control(_ control: NSControl, textShouldEndEditing fieldEditor: NSText) -> Bool {
+        let trimmed = fieldEditor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            NSSound.beep()
+            return false
+        }
+        return true
+    }
+
+    func controlTextDidEndEditing(_ note: Notification) {
+        defer { endTitleEditing() }
+        guard !isCancellingTitleEdit,
+              let field = note.object as? TitleTextField,
+              let node = node(for: field)
+        else { return }
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != node.title else { return }
+        try? model.setTitle(node, trimmed)
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard commandSelector == #selector(cancelOperation(_:)) else { return false }
+        isCancellingTitleEdit = true
+        control.abortEditing()
+        if let field = control as? TitleTextField, let node = node(for: field) {
+            field.stringValue = node.title
+        }
+        endTitleEditing()
+        isCancellingTitleEdit = false
+        return true
     }
 }

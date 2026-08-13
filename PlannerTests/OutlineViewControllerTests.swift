@@ -54,7 +54,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(outline.outlineView.isItemExpanded(project))
     }
 
-    func testContextMenuSelectsRowAndOmitsRename() throws {
+    func testContextMenuSelectsRowAndIncludesRename() throws {
         let outline = makeOutline()
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -63,18 +63,20 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         let projectRow = outline.outlineView.row(forItem: project)
         let projectMenu = outline.outlineView.menu(forRow: projectRow)
         XCTAssertEqual(outline.outlineView.selectedRow, projectRow)
-        XCTAssertEqual(projectMenu.items.map(\.title), ["New Task", "Delete\u{2026}"])
+        XCTAssertEqual(projectMenu.items.map(\.title), ["New Task", "Rename", "Delete\u{2026}"])
         XCTAssertEqual(projectMenu.items.map(\.action), [
             #selector(MainSplitViewController.newTask(_:)),
+            #selector(MainSplitViewController.renameSelected(_:)),
             #selector(MainSplitViewController.deleteSelected(_:)),
         ])
 
         let taskRow = outline.outlineView.row(forItem: task)
         let taskMenu = outline.outlineView.menu(forRow: taskRow)
         XCTAssertEqual(outline.outlineView.selectedRow, taskRow)
-        XCTAssertEqual(taskMenu.items.map(\.title), ["New Subtask", "Delete\u{2026}"])
+        XCTAssertEqual(taskMenu.items.map(\.title), ["New Subtask", "Rename", "Delete\u{2026}"])
         XCTAssertEqual(taskMenu.items.map(\.action), [
             #selector(MainSplitViewController.newSubtask(_:)),
+            #selector(MainSplitViewController.renameSelected(_:)),
             #selector(MainSplitViewController.deleteSelected(_:)),
         ])
 
@@ -102,8 +104,11 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertFalse(taskButton?.isHidden == true)
         XCTAssertEqual(taskButton?.state, .off)
 
-        XCTAssertEqual(taskCell.textField?.isSelectable, false)
-        XCTAssertEqual(taskCell.textField?.refusesFirstResponder, true)
+        let titleField = try XCTUnwrap(taskCell.textField as? TitleTextField)
+        XCTAssertTrue(titleField.isEditable)
+        XCTAssertTrue(titleField.isSelectable)
+        XCTAssertFalse(titleField.allowsFirstResponder)
+        XCTAssertFalse(titleField.acceptsFirstResponder)
 
         taskButton?.state = .on
         _ = taskButton?.sendAction(taskButton?.action, to: taskButton?.target)
@@ -181,6 +186,207 @@ final class OutlineViewControllerTests: PersistenceTestCase {
 
         XCTAssertFalse(outline.outlineView.isExpandable(task))
         XCTAssertEqual(outline.outlineView.row(forItem: subtask), -1)
+    }
+
+    func testTitleTextFieldGatesFirstResponder() {
+        let field = TitleTextField()
+        field.isEditable = true
+        field.isSelectable = true
+        XCTAssertFalse(field.allowsFirstResponder)
+        XCTAssertFalse(field.acceptsFirstResponder)
+        field.allowsFirstResponder = true
+        XCTAssertTrue(field.acceptsFirstResponder)
+    }
+
+    func testViewForClearsAllowsFirstResponder() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        let cell = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as! NSTableCellView
+        let field = try XCTUnwrap(cell.textField as? TitleTextField)
+        field.allowsFirstResponder = true
+
+        outline.outlineView.reloadItem(project)
+        let reloaded = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as! NSTableCellView
+        let reloadedField = try XCTUnwrap(reloaded.textField as? TitleTextField)
+        XCTAssertFalse(reloadedField.allowsFirstResponder)
+        XCTAssertFalse(reloadedField.acceptsFirstResponder)
+    }
+
+    func testBeginEditingTitleClearsFlagWhenEditColumnFails() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        var began: UUID?
+        outline.beginEditingTitleHandler = { began = $0.uuid }
+
+        outline.beginEditingTitle(of: project)
+
+        XCTAssertEqual(began, project.uuid)
+        XCTAssertNil(outline.outlineView.currentEditor())
+        let row = outline.outlineView.row(forItem: project)
+        let cell = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as! NSTableCellView
+        let field = try XCTUnwrap(cell.textField as? TitleTextField)
+        XCTAssertFalse(field.allowsFirstResponder)
+    }
+
+    func testMouseDownSnapshotsAlreadySelectedRow() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let other = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        let otherRow = outline.outlineView.row(forItem: other)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 1, modifiers: [])
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, row)
+
+        outline.outlineView.snapshotPendingRename(row: otherRow, clickCount: 1, modifiers: [])
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 2, modifiers: [])
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 1, modifiers: .command)
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+    }
+
+    func testMouseDraggedCancelsPendingRename() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 1, modifiers: [])
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, row)
+
+        outline.outlineView.mouseDragged(with: NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        )!)
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+    }
+
+    func testReturnAndKeypadEnterBeginEditingSelectedTitle() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+        var began: [UUID] = []
+        outline.beginEditingTitleHandler = { began.append($0.uuid) }
+
+        outline.outlineView.keyDown(with: keyEvent(characters: "\r", keyCode: 36))
+        outline.outlineView.keyDown(with: keyEvent(characters: "\u{3}", keyCode: 76))
+        XCTAssertEqual(began, [project.uuid, project.uuid])
+    }
+
+    func testEmptyTitleRefusesEndEditing() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let field = try titleField(in: outline, for: project)
+        let emptyEditor = NSTextView()
+        emptyEditor.string = "   "
+        XCTAssertFalse(outline.control(field, textShouldEndEditing: emptyEditor))
+
+        let okEditor = NSTextView()
+        okEditor.string = "Inbox"
+        XCTAssertTrue(outline.control(field, textShouldEndEditing: okEditor))
+    }
+
+    func testControlTextDidEndEditingSavesTrimmedTitle() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let field = try titleField(in: outline, for: project)
+        field.stringValue = "  Inbox  "
+        outline.controlTextDidEndEditing(
+            Notification(name: NSControl.textDidEndEditingNotification, object: field)
+        )
+        XCTAssertEqual(project.title, "Inbox")
+        XCTAssertFalse(field.allowsFirstResponder)
+    }
+
+    func testControlTextDidEndEditingIgnoresUnchangedAndEmpty() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        try model.setTitle(project, "Inbox")
+        let field = try titleField(in: outline, for: project)
+
+        field.stringValue = "Inbox"
+        outline.controlTextDidEndEditing(
+            Notification(name: NSControl.textDidEndEditingNotification, object: field)
+        )
+        XCTAssertEqual(project.title, "Inbox")
+
+        field.stringValue = "   "
+        outline.controlTextDidEndEditing(
+            Notification(name: NSControl.textDidEndEditingNotification, object: field)
+        )
+        XCTAssertEqual(project.title, "Inbox")
+    }
+
+    func testEscapeRestoresTitleWithoutSaving() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        try model.setTitle(project, "Inbox")
+        let field = try titleField(in: outline, for: project)
+        field.stringValue = "Changed"
+
+        let handled = outline.control(
+            field,
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(field.stringValue, "Inbox")
+        XCTAssertEqual(project.title, "Inbox")
+        XCTAssertFalse(field.allowsFirstResponder)
+    }
+
+    func testSelectionChangeCancelsRenameTimer() async throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let other = try model.createProject()
+        var began = false
+        outline.beginEditingTitleHandler = { _ in began = true }
+
+        outline.scheduleDelayedRename(at: outline.outlineView.row(forItem: project))
+        outline.outlineView.selectRowIndexes(
+            IndexSet(integer: outline.outlineView.row(forItem: other)),
+            byExtendingSelection: false
+        )
+
+        let elapsed = expectation(description: "rename delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { elapsed.fulfill() }
+        await fulfillment(of: [elapsed], timeout: 1)
+        XCTAssertFalse(began)
+    }
+
+    private func titleField(in outline: OutlineViewController, for node: OutlineNode) throws -> TitleTextField {
+        let row = outline.outlineView.row(forItem: node)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        let cell = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as! NSTableCellView
+        return try XCTUnwrap(cell.textField as? TitleTextField)
+    }
+
+    private func keyEvent(characters: String, keyCode: UInt16) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )!
     }
 
     private func completeButton(in view: NSView) -> NSButton? {

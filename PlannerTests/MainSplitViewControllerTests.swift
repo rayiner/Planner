@@ -3,9 +3,11 @@ import XCTest
 
 @MainActor
 final class MainSplitViewControllerTests: PersistenceTestCase {
-    func testNewProjectSelectsCreatedProjectWithoutEditing() {
+    func testNewProjectSelectsCreatedProjectAndBeginsEditingOnNextRunLoop() async {
         let selection = SelectionModel()
         let (split, outline) = makeSplit(selection: selection)
+        var began: UUID?
+        outline.beginEditingTitleHandler = { began = $0.uuid }
 
         split.newProject(nil)
 
@@ -14,16 +16,24 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(selection.selectedNodeUUID, project.uuid)
         XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: project), 0)
         XCTAssertEqual(outline.outlineView.selectedRow, outline.outlineView.row(forItem: project))
-        XCTAssertNil(outline.outlineView.currentEditor())
+        XCTAssertNil(began)
         XCTAssertEqual(project.title, "Untitled Project")
+
+        let scheduled = expectation(description: "begin edit")
+        DispatchQueue.main.async { scheduled.fulfill() }
+        await fulfillment(of: [scheduled], timeout: 1)
+        XCTAssertEqual(began, project.uuid)
+        XCTAssertNil(outline.outlineView.currentEditor())
     }
 
-    func testNewTaskOnProjectCreatesAndSelectsTask() throws {
+    func testNewTaskOnProjectCreatesAndSelectsTask() async throws {
         let selection = SelectionModel()
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
 
+        var began: UUID?
+        outline.beginEditingTitleHandler = { began = $0.uuid }
         split.newTask(nil)
 
         let task = try XCTUnwrap(try fetchAllTasks().first)
@@ -31,6 +41,12 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(selection.selectedNodeUUID, task.uuid)
         XCTAssertTrue(outline.outlineView.isItemExpanded(project))
         XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: task), 0)
+        XCTAssertNil(began)
+
+        let scheduled = expectation(description: "begin edit")
+        DispatchQueue.main.async { scheduled.fulfill() }
+        await fulfillment(of: [scheduled], timeout: 1)
+        XCTAssertEqual(began, task.uuid)
         XCTAssertNil(outline.outlineView.currentEditor())
     }
 
@@ -51,19 +67,27 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(selection.selectedNodeUUID, sibling.uuid)
     }
 
-    func testNewSubtaskCreatesChildAndExpandsParent() throws {
+    func testNewSubtaskCreatesChildAndExpandsParent() async throws {
         let selection = SelectionModel()
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         let task = try model.createTask(in: project)
         selection.selectNode(uuid: task.uuid)
 
+        var began: UUID?
+        outline.beginEditingTitleHandler = { began = $0.uuid }
         split.newSubtask(nil)
 
         let subtask = try XCTUnwrap(try fetchAllTasks().first { $0.parentTask == task })
         XCTAssertEqual(selection.selectedNodeUUID, subtask.uuid)
         XCTAssertTrue(outline.outlineView.isItemExpanded(task))
         XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: subtask), 0)
+        XCTAssertNil(began)
+
+        let scheduled = expectation(description: "begin edit")
+        DispatchQueue.main.async { scheduled.fulfill() }
+        await fulfillment(of: [scheduled], timeout: 1)
+        XCTAssertEqual(began, subtask.uuid)
         XCTAssertNil(outline.outlineView.currentEditor())
     }
 
@@ -161,6 +185,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.revealToday(_:)))))
 
@@ -173,6 +198,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         selection.selectNode(uuid: project.uuid)
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
         XCTAssertTrue(split.validateToolbarItem(addTask))
 
@@ -180,6 +206,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         selection.selectNode(uuid: task.uuid)
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
     }
 
@@ -210,6 +237,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
         XCTAssertFalse(split.validateToolbarItem(
             toolbarItem(.addTask, action: #selector(MainSplitViewController.newTask(_:)))
@@ -220,6 +248,36 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         split.firstResponderForValidation = nil
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
+    }
+
+    func testRenameSelectedBeginsEditing() throws {
+        let selection = SelectionModel()
+        let (split, outline) = makeSplit(selection: selection)
+        let project = try model.createProject()
+        selection.selectNode(uuid: project.uuid)
+
+        var began: UUID?
+        outline.beginEditingTitleHandler = { began = $0.uuid }
+        split.renameSelected(nil)
+        XCTAssertEqual(began, project.uuid)
+    }
+
+    func testCreateSaveFailedDoesNotBeginEditing() async throws {
+        let selection = SelectionModel()
+        let (split, outline) = makeSplit(selection: selection)
+        let project = try model.createProject()
+        selection.selectNode(uuid: project.uuid)
+
+        var began = false
+        outline.beginEditingTitleHandler = { _ in began = true }
+        persistence.failNextSave = true
+        split.newTask(nil)
+
+        let scheduled = expectation(description: "next run loop")
+        DispatchQueue.main.async { scheduled.fulfill() }
+        await fulfillment(of: [scheduled], timeout: 1)
+        XCTAssertFalse(began)
     }
 
     func testDeleteConfirmationMessages() throws {

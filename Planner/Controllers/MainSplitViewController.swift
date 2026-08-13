@@ -115,7 +115,7 @@ final class MainSplitViewController: NSSplitViewController {
     @objc func newProject(_ sender: Any?) {
         do {
             let project = try model.createProject()
-            selection.selectNode(uuid: project.uuid)
+            selectAndBeginEditing(project)
         } catch {
             // saveFailed already presented; do not retarget selection.
         }
@@ -132,7 +132,7 @@ final class MainSplitViewController: NSSplitViewController {
             } else {
                 return
             }
-            selection.selectNode(uuid: created.uuid)
+            selectAndBeginEditing(created)
         } catch {
             // saveFailed already presented; do not retarget selection.
         }
@@ -143,10 +143,16 @@ final class MainSplitViewController: NSSplitViewController {
         guard let task = selectedOutlineNode as? TaskItem else { return }
         do {
             let created = try model.createSubtask(under: task)
-            selection.selectNode(uuid: created.uuid)
+            selectAndBeginEditing(created)
         } catch {
             // saveFailed already presented; do not retarget selection.
         }
+    }
+
+    @objc func renameSelected(_ sender: Any?) {
+        guard !isFirstResponderTextInput else { return }
+        guard let node = selectedOutlineNode else { return }
+        outlineViewController.beginEditingTitle(of: node)
     }
 
     @objc func deleteSelected(_ sender: Any?) {
@@ -208,6 +214,13 @@ final class MainSplitViewController: NSSplitViewController {
         Self.isTextInputResponder(firstResponderForValidation ?? view.window?.firstResponder)
     }
 
+    private func selectAndBeginEditing(_ node: OutlineNode) {
+        selection.selectNode(uuid: node.uuid)
+        DispatchQueue.main.async { [weak self] in
+            self?.outlineViewController.beginEditingTitle(of: node)
+        }
+    }
+
     private func confirmDelete(_ node: OutlineNode, completion: @escaping (Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = Self.deleteConfirmationMessage(for: node)
@@ -261,7 +274,7 @@ final class MainSplitViewController: NSSplitViewController {
                 && (selectedOutlineNode is Project || selectedOutlineNode is TaskItem)
         case #selector(newSubtask(_:)):
             return !isFirstResponderTextInput && selectedOutlineNode is TaskItem
-        case #selector(deleteSelected(_:)):
+        case #selector(renameSelected(_:)), #selector(deleteSelected(_:)):
             return !isFirstResponderTextInput && selectedOutlineNode != nil
         default:
             return false
