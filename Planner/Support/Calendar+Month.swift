@@ -5,6 +5,19 @@ extension Calendar {
         self.date(from: dateComponents([.year, .month], from: date))!
     }
 
+    func endOfMonth(for date: Date) -> Date {
+        self.date(byAdding: .month, value: 1, to: startOfMonth(for: date))!
+    }
+
+    func monthYearString(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = self
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.setLocalizedDateFormatFromTemplate("MMMM yyyy")
+        return formatter.string(from: date)
+    }
+
     func daysInMonthGrid(for date: Date) -> [Date] {
         let monthStart = startOfMonth(for: date)
         let weekday = component(.weekday, from: monthStart)

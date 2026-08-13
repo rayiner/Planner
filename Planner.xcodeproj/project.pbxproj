@@ -32,6 +32,8 @@
 		A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001B /* MainSplitViewControllerTests.swift */; };
 		A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001C /* InspectorViewControllerTests.swift */; };
 		A40000000000000000000019 /* TitleTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001D /* TitleTextField.swift */; };
+		A4000000000000000000001A /* MonthCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001E /* MonthCalendarView.swift */; };
+		A4000000000000000000001B /* MonthCalendarViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001F /* MonthCalendarViewTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +75,8 @@
 		A3000000000000000000001B /* MainSplitViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001C /* InspectorViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001D /* TitleTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleTextField.swift; sourceTree = "<group>"; };
+		A3000000000000000000001E /* MonthCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthCalendarView.swift; sourceTree = "<group>"; };
+		A3000000000000000000001F /* MonthCalendarViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthCalendarViewTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,7 +167,7 @@
 			children = (
 				A30000000000000000000019 /* PlannerOutlineView.swift */,
 				A3000000000000000000001D /* TitleTextField.swift */,
-				A3000000000000000000001C /* TitleTextField.swift */,
+				A3000000000000000000001E /* MonthCalendarView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -188,6 +192,7 @@
 				A3000000000000000000001A /* OutlineViewControllerTests.swift */,
 				A3000000000000000000001B /* MainSplitViewControllerTests.swift */,
 				A3000000000000000000001C /* InspectorViewControllerTests.swift */,
+				A3000000000000000000001F /* MonthCalendarViewTests.swift */,
 			);
 			path = PlannerTests;
 			sourceTree = "<group>";
@@ -308,7 +313,7 @@
 				A40000000000000000000010 /* Calendar+Month.swift in Sources */,
 				A40000000000000000000015 /* PlannerOutlineView.swift in Sources */,
 				A40000000000000000000019 /* TitleTextField.swift in Sources */,
-				A40000000000000000000018 /* TitleTextField.swift in Sources */,
+				A4000000000000000000001A /* MonthCalendarView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -323,6 +328,7 @@
 				A40000000000000000000016 /* OutlineViewControllerTests.swift in Sources */,
 				A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */,
 				A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */,
+				A4000000000000000000001B /* MonthCalendarViewTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
