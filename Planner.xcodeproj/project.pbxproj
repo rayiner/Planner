@@ -17,6 +17,10 @@
 		A40000000000000000000008 /* OutlineNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000B /* OutlineNode.swift */; };
 		A40000000000000000000009 /* Logger+Planner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000C /* Logger+Planner.swift */; };
 		A4000000000000000000000A /* Planner.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000E /* Planner.xcdatamodeld */; };
+		A40000000000000000000011 /* MainSplitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000015 /* MainSplitViewController.swift */; };
+		A40000000000000000000012 /* OutlineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000016 /* OutlineViewController.swift */; };
+		A40000000000000000000013 /* CalendarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000017 /* CalendarViewController.swift */; };
+		A40000000000000000000014 /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000018 /* InspectorViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +47,10 @@
 		A3000000000000000000000B /* OutlineNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineNode.swift; sourceTree = "<group>"; };
 		A3000000000000000000000C /* Logger+Planner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Logger+Planner.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000D /* Planner.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = Planner.xcdatamodel; sourceTree = "<group>"; };
+		A30000000000000000000015 /* MainSplitViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000016 /* OutlineViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000017 /* CalendarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000018 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -86,6 +94,7 @@
 			children = (
 				A20000000000000000000005 /* App */,
 				A20000000000000000000007 /* Model */,
+				A20000000000000000000009 /* Controllers */,
 				A20000000000000000000008 /* Support */,
 				A30000000000000000000004 /* Planner.entitlements */,
 			);
@@ -110,6 +119,17 @@
 				A3000000000000000000000C /* Logger+Planner.swift */,
 			);
 			path = Support;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000009 /* Controllers */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000015 /* MainSplitViewController.swift */,
+				A30000000000000000000016 /* OutlineViewController.swift */,
+				A30000000000000000000017 /* CalendarViewController.swift */,
+				A30000000000000000000018 /* InspectorViewController.swift */,
+			);
+			path = Controllers;
 			sourceTree = "<group>";
 		};
 		A20000000000000000000005 /* App */ = {
@@ -237,6 +257,10 @@
 				A40000000000000000000008 /* OutlineNode.swift in Sources */,
 				A40000000000000000000009 /* Logger+Planner.swift in Sources */,
 				A4000000000000000000000A /* Planner.xcdatamodeld in Sources */,
+				A40000000000000000000011 /* MainSplitViewController.swift in Sources */,
+				A40000000000000000000012 /* OutlineViewController.swift in Sources */,
+				A40000000000000000000013 /* CalendarViewController.swift in Sources */,
+				A40000000000000000000014 /* InspectorViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

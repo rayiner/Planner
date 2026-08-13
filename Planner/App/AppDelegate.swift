@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Planner"
-        window.contentView = NSView()
+        window.contentViewController = MainSplitViewController()
         window.setContentSize(NSSize(width: 1040, height: 660))
         window.contentMinSize = NSSize(width: 800, height: 500)
         window.tabbingMode = .disallowed
