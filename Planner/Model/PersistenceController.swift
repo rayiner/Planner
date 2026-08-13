@@ -60,10 +60,18 @@ final class PersistenceController {
         viewContext.transactionAuthor = "planner.user"
     }
 
+    /// Test hook: next save rolls back and returns false without an alert.
+    var failNextSave = false
+
     @discardableResult
     func saveViewContext(presentingWindow: NSWindow?) -> Bool {
         let ctx = viewContext
         guard ctx.hasChanges else { return true }
+        if failNextSave {
+            failNextSave = false
+            ctx.rollback()
+            return false
+        }
         do {
             try ctx.save()
             return true

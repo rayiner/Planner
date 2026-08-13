@@ -21,6 +21,11 @@
 		A40000000000000000000012 /* OutlineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000016 /* OutlineViewController.swift */; };
 		A40000000000000000000013 /* CalendarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000017 /* CalendarViewController.swift */; };
 		A40000000000000000000014 /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000018 /* InspectorViewController.swift */; };
+		A4000000000000000000000B /* ModelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000F /* ModelController.swift */; };
+		A4000000000000000000000C /* SelectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000010 /* SelectionModel.swift */; };
+		A4000000000000000000000D /* PersistenceTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000011 /* PersistenceTestCase.swift */; };
+		A4000000000000000000000E /* ModelConstraintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000012 /* ModelConstraintTests.swift */; };
+		A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000013 /* DeadlineFetchTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +56,11 @@
 		A30000000000000000000016 /* OutlineViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewController.swift; sourceTree = "<group>"; };
 		A30000000000000000000017 /* CalendarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewController.swift; sourceTree = "<group>"; };
 		A30000000000000000000018 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
+		A3000000000000000000000F /* ModelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelController.swift; sourceTree = "<group>"; };
+		A30000000000000000000010 /* SelectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionModel.swift; sourceTree = "<group>"; };
+		A30000000000000000000011 /* PersistenceTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTestCase.swift; sourceTree = "<group>"; };
+		A30000000000000000000012 /* ModelConstraintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConstraintTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000013 /* DeadlineFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineFetchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +119,8 @@
 				A3000000000000000000000B /* OutlineNode.swift */,
 				A30000000000000000000009 /* Project+CoreData.swift */,
 				A3000000000000000000000A /* TaskItem+CoreData.swift */,
+				A3000000000000000000000F /* ModelController.swift */,
+				A30000000000000000000010 /* SelectionModel.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -146,6 +158,9 @@
 			isa = PBXGroup;
 			children = (
 				A30000000000000000000006 /* PlannerTests.swift */,
+				A30000000000000000000011 /* PersistenceTestCase.swift */,
+				A30000000000000000000012 /* ModelConstraintTests.swift */,
+				A30000000000000000000013 /* DeadlineFetchTests.swift */,
 			);
 			path = PlannerTests;
 			sourceTree = "<group>";
@@ -261,6 +276,8 @@
 				A40000000000000000000012 /* OutlineViewController.swift in Sources */,
 				A40000000000000000000013 /* CalendarViewController.swift in Sources */,
 				A40000000000000000000014 /* InspectorViewController.swift in Sources */,
+				A4000000000000000000000B /* ModelController.swift in Sources */,
+				A4000000000000000000000C /* SelectionModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -269,6 +286,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A40000000000000000000004 /* PlannerTests.swift in Sources */,
+				A4000000000000000000000D /* PersistenceTestCase.swift in Sources */,
+				A4000000000000000000000E /* ModelConstraintTests.swift in Sources */,
+				A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
