@@ -11,6 +11,12 @@
 		A40000000000000000000002 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* MainMenu.xib */; };
 		A40000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000003 /* Assets.xcassets */; };
 		A40000000000000000000004 /* PlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000006 /* PlannerTests.swift */; };
+		A40000000000000000000005 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000008 /* PersistenceController.swift */; };
+		A40000000000000000000006 /* Project+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000009 /* Project+CoreData.swift */; };
+		A40000000000000000000007 /* TaskItem+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000A /* TaskItem+CoreData.swift */; };
+		A40000000000000000000008 /* OutlineNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000B /* OutlineNode.swift */; };
+		A40000000000000000000009 /* Logger+Planner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000C /* Logger+Planner.swift */; };
+		A4000000000000000000000A /* Planner.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000E /* Planner.xcdatamodeld */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -31,6 +37,12 @@
 		A30000000000000000000005 /* Planner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Planner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A30000000000000000000006 /* PlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlannerTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000007 /* PlannerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlannerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A30000000000000000000008 /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
+		A30000000000000000000009 /* Project+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Project+CoreData.swift"; sourceTree = "<group>"; };
+		A3000000000000000000000A /* TaskItem+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TaskItem+CoreData.swift"; sourceTree = "<group>"; };
+		A3000000000000000000000B /* OutlineNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineNode.swift; sourceTree = "<group>"; };
+		A3000000000000000000000C /* Logger+Planner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Logger+Planner.swift"; sourceTree = "<group>"; };
+		A3000000000000000000000D /* Planner.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = Planner.xcdatamodel; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,9 +85,31 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000005 /* App */,
+				A20000000000000000000007 /* Model */,
+				A20000000000000000000008 /* Support */,
 				A30000000000000000000004 /* Planner.entitlements */,
 			);
 			path = Planner;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000007 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000000E /* Planner.xcdatamodeld */,
+				A30000000000000000000008 /* PersistenceController.swift */,
+				A3000000000000000000000B /* OutlineNode.swift */,
+				A30000000000000000000009 /* Project+CoreData.swift */,
+				A3000000000000000000000A /* TaskItem+CoreData.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000008 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000000C /* Logger+Planner.swift */,
+			);
+			path = Support;
 			sourceTree = "<group>";
 		};
 		A20000000000000000000005 /* App */ = {
@@ -197,6 +231,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				A40000000000000000000001 /* AppDelegate.swift in Sources */,
+				A40000000000000000000005 /* PersistenceController.swift in Sources */,
+				A40000000000000000000006 /* Project+CoreData.swift in Sources */,
+				A40000000000000000000007 /* TaskItem+CoreData.swift in Sources */,
+				A40000000000000000000008 /* OutlineNode.swift in Sources */,
+				A40000000000000000000009 /* Logger+Planner.swift in Sources */,
+				A4000000000000000000000A /* Planner.xcdatamodeld in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -474,6 +514,19 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCVersionGroup section */
+		A3000000000000000000000E /* Planner.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				A3000000000000000000000D /* Planner.xcdatamodel */,
+			);
+			currentVersion = A3000000000000000000000D /* Planner.xcdatamodel */;
+			path = Planner.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = A20000000000000000000001 /* Project object */;
 }
