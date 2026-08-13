@@ -1,9 +1,44 @@
 import AppKit
 
 final class MainSplitViewController: NSSplitViewController {
-    private let outlineViewController = OutlineViewController()
-    private let calendarViewController = CalendarViewController()
-    private let inspectorViewController = InspectorViewController()
+    let persistence: PersistenceController
+    let model: ModelController
+    let selection: SelectionModel
+
+    private let outlineViewController: OutlineViewController
+    private let calendarViewController: CalendarViewController
+    private let inspectorViewController: InspectorViewController
+
+    init(
+        persistence: PersistenceController,
+        model: ModelController,
+        selection: SelectionModel
+    ) {
+        self.persistence = persistence
+        self.model = model
+        self.selection = selection
+        outlineViewController = OutlineViewController(
+            persistence: persistence,
+            model: model,
+            selection: selection
+        )
+        calendarViewController = CalendarViewController(
+            persistence: persistence,
+            model: model,
+            selection: selection
+        )
+        inspectorViewController = InspectorViewController(
+            persistence: persistence,
+            model: model,
+            selection: selection
+        )
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()

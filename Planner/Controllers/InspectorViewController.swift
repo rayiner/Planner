@@ -1,6 +1,10 @@
 import AppKit
 
 final class InspectorViewController: NSViewController {
+    let persistence: PersistenceController
+    let model: ModelController
+    let selection: SelectionModel
+
     private let titleLabel = NSTextField(labelWithString: "Select a task")
     private let completedCheckbox = NSButton(checkboxWithTitle: "Completed", target: nil, action: nil)
     private let hasDeadlineCheckbox = NSButton(checkboxWithTitle: "Has deadline", target: nil, action: nil)
@@ -8,6 +12,22 @@ final class InspectorViewController: NSViewController {
     private let deadlineRow = NSStackView()
     private let notesLabel = NSTextField(labelWithString: "Notes")
     private let notesScrollView = NSTextView.scrollableTextView()
+
+    init(
+        persistence: PersistenceController,
+        model: ModelController,
+        selection: SelectionModel
+    ) {
+        self.persistence = persistence
+        self.model = model
+        self.selection = selection
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func loadView() {
         view = NSView()

@@ -2,9 +2,11 @@ import AppKit
 
 @main
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var mainWindow: NSWindow?
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var window: NSWindow?
     private var persistence: PersistenceController?
+    private var model: ModelController?
+    private var selection: SelectionModel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let persistence = PersistenceController()
@@ -16,7 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        self.persistence = persistence
+
+        let model = ModelController(persistence: persistence)
+        let selection = SelectionModel()
+        let split = MainSplitViewController(
+            persistence: persistence,
+            model: model,
+            selection: selection
+        )
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1040, height: 660),
@@ -25,14 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Planner"
-        window.contentViewController = MainSplitViewController()
+        window.contentViewController = split
         window.setContentSize(NSSize(width: 1040, height: 660))
         window.contentMinSize = NSSize(width: 800, height: 500)
         window.tabbingMode = .disallowed
         window.center()
         window.setFrameAutosaveName("MainWindow")
+        window.delegate = self
         window.makeKeyAndOrderFront(nil)
-        mainWindow = window
+
+        model.presentingWindow = window
+        self.persistence = persistence
+        self.model = model
+        self.selection = selection
+        self.window = window
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -41,5 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        persistence?.viewContext.undoManager
     }
 }
