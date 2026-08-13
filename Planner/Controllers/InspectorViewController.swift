@@ -19,6 +19,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private let notesTextView: NSTextView
 
     private var isUpdatingUI = false
+    private var isRevertingFailedFlush = false
     private var boundTask: TaskItem?
     private var boundTaskObjectID: NSManagedObjectID?
     private var noteSaveTimer: Timer?
@@ -93,10 +94,11 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         flushPendingNote()
     }
 
-    func flushPendingNote() {
+    @discardableResult
+    func flushPendingNote() -> Bool {
         noteSaveTimer?.invalidate()
         noteSaveTimer = nil
-        persistBoundNote()
+        return persistBoundNote()
     }
 
     private func configureControls() {
@@ -179,9 +181,17 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
         guard fields.contains(SelectionField.node.rawValue) else { return }
+        if isRevertingFailedFlush { return }
         noteSaveTimer?.invalidate()
         noteSaveTimer = nil
-        flushPendingNote()
+        if !flushPendingNote() {
+            if let previousUUID = boundTask?.uuid, selection.selectedNodeUUID != previousUUID {
+                isRevertingFailedFlush = true
+                selection.selectNode(uuid: previousUUID)
+                isRevertingFailedFlush = false
+            }
+            return
+        }
         noteUndoManager = UndoManager()
         bindToCurrentSelection()
     }
@@ -291,15 +301,33 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     }
 
     @objc private func contextDidSave(_ notification: Notification) {
-        refreshBoundFields()
-    }
-
-    @objc private func contextObjectsDidChange(_ notification: Notification) {
         if notification.userInfo?[NSInvalidatedAllObjectsKey] != nil {
             refreshBoundFields()
             return
         }
+        guard touchesSelectedNode(notification) else { return }
         refreshBoundFields()
+    }
+
+    @objc private func contextObjectsDidChange(_ notification: Notification) {
+        guard notification.userInfo?[NSInvalidatedAllObjectsKey] != nil else { return }
+        refreshBoundFields()
+    }
+
+    private func touchesSelectedNode(_ notification: Notification) -> Bool {
+        guard let uuid = selection.selectedNodeUUID else { return false }
+        let objects =
+            objects(in: notification, key: NSInsertedObjectsKey)
+            + objects(in: notification, key: NSUpdatedObjectsKey)
+            + objects(in: notification, key: NSDeletedObjectsKey)
+        return objects.contains { object in
+            (object as? TaskItem)?.uuid == uuid || (object as? Project)?.uuid == uuid
+        }
+    }
+
+    private func objects(in notification: Notification, key: String) -> [NSManagedObject] {
+        guard let set = notification.userInfo?[key] as? Set<NSManagedObject> else { return [] }
+        return Array(set)
     }
 
     private func refreshBoundFields() {
@@ -307,7 +335,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         if let task = try? model.task(uuid: uuid) {
             boundTask = task
             boundTaskObjectID = task.objectID
-            pushTask(task, replaceNotes: noteSaveTimer == nil)
+            pushTask(task, replaceNotes: shouldReplaceNotes(with: task))
             return
         }
         if let project = try? model.project(uuid: uuid) {
@@ -319,6 +347,12 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         boundTask = nil
         boundTaskObjectID = nil
         pushEmpty()
+    }
+
+    private func shouldReplaceNotes(with task: TaskItem) -> Bool {
+        guard noteSaveTimer == nil else { return false }
+        if notesTextView.window?.firstResponder === notesTextView { return false }
+        return notesTextView.string != (task.note ?? "")
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
@@ -368,24 +402,33 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         }
     }
 
-    private func persistBoundNote() {
+    @discardableResult
+    private func persistBoundNote() -> Bool {
         guard let task = boundTask,
               task.managedObjectContext != nil,
               !task.isDeleted
-        else { return }
+        else { return true }
         let text = notesTextView.string
         let newNote: String? = text.isEmpty ? nil : text
-        guard task.note != newNote else { return }
-        try? model.setNote(task, text)
+        guard task.note != newNote else { return true }
+        do {
+            try model.setNote(task, text)
+            return true
+        } catch {
+            return false
+        }
     }
 
     @objc private func noteDebounceFired(_ timer: Timer) {
+        guard let objectID = timer.userInfo as? NSManagedObjectID else { return }
+        guard boundTaskObjectID == objectID else {
+            if noteSaveTimer === timer { noteSaveTimer = nil }
+            return
+        }
+        _ = persistBoundNote()
         if noteSaveTimer === timer {
             noteSaveTimer = nil
         }
-        guard let objectID = timer.userInfo as? NSManagedObjectID else { return }
-        guard boundTaskObjectID == objectID else { return }
-        persistBoundNote()
     }
 
     // MARK: - NSTextViewDelegate
@@ -394,13 +437,15 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         guard !isUpdatingUI else { return }
         guard let objectID = boundTaskObjectID else { return }
         noteSaveTimer?.invalidate()
-        noteSaveTimer = Timer.scheduledTimer(
+        let timer = Timer(
             timeInterval: Self.noteDebounce,
             target: self,
             selector: #selector(noteDebounceFired(_:)),
             userInfo: objectID,
             repeats: false
         )
+        RunLoop.main.add(timer, forMode: .common)
+        noteSaveTimer = timer
     }
 
     func textDidEndEditing(_ notification: Notification) {
@@ -426,6 +471,10 @@ extension InspectorViewController {
     var test_notesHidden: Bool { notesScrollView.isHidden }
     var test_notesEditable: Bool { notesTextView.isEditable }
     var test_notes: String { notesTextView.string }
+    var test_notesSelectedRange: NSRange {
+        get { notesTextView.selectedRange() }
+        set { notesTextView.setSelectedRange(newValue) }
+    }
     var test_noteUndoManager: UndoManager { noteUndoManager }
 
     func test_setNotes(_ string: String) {

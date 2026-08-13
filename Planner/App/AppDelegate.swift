@@ -60,7 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        (window?.contentViewController as? MainSplitViewController)?.flushInspectorNotes()
+        if let split = window?.contentViewController as? MainSplitViewController,
+           !split.flushInspectorNotes() {
+            return .terminateCancel
+        }
         guard let persistence else { return .terminateNow }
         return persistence.saveViewContext(presentingWindow: window) ? .terminateNow : .terminateCancel
     }

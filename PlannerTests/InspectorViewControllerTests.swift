@@ -195,10 +195,61 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         let updatedAt = task.updatedAt
         selection.selectNode(uuid: task.uuid)
 
-        inspector.flushPendingNote()
+        XCTAssertTrue(inspector.flushPendingNote())
 
         XCTAssertEqual(task.note, "same")
         XCTAssertEqual(task.updatedAt, updatedAt)
+    }
+
+    func testFlushFailureIsReportedAndKeepsBuffer() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        inspector.test_setNotes("unsaved")
+
+        persistence.failNextSave = true
+        XCTAssertFalse(inspector.flushPendingNote())
+
+        XCTAssertNil(task.note)
+        XCTAssertEqual(inspector.test_notes, "unsaved")
+        XCTAssertFalse(persistence.viewContext.hasChanges)
+    }
+
+    func testFailedFlushOnNodeChangeKeepsBufferAndRevertsSelection() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let first = try model.createTask(in: project)
+        let second = try model.createTask(in: project)
+        selection.selectNode(uuid: first.uuid)
+        inspector.test_setNotes("keep me")
+
+        persistence.failNextSave = true
+        selection.selectNode(uuid: second.uuid)
+
+        XCTAssertEqual(inspector.test_notes, "keep me")
+        XCTAssertEqual(inspector.test_title, first.title)
+        XCTAssertEqual(selection.selectedNodeUUID, first.uuid)
+        XCTAssertNil(first.note)
+        XCTAssertNil(second.note)
+    }
+
+    func testSuccessfulFlushDoesNotRewriteNotesOrResetCaret() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        inspector.test_setNotes("hello")
+        inspector.test_notesSelectedRange = NSRange(location: 5, length: 0)
+
+        XCTAssertTrue(inspector.flushPendingNote())
+
+        XCTAssertEqual(task.note, "hello")
+        XCTAssertEqual(inspector.test_notes, "hello")
+        XCTAssertEqual(inspector.test_notesSelectedRange.location, 5)
     }
 
     private func makeInspector(selection: SelectionModel = SelectionModel()) -> InspectorViewController {

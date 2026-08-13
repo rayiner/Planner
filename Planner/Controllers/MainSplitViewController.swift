@@ -76,7 +76,8 @@ final class MainSplitViewController: NSSplitViewController {
         installToolbarIfNeeded()
     }
 
-    func flushInspectorNotes() {
+    @discardableResult
+    func flushInspectorNotes() -> Bool {
         inspectorViewController.flushPendingNote()
     }
 
