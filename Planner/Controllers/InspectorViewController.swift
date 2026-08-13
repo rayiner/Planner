@@ -42,7 +42,6 @@ final class InspectorViewController: NSViewController {
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            notesScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
         ])
     }
 

@@ -13,6 +13,7 @@ final class MainSplitViewController: NSSplitViewController {
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: outlineViewController)
         sidebarItem.minimumThickness = 200
+        sidebarItem.maximumThickness = NSSplitViewItem.unspecifiedDimension
         sidebarItem.preferredThicknessFraction = 280.0 / 1040.0
         sidebarItem.holdingPriority = .defaultLow
         sidebarItem.canCollapse = false
