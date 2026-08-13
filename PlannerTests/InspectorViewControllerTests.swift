@@ -236,6 +236,41 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         XCTAssertNil(second.note)
     }
 
+    func testUndoOfCompletedRefreshesInspectorWithoutSave() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+
+        inspector.test_clickCompleted()
+        XCTAssertTrue(task.isCompleted)
+        XCTAssertEqual(inspector.test_completedState, .on)
+
+        persistence.viewContext.undoManager?.undo()
+        XCTAssertFalse(task.isCompleted)
+        XCTAssertEqual(inspector.test_completedState, .off)
+    }
+
+    func testFailedFlushKeepsDirtyNotesAfterLaterAttributeSave() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        inspector.test_setNotes("unsaved")
+
+        persistence.failNextSave = true
+        XCTAssertFalse(inspector.flushPendingNote())
+        XCTAssertEqual(inspector.test_notes, "unsaved")
+
+        try model.setCompleted(true, on: task)
+        XCTAssertTrue(task.isCompleted)
+        XCTAssertEqual(inspector.test_completedState, .on)
+        XCTAssertEqual(inspector.test_notes, "unsaved")
+        XCTAssertNil(task.note)
+    }
+
     func testSuccessfulFlushDoesNotRewriteNotesOrResetCaret() throws {
         let selection = SelectionModel()
         let inspector = makeInspector(selection: selection)

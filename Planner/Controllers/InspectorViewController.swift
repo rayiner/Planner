@@ -20,6 +20,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
     private var isUpdatingUI = false
     private var isRevertingFailedFlush = false
+    private var notesBufferIsDirty = false
     private var boundTask: TaskItem?
     private var boundTaskObjectID: NSManagedObjectID?
     private var noteSaveTimer: Timer?
@@ -199,6 +200,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private func bindToCurrentSelection() {
         boundTask = nil
         boundTaskObjectID = nil
+        notesBufferIsDirty = false
 
         guard let uuid = selection.selectedNodeUUID else {
             pushEmpty()
@@ -305,22 +307,32 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             refreshBoundFields()
             return
         }
-        guard touchesSelectedNode(notification) else { return }
+        guard touchesBoundOrSelectedNode(
+            notification,
+            keys: [NSInsertedObjectsKey, NSUpdatedObjectsKey, NSDeletedObjectsKey]
+        ) else { return }
         refreshBoundFields()
     }
 
     @objc private func contextObjectsDidChange(_ notification: Notification) {
-        guard notification.userInfo?[NSInvalidatedAllObjectsKey] != nil else { return }
+        if notification.userInfo?[NSInvalidatedAllObjectsKey] != nil {
+            refreshBoundFields()
+            return
+        }
+        guard touchesBoundOrSelectedNode(
+            notification,
+            keys: [NSUpdatedObjectsKey, NSInvalidatedObjectsKey]
+        ) else { return }
         refreshBoundFields()
     }
 
-    private func touchesSelectedNode(_ notification: Notification) -> Bool {
+    private func touchesBoundOrSelectedNode(_ notification: Notification, keys: [String]) -> Bool {
+        let changed = keys.flatMap { objects(in: notification, key: $0) }
+        if let boundID = boundTaskObjectID, changed.contains(where: { $0.objectID == boundID }) {
+            return true
+        }
         guard let uuid = selection.selectedNodeUUID else { return false }
-        let objects =
-            objects(in: notification, key: NSInsertedObjectsKey)
-            + objects(in: notification, key: NSUpdatedObjectsKey)
-            + objects(in: notification, key: NSDeletedObjectsKey)
-        return objects.contains { object in
+        return changed.contains { object in
             (object as? TaskItem)?.uuid == uuid || (object as? Project)?.uuid == uuid
         }
     }
@@ -331,7 +343,16 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     }
 
     private func refreshBoundFields() {
-        guard let uuid = selection.selectedNodeUUID else { return }
+        if let task = boundTask, task.managedObjectContext != nil, !task.isDeleted {
+            pushTask(task, replaceNotes: shouldReplaceNotes(with: task))
+            return
+        }
+        guard let uuid = selection.selectedNodeUUID else {
+            boundTask = nil
+            boundTaskObjectID = nil
+            pushEmpty()
+            return
+        }
         if let task = try? model.task(uuid: uuid) {
             boundTask = task
             boundTaskObjectID = task.objectID
@@ -350,6 +371,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     }
 
     private func shouldReplaceNotes(with task: TaskItem) -> Bool {
+        if notesBufferIsDirty { return false }
         guard noteSaveTimer == nil else { return false }
         if notesTextView.window?.firstResponder === notesTextView { return false }
         return notesTextView.string != (task.note ?? "")
@@ -407,12 +429,19 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         guard let task = boundTask,
               task.managedObjectContext != nil,
               !task.isDeleted
-        else { return true }
+        else {
+            notesBufferIsDirty = false
+            return true
+        }
         let text = notesTextView.string
         let newNote: String? = text.isEmpty ? nil : text
-        guard task.note != newNote else { return true }
+        guard task.note != newNote else {
+            notesBufferIsDirty = false
+            return true
+        }
         do {
             try model.setNote(task, text)
+            notesBufferIsDirty = false
             return true
         } catch {
             return false
@@ -436,6 +465,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !isUpdatingUI else { return }
         guard let objectID = boundTaskObjectID else { return }
+        notesBufferIsDirty = true
         noteSaveTimer?.invalidate()
         let timer = Timer(
             timeInterval: Self.noteDebounce,
