@@ -59,6 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        (window?.contentViewController as? MainSplitViewController)?.flushInspectorNotes()
+        guard let persistence else { return .terminateNow }
+        return persistence.saveViewContext(presentingWindow: window) ? .terminateNow : .terminateCancel
+    }
+
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         persistence?.viewContext.undoManager
     }

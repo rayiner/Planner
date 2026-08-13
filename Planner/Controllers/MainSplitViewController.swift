@@ -76,6 +76,10 @@ final class MainSplitViewController: NSSplitViewController {
         installToolbarIfNeeded()
     }
 
+    func flushInspectorNotes() {
+        inspectorViewController.flushPendingNote()
+    }
+
     private func makeRightSplitViewController() -> NSSplitViewController {
         let rightSplit = NSSplitViewController()
         rightSplit.splitView.isVertical = false

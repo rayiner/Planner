@@ -30,6 +30,7 @@
 		A40000000000000000000015 /* PlannerOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000019 /* PlannerOutlineView.swift */; };
 		A40000000000000000000016 /* OutlineViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001A /* OutlineViewControllerTests.swift */; };
 		A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001B /* MainSplitViewControllerTests.swift */; };
+		A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001C /* InspectorViewControllerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +70,7 @@
 		A30000000000000000000019 /* PlannerOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlannerOutlineView.swift; sourceTree = "<group>"; };
 		A3000000000000000000001A /* OutlineViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001B /* MainSplitViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewControllerTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000001C /* InspectorViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewControllerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -181,6 +183,7 @@
 				A30000000000000000000013 /* DeadlineFetchTests.swift */,
 				A3000000000000000000001A /* OutlineViewControllerTests.swift */,
 				A3000000000000000000001B /* MainSplitViewControllerTests.swift */,
+				A3000000000000000000001C /* InspectorViewControllerTests.swift */,
 			);
 			path = PlannerTests;
 			sourceTree = "<group>";
@@ -313,6 +316,7 @@
 				A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */,
 				A40000000000000000000016 /* OutlineViewControllerTests.swift in Sources */,
 				A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */,
+				A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
