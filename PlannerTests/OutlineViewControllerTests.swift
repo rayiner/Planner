@@ -470,6 +470,38 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         )!
     }
 
+    func testNestedSelectionExpandsAncestorsSelectsAndPersists() throws {
+        let selection = SelectionModel()
+        let outline = makeOutline(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        let subtask = try model.createSubtask(under: task)
+        outline.outlineView.collapseItem(project)
+        XCTAssertFalse(outline.outlineView.isItemExpanded(project))
+
+        selection.selectNode(uuid: subtask.uuid)
+
+        XCTAssertTrue(outline.outlineView.isItemExpanded(project))
+        XCTAssertTrue(outline.outlineView.isItemExpanded(task))
+        let row = outline.outlineView.row(forItem: subtask)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        XCTAssertEqual(outline.outlineView.selectedRow, row)
+        let stored = Set(defaults.stringArray(forKey: OutlineViewController.expandedUUIDsKey) ?? [])
+        XCTAssertTrue(stored.contains(project.uuid.uuidString))
+        XCTAssertTrue(stored.contains(task.uuid.uuidString))
+    }
+
+    func testUnknownSelectionClearsOutlineRow() throws {
+        let selection = SelectionModel()
+        let outline = makeOutline(selection: selection)
+        let project = try model.createProject()
+        selection.selectNode(uuid: project.uuid)
+        XCTAssertEqual(outline.outlineView.selectedRow, outline.outlineView.row(forItem: project))
+
+        selection.selectNode(uuid: UUID())
+        XCTAssertEqual(outline.outlineView.selectedRow, -1)
+    }
+
     private func completeButton(in view: NSView) -> NSButton? {
         if let button = view as? NSButton { return button }
         for subview in view.subviews {

@@ -316,14 +316,27 @@ final class OutlineViewController: NSViewController {
             outlineView.deselectAll(nil)
             return
         }
+        if selectVisibleRow(for: node, makeFirstResponder: makeFirstResponder) {
+            return
+        }
+        // Chip reveal can race a stale projects cache; refetch once and retry.
+        projects = (try? model.allProjects()) ?? []
+        outlineView.reloadData()
+        restoreExpansion()
+        _ = selectVisibleRow(for: node, makeFirstResponder: makeFirstResponder)
+    }
+
+    private func selectVisibleRow(for node: OutlineNode, makeFirstResponder: Bool) -> Bool {
         expandAncestors(of: node)
+        persistExpansion()
         let row = outlineView.row(forItem: node)
-        guard row >= 0 else { return }
+        guard row >= 0 else { return false }
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         outlineView.scrollRowToVisible(row)
         if makeFirstResponder {
             view.window?.makeFirstResponder(outlineView)
         }
+        return true
     }
 
     private func expandAncestors(of node: OutlineNode) {

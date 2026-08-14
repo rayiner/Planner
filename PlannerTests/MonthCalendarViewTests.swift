@@ -249,8 +249,74 @@ final class MonthCalendarViewTests: XCTestCase {
         let open = view.test_chipAppearance(at: index, chip: 1)
         XCTAssertEqual(completed?.color, .tertiaryLabelColor)
         XCTAssertEqual(completed?.isStruck, true)
+        XCTAssertEqual(completed?.isSelected, false)
         XCTAssertEqual(open?.color, .labelColor)
         XCTAssertEqual(open?.isStruck, false)
+        XCTAssertEqual(open?.isSelected, false)
+    }
+
+    func testSelectedChipUsesAccentColor() {
+        let view = makeView()
+        let day = inMonthDay(of: view)
+        let selected = TaskDeadlineChip(uuid: UUID(), title: "Selected", day: day, isCompleted: false)
+        let other = TaskDeadlineChip(uuid: UUID(), title: "Other", day: day, isCompleted: false)
+        view.deadlines = [selected, other]
+        let index = view.test_days.firstIndex { Calendar.current.isDate($0, inSameDayAs: day) }!
+
+        view.selectedTaskID = selected.uuid
+
+        let selectedAppearance = view.test_chipAppearance(at: index, chip: 0)
+        let otherAppearance = view.test_chipAppearance(at: index, chip: 1)
+        XCTAssertEqual(selectedAppearance?.color, .controlAccentColor)
+        XCTAssertEqual(selectedAppearance?.isStruck, false)
+        XCTAssertEqual(selectedAppearance?.isSelected, true)
+        XCTAssertEqual(otherAppearance?.color, .labelColor)
+        XCTAssertEqual(otherAppearance?.isStruck, false)
+        XCTAssertEqual(otherAppearance?.isSelected, false)
+    }
+
+    func testCompletedSelectedChipStaysDimmedAndStruck() {
+        let view = makeView()
+        let day = inMonthDay(of: view)
+        let done = TaskDeadlineChip(uuid: UUID(), title: "Done", day: day, isCompleted: true)
+        view.deadlines = [done]
+        let index = view.test_days.firstIndex { Calendar.current.isDate($0, inSameDayAs: day) }!
+
+        view.selectedTaskID = done.uuid
+
+        let appearance = view.test_chipAppearance(at: index, chip: 0)
+        XCTAssertEqual(appearance?.color, .tertiaryLabelColor)
+        XCTAssertEqual(appearance?.isStruck, true)
+        XCTAssertEqual(appearance?.isSelected, true)
+    }
+
+    func testEmptyMonthMessageWhenCivilMonthHasNoChips() {
+        let view = makeView()
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+        XCTAssertEqual(view.test_emptyMonthText, "No deadlines this month.")
+
+        let day = inMonthDay(of: view)
+        view.deadlines = [TaskDeadlineChip(uuid: UUID(), title: "Due", day: day, isCompleted: false)]
+        XCTAssertFalse(view.test_isEmptyMonthVisible)
+
+        view.deadlines = []
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+    }
+
+    func testEmptyMonthShownWhenOnlySpilloverChips() {
+        let view = makeView()
+        let days = view.test_days
+        guard let spilloverIndex = days.indices.first(where: { view.test_isSpillover(at: $0) }) else {
+            XCTFail("Expected a spillover day in the 42-day grid")
+            return
+        }
+        view.deadlines = [
+            TaskDeadlineChip(uuid: UUID(), title: "Spillover", day: days[spilloverIndex], isCompleted: false),
+        ]
+
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+        XCTAssertEqual(view.test_emptyMonthText, "No deadlines this month.")
+        XCTAssertEqual(view.test_visibleChips(at: spilloverIndex).count, 1)
     }
 
     private func makeView() -> MonthCalendarView {
@@ -314,6 +380,9 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(selection.visibleMonth, originalMonth)
         XCTAssertEqual(calendarVC.monthView.selectedTaskID, task.uuid)
         XCTAssertEqual(calendarVC.monthView.selectedDay, Calendar.current.startOfDay(for: day))
+        let appearance = calendarVC.monthView.test_chipAppearance(at: index, chip: 0)
+        XCTAssertEqual(appearance?.color, .controlAccentColor)
+        XCTAssertEqual(appearance?.isSelected, true)
     }
 
     func testDayClickSelectsDayWithoutClearingOutlineSelection() throws {
@@ -365,6 +434,18 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         let trailingIndex = 41
         XCTAssertTrue(calendarVC.monthView.test_visibleChips(at: leadingIndex).map(\.uuid).contains(leadingTask.uuid))
         XCTAssertTrue(calendarVC.monthView.test_visibleChips(at: trailingIndex).map(\.uuid).contains(trailingTask.uuid))
+    }
+
+    func testEmptyMonthLabelFollowsCivilMonthDeadlines() throws {
+        let selection = SelectionModel()
+        let calendarVC = makeCalendar(selection: selection)
+        XCTAssertTrue(calendarVC.monthView.test_isEmptyMonthVisible)
+        XCTAssertEqual(calendarVC.monthView.test_emptyMonthText, "No deadlines this month.")
+
+        let project = try model.createProject()
+        let day = inMonthDay(of: calendarVC.monthView)
+        _ = try makeTask(in: project, title: "Due", deadline: day)
+        XCTAssertFalse(calendarVC.monthView.test_isEmptyMonthVisible)
     }
 
     func testSpilloverDayClickWritesMonthAndDay() {

@@ -33,7 +33,12 @@ final class MonthCalendarView: NSView {
         didSet { applyChipsToCells() }
     }
 
-    var selectedTaskID: UUID?
+    var selectedTaskID: UUID? {
+        didSet {
+            guard selectedTaskID != oldValue else { return }
+            applySelectedTaskHighlight()
+        }
+    }
 
     var selectedDay: Date? {
         get { _selectedDay }
@@ -54,6 +59,7 @@ final class MonthCalendarView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let headerView = NSView()
     private let gridContainer = GridContainer()
+    private let emptyMonthLabel = EmptyMonthLabel(labelWithString: "No deadlines this month.")
     private var weekdayLabels: [NSTextField] = []
     private var dayCells: [DayCellView] = []
 
@@ -160,6 +166,21 @@ final class MonthCalendarView: NSView {
             gridContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
 
+        emptyMonthLabel.font = .preferredFont(forTextStyle: .callout)
+        emptyMonthLabel.textColor = .secondaryLabelColor
+        emptyMonthLabel.alignment = .center
+        emptyMonthLabel.maximumNumberOfLines = 0
+        emptyMonthLabel.lineBreakMode = .byWordWrapping
+        emptyMonthLabel.refusesFirstResponder = true
+        emptyMonthLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(emptyMonthLabel)
+        NSLayoutConstraint.activate([
+            emptyMonthLabel.centerXAnchor.constraint(equalTo: gridContainer.centerXAnchor),
+            emptyMonthLabel.centerYAnchor.constraint(equalTo: gridContainer.centerYAnchor),
+            emptyMonthLabel.leadingAnchor.constraint(greaterThanOrEqualTo: gridContainer.leadingAnchor, constant: 16),
+            emptyMonthLabel.trailingAnchor.constraint(lessThanOrEqualTo: gridContainer.trailingAnchor, constant: -16),
+        ])
+
         weekdayLabels = (0..<7).map { _ in
             let label = NSTextField(labelWithString: "")
             label.font = .systemFont(ofSize: 11, weight: .medium)
@@ -217,8 +238,25 @@ final class MonthCalendarView: NSView {
             grouped[day, default: []].append(chip)
         }
         for cell in dayCells {
+            cell.selectedTaskID = selectedTaskID
             cell.chips = grouped[calendar.startOfDay(for: cell.day)] ?? []
         }
+        updateEmptyMonthLabel()
+    }
+
+    private func applySelectedTaskHighlight() {
+        for cell in dayCells {
+            cell.selectedTaskID = selectedTaskID
+        }
+    }
+
+    // Civil month only: spillover chips do not count as deadlines "this month."
+    private func updateEmptyMonthLabel() {
+        let calendar = Calendar.current
+        let hasDeadlineThisMonth = deadlines.contains {
+            calendar.isDate($0.day, equalTo: _visibleMonth, toGranularity: .month)
+        }
+        emptyMonthLabel.isHidden = hasDeadlineThisMonth
     }
 
     private func layoutGrid() {
@@ -297,9 +335,12 @@ extension MonthCalendarView {
         max(0, dayCells[index].chips.count - Self.maxVisibleChips)
     }
 
-    func test_chipAppearance(at index: Int, chip chipIndex: Int) -> (color: NSColor, isStruck: Bool)? {
+    func test_chipAppearance(at index: Int, chip chipIndex: Int) -> (color: NSColor, isStruck: Bool, isSelected: Bool)? {
         dayCells[index].test_chipAppearance(at: chipIndex)
     }
+
+    var test_isEmptyMonthVisible: Bool { !emptyMonthLabel.isHidden }
+    var test_emptyMonthText: String { emptyMonthLabel.stringValue }
 
     func test_isToday(at index: Int) -> Bool {
         dayCells[index].isToday
@@ -356,6 +397,10 @@ private final class GridContainer: NSView {
     override var isFlipped: Bool { true }
 }
 
+private final class EmptyMonthLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private final class DayCellView: NSView {
     var onChipClick: ((TaskDeadlineChip) -> Void)?
     var onDayClick: ((Date) -> Void)?
@@ -366,6 +411,10 @@ private final class DayCellView: NSView {
 
     var isSelected = false {
         didSet { needsDisplay = true }
+    }
+
+    var selectedTaskID: UUID? {
+        didSet { applyChipSelection() }
     }
 
     var chips: [TaskDeadlineChip] = [] {
@@ -516,9 +565,16 @@ private final class DayCellView: NSView {
         if extra > 0 {
             overflowButton.title = "+\(extra) more"
         }
+        applyChipSelection()
         needsLayout = true
         if !bounds.isEmpty {
             layout()
+        }
+    }
+
+    private func applyChipSelection() {
+        for view in chipViews {
+            view.isSelected = view.chip.uuid == selectedTaskID
         }
     }
 
@@ -539,7 +595,7 @@ private final class DayCellView: NSView {
         overflowClicked()
     }
 
-    func test_chipAppearance(at index: Int) -> (color: NSColor, isStruck: Bool)? {
+    func test_chipAppearance(at index: Int) -> (color: NSColor, isStruck: Bool, isSelected: Bool)? {
         guard chipViews.indices.contains(index) else { return nil }
         return chipViews[index].test_appearance
     }
@@ -595,24 +651,29 @@ private final class DeadlineChipView: NSView {
     let chip: TaskDeadlineChip
     var onClick: (() -> Void)?
 
-    private let titleColor: NSColor
-    private let isStruck: Bool
+    var isSelected = false {
+        didSet {
+            guard isSelected != oldValue else { return }
+            needsDisplay = true
+        }
+    }
 
-    var test_appearance: (color: NSColor, isStruck: Bool) {
-        (titleColor, isStruck)
+    private var isStruck: Bool { chip.isCompleted }
+
+    private var titleColor: NSColor {
+        if chip.isCompleted { return .tertiaryLabelColor }
+        if isSelected { return .controlAccentColor }
+        return .labelColor
+    }
+
+    var test_appearance: (color: NSColor, isStruck: Bool, isSelected: Bool) {
+        (titleColor, isStruck, isSelected)
     }
 
     override var isFlipped: Bool { true }
 
     init(chip: TaskDeadlineChip) {
         self.chip = chip
-        if chip.isCompleted {
-            titleColor = .tertiaryLabelColor
-            isStruck = true
-        } else {
-            titleColor = .labelColor
-            isStruck = false
-        }
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
