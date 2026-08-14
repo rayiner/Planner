@@ -272,6 +272,29 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
     }
 
+    func testDragPastThresholdCancelsPendingRename() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 1, modifiers: [])
+        outline.outlineView.mouseDownLocationInView = NSPoint(x: 10, y: 10)
+
+        XCTAssertFalse(outline.outlineView.hasDraggedPastThreshold(to: NSPoint(x: 12, y: 10)))
+        XCTAssertTrue(outline.outlineView.hasDraggedPastThreshold(
+            to: NSPoint(x: 10 + PlannerOutlineView.dragThreshold, y: 10)
+        ))
+
+        var began = false
+        outline.beginEditingTitleHandler = { _ in began = true }
+        outline.scheduleDelayedRename(at: row)
+        let generation = outline.renameGeneration
+        outline.outlineView.cancelPendingRenameGesture()
+        outline.renameTimerFired(row: row, generation: generation)
+        XCTAssertFalse(began)
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+    }
+
     func testReturnAndKeypadEnterBeginEditingSelectedTitle() throws {
         let outline = makeOutline()
         let project = try model.createProject()
@@ -348,23 +371,81 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertFalse(field.allowsFirstResponder)
     }
 
-    func testSelectionChangeCancelsRenameTimer() async throws {
+    func testEscapeRestoresCompletedStrikethrough() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        try model.setTitle(task, "Milk")
+        try model.setCompleted(true, on: task)
+        outline.outlineView.expandItem(project)
+        let field = try titleField(in: outline, for: task)
+        field.stringValue = "Changed"
+
+        XCTAssertTrue(outline.control(
+            field,
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        ))
+        XCTAssertEqual(field.stringValue, "Milk")
+        XCTAssertEqual(task.title, "Milk")
+        let attributes = field.attributedStringValue.attributes(at: 0, effectiveRange: nil)
+        XCTAssertEqual(attributes[.strikethroughStyle] as? Int, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testBeginEditingTitleCancelsPendingDelayedRename() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+        var began = 0
+        outline.beginEditingTitleHandler = { _ in began += 1 }
+        outline.scheduleDelayedRename(at: row)
+        let generation = outline.renameGeneration
+        outline.beginEditingTitle(of: project)
+        XCTAssertEqual(began, 1)
+
+        outline.renameTimerFired(row: row, generation: generation)
+        XCTAssertEqual(began, 1)
+    }
+
+    func testContextMenuCancelsPendingRename() throws {
+        let outline = makeOutline()
+        let project = try model.createProject()
+        let row = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+        var began = false
+        outline.beginEditingTitleHandler = { _ in began = true }
+        outline.scheduleDelayedRename(at: row)
+        outline.outlineView.snapshotPendingRename(row: row, clickCount: 1, modifiers: [])
+        let generation = outline.renameGeneration
+        _ = outline.outlineView.menu(forRow: row)
+
+        XCTAssertEqual(outline.outlineView.pendingRenameRow, -1)
+        outline.renameTimerFired(row: row, generation: generation)
+        XCTAssertFalse(began)
+    }
+
+    func testSelectionChangeCancelsRenameTimer() throws {
         let outline = makeOutline()
         let project = try model.createProject()
         let other = try model.createProject()
         var began = false
         outline.beginEditingTitleHandler = { _ in began = true }
 
-        outline.scheduleDelayedRename(at: outline.outlineView.row(forItem: project))
+        let projectRow = outline.outlineView.row(forItem: project)
+        outline.outlineView.selectRowIndexes(IndexSet(integer: projectRow), byExtendingSelection: false)
+        outline.scheduleDelayedRename(at: projectRow)
+        let generation = outline.renameGeneration
         outline.outlineView.selectRowIndexes(
             IndexSet(integer: outline.outlineView.row(forItem: other)),
             byExtendingSelection: false
         )
 
-        let elapsed = expectation(description: "rename delay elapsed")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { elapsed.fulfill() }
-        await fulfillment(of: [elapsed], timeout: 1)
+        outline.renameTimerFired(row: projectRow, generation: generation)
         XCTAssertFalse(began)
+        XCTAssertNotEqual(generation, outline.renameGeneration)
     }
 
     private func titleField(in outline: OutlineViewController, for node: OutlineNode) throws -> TitleTextField {

@@ -1,11 +1,16 @@
 import AppKit
 
 final class PlannerOutlineView: NSOutlineView {
+    static let dragThreshold: CGFloat = 4
+
     var pendingRenameRow: Int = -1
+    var mouseDownLocationInView: NSPoint?
 
     override func mouseDown(with event: NSEvent) {
         (delegate as? OutlineViewController)?.cancelPendingRename()
-        let row = row(at: convert(event.locationInWindow, from: nil))
+        let location = convert(event.locationInWindow, from: nil)
+        mouseDownLocationInView = location
+        let row = row(at: location)
         snapshotPendingRename(row: row, clickCount: event.clickCount, modifiers: event.modifierFlags)
         super.mouseDown(with: event)
     }
@@ -17,9 +22,13 @@ final class PlannerOutlineView: NSOutlineView {
             ? row : -1
     }
 
+    func hasDraggedPastThreshold(to locationInView: NSPoint) -> Bool {
+        guard let start = mouseDownLocationInView else { return false }
+        return hypot(locationInView.x - start.x, locationInView.y - start.y) >= Self.dragThreshold
+    }
+
     override func mouseDragged(with event: NSEvent) {
-        pendingRenameRow = -1
-        (delegate as? OutlineViewController)?.cancelPendingRename()
+        cancelPendingRenameGesture()
         super.mouseDragged(with: event)
     }
 
@@ -34,11 +43,13 @@ final class PlannerOutlineView: NSOutlineView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        cancelPendingRenameGesture()
         let location = convert(event.locationInWindow, from: nil)
         return menu(forRow: row(at: location))
     }
 
     func menu(forRow row: Int) -> NSMenu {
+        cancelPendingRenameGesture()
         if row >= 0 {
             selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             window?.makeFirstResponder(self)
@@ -62,6 +73,11 @@ final class PlannerOutlineView: NSOutlineView {
         return Self.makeMenu([
             ("New Project", #selector(MainSplitViewController.newProject(_:))),
         ])
+    }
+
+    func cancelPendingRenameGesture() {
+        pendingRenameRow = -1
+        (delegate as? OutlineViewController)?.cancelPendingRename()
     }
 
     private static func makeMenu(_ items: [(String, Selector)]) -> NSMenu {
