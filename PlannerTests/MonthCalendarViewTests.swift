@@ -56,6 +56,11 @@ final class MonthCalendarViewTests: XCTestCase {
         XCTAssertEqual(view.test_days.count, 42)
         XCTAssertEqual(view.test_weekdaySymbols, expected)
         XCTAssertEqual(view.test_days, calendar.daysInMonthGrid(for: view.visibleMonth))
+        XCTAssertEqual(calendar.component(.weekday, from: view.test_days[0]), calendar.firstWeekday)
+        XCTAssertEqual(
+            view.test_weekdaySymbols[0],
+            calendar.veryShortWeekdaySymbols[calendar.firstWeekday - 1]
+        )
     }
 
     func testVisibleMonthSetterDoesNotFireDelegate() {
@@ -168,6 +173,67 @@ final class MonthCalendarViewTests: XCTestCase {
         )
         XCTAssertTrue(recorder.taskIDs.isEmpty)
         XCTAssertEqual(view.visibleMonth, Calendar.current.startOfMonth(for: Date()))
+    }
+
+    func testDayNumberMouseDownSelectsDay() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let day = inMonthDay(of: view)
+        let index = view.test_days.firstIndex { Calendar.current.isDate($0, inSameDayAs: day) }!
+
+        XCTAssertFalse(view.test_dayNumberHitView(at: index) is NSTextField)
+        view.test_mouseDownOnDayNumber(at: index)
+
+        XCTAssertEqual(recorder.days.count, 1)
+        XCTAssertTrue(Calendar.current.isDate(recorder.days[0], inSameDayAs: day))
+        XCTAssertTrue(recorder.taskIDs.isEmpty)
+        XCTAssertTrue(recorder.months.isEmpty)
+    }
+
+    func testChipMouseDownDoesNotTreatSpilloverAsDayNavigation() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let days = view.test_days
+        guard let spilloverIndex = days.indices.first(where: { view.test_isSpillover(at: $0) }) else {
+            XCTFail("Expected a spillover day in the 42-day grid")
+            return
+        }
+        let chip = TaskDeadlineChip(
+            uuid: UUID(),
+            title: "Spillover chip",
+            day: days[spilloverIndex],
+            isCompleted: false
+        )
+        view.deadlines = [chip]
+        view.layoutSubtreeIfNeeded()
+
+        view.test_mouseDownOnChip(at: spilloverIndex, chip: 0)
+
+        XCTAssertEqual(recorder.taskIDs, [chip.uuid])
+        XCTAssertEqual(recorder.days.count, 1)
+        XCTAssertTrue(recorder.months.isEmpty)
+    }
+
+    func testAccessibilityPressSelectsDayAndChip() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let day = inMonthDay(of: view)
+        let done = TaskDeadlineChip(uuid: UUID(), title: "Done", day: day, isCompleted: true)
+        let open = TaskDeadlineChip(uuid: UUID(), title: "Open", day: day, isCompleted: false)
+        view.deadlines = [done, open]
+        let index = view.test_days.firstIndex { Calendar.current.isDate($0, inSameDayAs: day) }!
+
+        XCTAssertEqual(view.test_chipAccessibilityLabel(at: index, chip: 0), "Done, Completed")
+        XCTAssertEqual(view.test_chipAccessibilityLabel(at: index, chip: 1), "Open")
+        XCTAssertTrue(view.test_performDayAccessibilityPress(at: index))
+        XCTAssertTrue(view.test_performChipAccessibilityPress(at: index, chip: 1))
+
+        XCTAssertEqual(recorder.days.count, 2)
+        XCTAssertEqual(recorder.taskIDs, [open.uuid])
+        XCTAssertTrue(recorder.months.isEmpty)
     }
 
     func testCompletedChipsAreDimmedAndStruck() {

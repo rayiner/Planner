@@ -78,6 +78,15 @@ final class MonthCalendarView: NSView {
 
     override func layout() {
         super.layout()
+        if gridContainer.bounds.width <= 0 || gridContainer.bounds.height <= 0, bounds.width > 0 {
+            let headerHeight = max(headerView.frame.height, 28)
+            gridContainer.frame = NSRect(
+                x: 8,
+                y: 8 + headerHeight + 6,
+                width: max(0, bounds.width - 16),
+                height: max(0, bounds.height - 16 - headerHeight - 6)
+            )
+        }
         layoutGrid()
     }
 
@@ -315,6 +324,32 @@ extension MonthCalendarView {
     func test_clickOverflow(at index: Int) {
         dayCells[index].test_clickOverflow()
     }
+
+    func test_dayNumberHitView(at index: Int) -> NSView? {
+        let cell = dayCells[index]
+        return cell.test_hitView(at: NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY))
+    }
+
+    func test_mouseDownOnDayNumber(at index: Int) {
+        let cell = dayCells[index]
+        cell.test_mouseDown(at: NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY))
+    }
+
+    func test_mouseDownOnChip(at index: Int, chip chipIndex: Int) {
+        dayCells[index].test_mouseDownOnChip(at: chipIndex)
+    }
+
+    func test_performDayAccessibilityPress(at index: Int) -> Bool {
+        dayCells[index].test_performAccessibilityPress()
+    }
+
+    func test_performChipAccessibilityPress(at index: Int, chip chipIndex: Int) -> Bool {
+        dayCells[index].test_performChipAccessibilityPress(at: chipIndex)
+    }
+
+    func test_chipAccessibilityLabel(at index: Int, chip chipIndex: Int) -> String? {
+        dayCells[index].test_chipAccessibilityLabel(at: chipIndex)
+    }
 }
 
 private final class GridContainer: NSView {
@@ -398,6 +433,27 @@ private final class DayCellView: NSView {
         onDayClick?(day)
     }
 
+    // Incoming point is in the superview. Skip the full-width day-number field.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        if !overflowButton.isHidden, let overflowHit = overflowButton.hitTest(local) {
+            return overflowHit
+        }
+        for chipView in chipViews.reversed() {
+            if let chipHit = chipView.hitTest(local) {
+                return chipHit
+            }
+        }
+        return self
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onDayClick?(day)
+        return true
+    }
+
     override func layout() {
         super.layout()
         let inset: CGFloat = 3
@@ -432,6 +488,7 @@ private final class DayCellView: NSView {
         dayNumberLabel.isBezeled = false
         dayNumberLabel.drawsBackground = false
         dayNumberLabel.refusesFirstResponder = true
+        dayNumberLabel.setAccessibilityElement(false)
         addSubview(dayNumberLabel)
 
         overflowButton.isBordered = false
@@ -460,6 +517,9 @@ private final class DayCellView: NSView {
             overflowButton.title = "+\(extra) more"
         }
         needsLayout = true
+        if !bounds.isEmpty {
+            layout()
+        }
     }
 
     @objc private func overflowClicked() {
@@ -482,6 +542,52 @@ private final class DayCellView: NSView {
     func test_chipAppearance(at index: Int) -> (color: NSColor, isStruck: Bool)? {
         guard chipViews.indices.contains(index) else { return nil }
         return chipViews[index].test_appearance
+    }
+
+    var test_dayNumberFrame: NSRect { dayNumberLabel.frame }
+
+    func test_hitView(at localPoint: NSPoint) -> NSView? {
+        hitTest(convert(localPoint, to: superview))
+    }
+
+    func test_mouseDown(at localPoint: NSPoint) {
+        let hit = test_hitView(at: localPoint) ?? self
+        hit.mouseDown(with: Self.testMouseEvent(at: convert(localPoint, to: nil)))
+    }
+
+    func test_mouseDownOnChip(at index: Int) {
+        layout()
+        guard chipViews.indices.contains(index) else { return }
+        let chip = chipViews[index]
+        test_mouseDown(at: convert(NSPoint(x: chip.bounds.midX, y: chip.bounds.midY), from: chip))
+    }
+
+    func test_performAccessibilityPress() -> Bool {
+        accessibilityPerformPress()
+    }
+
+    func test_performChipAccessibilityPress(at index: Int) -> Bool {
+        guard chipViews.indices.contains(index) else { return false }
+        return chipViews[index].accessibilityPerformPress()
+    }
+
+    func test_chipAccessibilityLabel(at index: Int) -> String? {
+        guard chipViews.indices.contains(index) else { return nil }
+        return chipViews[index].accessibilityLabel()
+    }
+
+    private static func testMouseEvent(at location: NSPoint) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: location,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
     }
 }
 
@@ -510,7 +616,7 @@ private final class DeadlineChipView: NSView {
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel(chip.title)
+        setAccessibilityLabel(chip.isCompleted ? "\(chip.title), Completed" : chip.title)
     }
 
     @available(*, unavailable)
@@ -535,5 +641,10 @@ private final class DeadlineChipView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         onClick?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
     }
 }
