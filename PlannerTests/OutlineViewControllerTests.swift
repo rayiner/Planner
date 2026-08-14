@@ -502,6 +502,24 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(outline.outlineView.selectedRow, -1)
     }
 
+    func testStaleCacheRevealHidesEmptyState() throws {
+        let selection = SelectionModel()
+        let outline = makeOutline(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        outline.test_simulateStaleEmptyProjectsCache()
+        XCTAssertTrue(outline.test_isEmptyStateVisible)
+        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+
+        selection.selectNode(uuid: task.uuid)
+
+        let row = outline.outlineView.row(forItem: task)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        XCTAssertEqual(outline.outlineView.selectedRow, row)
+        XCTAssertTrue(outline.outlineView.isItemExpanded(project))
+        XCTAssertFalse(outline.test_isEmptyStateVisible)
+    }
+
     private func completeButton(in view: NSView) -> NSButton? {
         if let button = view as? NSButton { return button }
         for subview in view.subviews {

@@ -323,6 +323,7 @@ final class OutlineViewController: NSViewController {
         projects = (try? model.allProjects()) ?? []
         outlineView.reloadData()
         restoreExpansion()
+        updateEmptyState()
         _ = selectVisibleRow(for: node, makeFirstResponder: makeFirstResponder)
     }
 
@@ -703,5 +704,15 @@ extension OutlineViewController: NSTextFieldDelegate {
         endTitleEditing()
         isCancellingTitleEdit = false
         return true
+    }
+}
+
+extension OutlineViewController {
+    var test_isEmptyStateVisible: Bool { !emptyStateLabel.isHidden }
+
+    func test_simulateStaleEmptyProjectsCache() {
+        projects = []
+        outlineView.reloadData()
+        updateEmptyState()
     }
 }

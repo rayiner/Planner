@@ -15,6 +15,7 @@ struct TaskDeadlineChip: Hashable {
 
 final class MonthCalendarView: NSView {
     fileprivate static let maxVisibleChips = 3
+    fileprivate static let emptyMonthCaptionHeight: CGFloat = 18
 
     weak var delegate: MonthCalendarViewDelegate?
 
@@ -60,6 +61,7 @@ final class MonthCalendarView: NSView {
     private let headerView = NSView()
     private let gridContainer = GridContainer()
     private let emptyMonthLabel = EmptyMonthLabel(labelWithString: "No deadlines this month.")
+    private var emptyMonthHeightConstraint: NSLayoutConstraint?
     private var weekdayLabels: [NSTextField] = []
     private var dayCells: [DayCellView] = []
 
@@ -82,15 +84,29 @@ final class MonthCalendarView: NSView {
         delegate?.monthCalendar(self, didChangeVisibleMonth: Date())
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        for subview in subviews.reversed() {
+            if let hit = subview.hitTest(local) {
+                return hit
+            }
+        }
+        return self
+    }
+
     override func layout() {
         super.layout()
         if gridContainer.bounds.width <= 0 || gridContainer.bounds.height <= 0, bounds.width > 0 {
             let headerHeight = max(headerView.frame.height, 28)
+            let emptyBand = emptyMonthLabel.isHidden ? 0 : Self.emptyMonthCaptionHeight
+            let gridTop = 8 + headerHeight + 6 + emptyBand
             gridContainer.frame = NSRect(
                 x: 8,
-                y: 8 + headerHeight + 6,
+                y: gridTop,
                 width: max(0, bounds.width - 16),
-                height: max(0, bounds.height - 16 - headerHeight - 6)
+                height: max(0, bounds.height - 8 - gridTop)
             )
         }
         layoutGrid()
@@ -159,26 +175,29 @@ final class MonthCalendarView: NSView {
         gridContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(gridContainer)
 
-        NSLayoutConstraint.activate([
-            gridContainer.topAnchor.constraint(equalTo: headerView.bottomAnchor, constant: 6),
-            gridContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            gridContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            gridContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-        ])
-
+        // Caption sits between the month header and the weekday row so it
+        // never paints over civil-month day numbers or Today.
         emptyMonthLabel.font = .preferredFont(forTextStyle: .callout)
         emptyMonthLabel.textColor = .secondaryLabelColor
         emptyMonthLabel.alignment = .center
-        emptyMonthLabel.maximumNumberOfLines = 0
-        emptyMonthLabel.lineBreakMode = .byWordWrapping
+        emptyMonthLabel.maximumNumberOfLines = 1
+        emptyMonthLabel.lineBreakMode = .byTruncatingTail
         emptyMonthLabel.refusesFirstResponder = true
         emptyMonthLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(emptyMonthLabel)
+        let emptyHeight = emptyMonthLabel.heightAnchor.constraint(equalToConstant: Self.emptyMonthCaptionHeight)
+        emptyMonthHeightConstraint = emptyHeight
         NSLayoutConstraint.activate([
-            emptyMonthLabel.centerXAnchor.constraint(equalTo: gridContainer.centerXAnchor),
-            emptyMonthLabel.centerYAnchor.constraint(equalTo: gridContainer.centerYAnchor),
-            emptyMonthLabel.leadingAnchor.constraint(greaterThanOrEqualTo: gridContainer.leadingAnchor, constant: 16),
-            emptyMonthLabel.trailingAnchor.constraint(lessThanOrEqualTo: gridContainer.trailingAnchor, constant: -16),
+            emptyMonthLabel.topAnchor.constraint(equalTo: headerView.bottomAnchor, constant: 4),
+            emptyMonthLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            emptyMonthLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
+            emptyMonthLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            emptyHeight,
+
+            gridContainer.topAnchor.constraint(equalTo: emptyMonthLabel.bottomAnchor, constant: 2),
+            gridContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            gridContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            gridContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
 
         weekdayLabels = (0..<7).map { _ in
@@ -257,6 +276,7 @@ final class MonthCalendarView: NSView {
             calendar.isDate($0.day, equalTo: _visibleMonth, toGranularity: .month)
         }
         emptyMonthLabel.isHidden = hasDeadlineThisMonth
+        emptyMonthHeightConstraint?.constant = hasDeadlineThisMonth ? 0 : Self.emptyMonthCaptionHeight
     }
 
     private func layoutGrid() {
@@ -341,6 +361,80 @@ extension MonthCalendarView {
 
     var test_isEmptyMonthVisible: Bool { !emptyMonthLabel.isHidden }
     var test_emptyMonthText: String { emptyMonthLabel.stringValue }
+    var test_emptyMonthFrame: NSRect { emptyMonthLabel.frame }
+
+    func test_civilMonthDayNumberFrames() -> [NSRect] {
+        dayCells.filter(\.isInVisibleMonth).map { convert($0.test_dayNumberFrame, from: $0) }
+    }
+
+    func test_todayDayNumberFrame() -> NSRect? {
+        dayCells.first(where: \.isToday).map { convert($0.test_dayNumberFrame, from: $0) }
+    }
+
+    func test_hitViewFromCalendarOnDayNumber(at index: Int) -> NSView? {
+        let cell = dayCells[index]
+        let local = NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY)
+        return test_hitTestInSelfCoordinates(convert(local, from: cell))
+    }
+
+    func test_hitViewFromCalendarOnEmptyMonthLabel() -> NSView? {
+        let local = NSPoint(x: emptyMonthLabel.bounds.midX, y: emptyMonthLabel.bounds.midY)
+        return test_hitTestInSelfCoordinates(convert(local, from: emptyMonthLabel))
+    }
+
+    func test_hitViewFromCalendarOnChip(at index: Int, chip chipIndex: Int) -> NSView? {
+        dayCells[index].layout()
+        guard let chipView = dayCells[index].test_chipView(at: chipIndex) else { return nil }
+        let local = NSPoint(x: chipView.bounds.midX, y: chipView.bounds.midY)
+        return test_hitTestInSelfCoordinates(convert(local, from: chipView))
+    }
+
+    private func test_hitTestInSelfCoordinates(_ pointInSelf: NSPoint) -> NSView? {
+        layoutSubtreeIfNeeded()
+        return hitTest(convert(pointInSelf, to: superview))
+    }
+
+    func test_hitIsEmptyMonthLabel(_ view: NSView?) -> Bool {
+        guard let view else { return false }
+        return view === emptyMonthLabel || view.isDescendant(of: emptyMonthLabel)
+    }
+
+    func test_hitIsDayCell(_ view: NSView?, at index: Int) -> Bool {
+        view === dayCells[index]
+    }
+
+    func test_hitIsChip(_ view: NSView?, at index: Int, chip chipIndex: Int) -> Bool {
+        view === dayCells[index].test_chipView(at: chipIndex)
+    }
+
+    func test_mouseDownFromCalendarOnDayNumber(at index: Int) {
+        let cell = dayCells[index]
+        let local = NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY)
+        let inSelf = convert(local, from: cell)
+        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(with: Self.testMouseEvent(at: convert(inSelf, to: nil)))
+    }
+
+    func test_mouseDownFromCalendarOnChip(at index: Int, chip chipIndex: Int) {
+        dayCells[index].layout()
+        guard let chipView = dayCells[index].test_chipView(at: chipIndex) else { return }
+        let local = NSPoint(x: chipView.bounds.midX, y: chipView.bounds.midY)
+        let inSelf = convert(local, from: chipView)
+        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(with: Self.testMouseEvent(at: convert(inSelf, to: nil)))
+    }
+
+    private static func testMouseEvent(at location: NSPoint) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: location,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+    }
 
     func test_isToday(at index: Int) -> Bool {
         dayCells[index].isToday
@@ -395,6 +489,18 @@ extension MonthCalendarView {
 
 private final class GridContainer: NSView {
     override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        for subview in subviews.reversed() {
+            if let hit = subview.hitTest(local) {
+                return hit
+            }
+        }
+        return self
+    }
 }
 
 private final class EmptyMonthLabel: NSTextField {
@@ -601,6 +707,11 @@ private final class DayCellView: NSView {
     }
 
     var test_dayNumberFrame: NSRect { dayNumberLabel.frame }
+
+    func test_chipView(at index: Int) -> NSView? {
+        guard chipViews.indices.contains(index) else { return nil }
+        return chipViews[index]
+    }
 
     func test_hitView(at localPoint: NSPoint) -> NSView? {
         hitTest(convert(localPoint, to: superview))

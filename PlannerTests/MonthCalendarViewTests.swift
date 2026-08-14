@@ -319,6 +319,79 @@ final class MonthCalendarViewTests: XCTestCase {
         XCTAssertEqual(view.test_visibleChips(at: spilloverIndex).count, 1)
     }
 
+    func testEmptyMonthOverlayIsClickThroughFromCalendarHitTest() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+
+        let overlayHit = view.test_hitViewFromCalendarOnEmptyMonthLabel()
+        XCTAssertNotNil(overlayHit, "Empty caption should click through to a view behind it")
+        XCTAssertFalse(
+            view.test_hitIsEmptyMonthLabel(overlayHit),
+            "EmptyMonthLabel.hitTest must return nil so the caption is not the hit"
+        )
+
+        let day = inMonthDay(of: view)
+        let index = view.test_days.firstIndex { Calendar.current.isDate($0, inSameDayAs: day) }!
+        XCTAssertTrue(
+            view.test_hitIsDayCell(view.test_hitViewFromCalendarOnDayNumber(at: index), at: index),
+            "Calendar-level hitTest at a day number must reach the day cell"
+        )
+
+        view.test_mouseDownFromCalendarOnDayNumber(at: index)
+        XCTAssertEqual(recorder.days.count, 1)
+        XCTAssertTrue(Calendar.current.isDate(recorder.days[0], inSameDayAs: day))
+        XCTAssertTrue(recorder.taskIDs.isEmpty)
+        XCTAssertTrue(recorder.months.isEmpty)
+    }
+
+    func testEmptyMonthDoesNotBlockSpilloverChipHitFromCalendar() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let days = view.test_days
+        guard let spilloverIndex = days.indices.first(where: { view.test_isSpillover(at: $0) }) else {
+            XCTFail("Expected a spillover day in the 42-day grid")
+            return
+        }
+        let chip = TaskDeadlineChip(
+            uuid: UUID(),
+            title: "Spillover",
+            day: days[spilloverIndex],
+            isCompleted: false
+        )
+        view.deadlines = [chip]
+        view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+
+        XCTAssertTrue(view.test_hitIsChip(
+            view.test_hitViewFromCalendarOnChip(at: spilloverIndex, chip: 0),
+            at: spilloverIndex,
+            chip: 0
+        ))
+        view.test_mouseDownFromCalendarOnChip(at: spilloverIndex, chip: 0)
+
+        XCTAssertEqual(recorder.taskIDs, [chip.uuid])
+        XCTAssertEqual(recorder.days.count, 1)
+        XCTAssertTrue(recorder.months.isEmpty)
+    }
+
+    func testEmptyMonthCaptionDoesNotCoverCivilDayNumbers() {
+        let view = makeView()
+        XCTAssertTrue(view.test_isEmptyMonthVisible)
+        view.layoutSubtreeIfNeeded()
+
+        let caption = view.test_emptyMonthFrame
+        XCTAssertFalse(caption.isEmpty)
+        for frame in view.test_civilMonthDayNumberFrames() {
+            XCTAssertFalse(caption.intersects(frame), "Empty copy covered a civil-month day number")
+        }
+        if let today = view.test_todayDayNumberFrame() {
+            XCTAssertFalse(caption.intersects(today), "Empty copy covered Today")
+        }
+    }
+
     private func makeView() -> MonthCalendarView {
         let view = MonthCalendarView(frame: NSRect(x: 0, y: 0, width: 720, height: 480))
         view.layoutSubtreeIfNeeded()
