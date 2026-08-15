@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22758" systemVersion="23F79" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="DayNote" representedClassName="DayNote" syncable="YES">
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="day" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="note" optional="YES" attributeType="String"/>
+        <attribute name="noteRTF" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="NO"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <fetchIndex name="byDay">
+            <fetchIndexElement property="day" type="Binary" order="ascending"/>
+        </fetchIndex>
+    </entity>
+    <entity name="MailFolder" representedClassName="MailFolder" syncable="YES">
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="name" optional="NO" attributeType="String" defaultValueString="Untitled Folder"/>
+        <attribute name="sortIndex" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <relationship name="messages" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="SavedMessage" inverseName="folder" inverseEntity="SavedMessage"/>
+    </entity>
+    <entity name="SavedMessage" representedClassName="SavedMessage" syncable="YES">
+        <attribute name="attachmentNames" optional="YES" attributeType="String"/>
+        <attribute name="body" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="hasAttachments" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="inReplyTo" optional="YES" attributeType="String"/>
+        <attribute name="messageID" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="outlookID" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="receivedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="recipients" optional="YES" attributeType="String"/>
+        <attribute name="references" optional="YES" attributeType="String"/>
+        <attribute name="senderAddress" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="senderName" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="subject" optional="NO" attributeType="String" defaultValueString=""/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <relationship name="folder" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="MailFolder" inverseName="messages" inverseEntity="MailFolder"/>
+        <fetchIndex name="byMessageID">
+            <fetchIndexElement property="messageID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byReceivedAt">
+            <fetchIndexElement property="receivedAt" type="Binary" order="ascending"/>
+        </fetchIndex>
+    </entity>
+    <entity name="Project" representedClassName="Project" syncable="YES">
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="sortIndex" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="title" optional="NO" attributeType="String" defaultValueString="Untitled Project"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <relationship name="tasks" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Task" inverseName="project" inverseEntity="Task"/>
+    </entity>
+    <entity name="Task" representedClassName="TaskItem" syncable="YES">
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="deadline" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="isCompleted" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="note" optional="YES" attributeType="String"/>
+        <attribute name="noteRTF" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="NO"/>
+        <attribute name="sortIndex" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="sourceMessageUUID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="title" optional="NO" attributeType="String" defaultValueString="Untitled Task"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <relationship name="parentTask" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Task" inverseName="subtasks" inverseEntity="Task"/>
+        <relationship name="project" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Project" inverseName="tasks" inverseEntity="Project"/>
+        <relationship name="subtasks" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Task" inverseName="parentTask" inverseEntity="Task"/>
+        <fetchIndex name="byDeadline">
+            <fetchIndexElement property="deadline" type="Binary" order="ascending"/>
+        </fetchIndex>
+    </entity>
+    <elements>
+        <element name="DayNote" positionX="-63" positionY="171" width="128" height="119"/>
+        <element name="MailFolder" positionX="-63" positionY="342" width="128" height="119"/>
+        <element name="Project" positionX="-63" positionY="-18" width="128" height="119"/>
+        <element name="SavedMessage" positionX="160" positionY="342" width="128" height="284"/>
+        <element name="Task" positionX="160" positionY="-18" width="128" height="224"/>
+    </elements>
+</model>

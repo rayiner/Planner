@@ -78,6 +78,11 @@
 		A4000000000000000000000005 /* StubMailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000005 /* StubMailSource.swift */; };
 		A4000000000000000000000006 /* MailWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000006 /* MailWindowTests.swift */; };
 		A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000007 /* MailCoordinatorTests.swift */; };
+		A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000008 /* MailFolder+CoreData.swift */; };
+		A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000009 /* SavedMessage+CoreData.swift */; };
+		A400000000000000000000000A /* MailThreading.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000A /* MailThreading.swift */; };
+		A400000000000000000000000B /* MailThreadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000B /* MailThreadingTests.swift */; };
+		A400000000000000000000000C /* MailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000C /* MailStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -106,6 +111,7 @@
 		A3000000000000000000000B /* OutlineNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineNode.swift; sourceTree = "<group>"; };
 		A3000000000000000000000C /* Logger+Planner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Logger+Planner.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000D /* Planner.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = Planner.xcdatamodel; sourceTree = "<group>"; };
+		A30000000000000000000100 /* Planner 2.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Planner 2.xcdatamodel"; sourceTree = "<group>"; };
 		A3000000000000000000000F /* ModelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelController.swift; sourceTree = "<group>"; };
 		A30000000000000000000010 /* SelectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionModel.swift; sourceTree = "<group>"; };
 		A30000000000000000000011 /* PersistenceTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTestCase.swift; sourceTree = "<group>"; };
@@ -165,6 +171,11 @@
 		A3000000000000000000000005 /* StubMailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubMailSource.swift; sourceTree = "<group>"; };
 		A3000000000000000000000006 /* MailWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWindowTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000007 /* MailCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailCoordinatorTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000000008 /* MailFolder+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MailFolder+CoreData.swift"; sourceTree = "<group>"; };
+		A3000000000000000000000009 /* SavedMessage+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SavedMessage+CoreData.swift"; sourceTree = "<group>"; };
+		A300000000000000000000000A /* MailThreading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreading.swift; sourceTree = "<group>"; };
+		A300000000000000000000000B /* MailThreadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreadingTests.swift; sourceTree = "<group>"; };
+		A300000000000000000000000C /* MailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -230,6 +241,8 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				A300000000000000000000000C /* MailStoreTests.swift */,
+				A300000000000000000000000B /* MailThreadingTests.swift */,
 				A3000000000000000000000007 /* MailCoordinatorTests.swift */,
 				A3000000000000000000000006 /* MailWindowTests.swift */,
 				A3000000000000000000000005 /* StubMailSource.swift */,
@@ -265,6 +278,8 @@
 		A20000000000000000000007 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000009 /* SavedMessage+CoreData.swift */,
+				A3000000000000000000000008 /* MailFolder+CoreData.swift */,
 				A2000000000000000000000001 /* Mail */,
 				A3000000000000000000000E /* Planner.xcdatamodeld */,
 				A30000000000000000000008 /* PersistenceController.swift */,
@@ -282,6 +297,7 @@
 		A20000000000000000000008 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				A300000000000000000000000A /* MailThreading.swift */,
 				A3000000000000000000000C /* Logger+Planner.swift */,
 				A30000000000000000000014 /* Calendar+Month.swift */,
 				A30000000000000000000022 /* NoteFormatting.swift */,
@@ -453,6 +469,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A400000000000000000000000A /* MailThreading.swift in Sources */,
+				A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */,
+				A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */,
 				A4000000000000000000000004 /* MailCoordinator.swift in Sources */,
 				A4000000000000000000000003 /* MailSource.swift in Sources */,
 				A4000000000000000000000002 /* MailWindow.swift in Sources */,
@@ -501,6 +520,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A400000000000000000000000C /* MailStoreTests.swift in Sources */,
+				A400000000000000000000000B /* MailThreadingTests.swift in Sources */,
 				A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */,
 				A4000000000000000000000006 /* MailWindowTests.swift in Sources */,
 				A4000000000000000000000005 /* StubMailSource.swift in Sources */,
@@ -807,9 +828,10 @@
 		A3000000000000000000000E /* Planner.xcdatamodeld */ = {
 			isa = XCVersionGroup;
 			children = (
+				A30000000000000000000100 /* Planner 2.xcdatamodel */,
 				A3000000000000000000000D /* Planner.xcdatamodel */,
 			);
-			currentVersion = A3000000000000000000000D /* Planner.xcdatamodel */;
+			currentVersion = A30000000000000000000100 /* Planner 2.xcdatamodel */;
 			path = Planner.xcdatamodeld;
 			sourceTree = "<group>";
 			versionGroupType = wrapper.xcdatamodel;

@@ -86,6 +86,204 @@ final class ModelController {
         }
     }
 
+    // MARK: - Mail folders
+
+    @discardableResult
+    func createMailFolder(name: String = "Untitled Folder") throws -> MailFolder {
+        let now = Date()
+        // Computed before the insert: a fetch sees pending changes, so asking
+        // afterwards would count the new folder's own default index.
+        let sortIndex = (fetchedMailFolders().map(\.sortIndex).max() ?? -1) + 1
+        let folder = MailFolder(context: ctx)
+        folder.uuid = UUID()
+        folder.name = name
+        folder.sortIndex = sortIndex
+        folder.createdAt = now
+        folder.updatedAt = now
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("New Folder")
+        try saveOrThrow()
+        return folder
+    }
+
+    func renameMailFolder(_ folder: MailFolder, to name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw ModelError.emptyTitle }
+        folder.name = trimmed
+        folder.updatedAt = Date()
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Rename Folder")
+        try saveOrThrow()
+    }
+
+    /// Cascades to the folder's messages, per the model. The confirmation sheet
+    /// is the view controller's job, exactly as it is for projects.
+    func deleteMailFolder(_ folder: MailFolder) throws {
+        ctx.delete(folder)
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Delete Folder")
+        try saveOrThrow()
+    }
+
+    func mailFolders() -> [MailFolder] {
+        let request = MailFolder.fetchRequest()
+        request.sortDescriptors = Self.folderSortDescriptors
+        return (try? ctx.fetch(request)) ?? []
+    }
+
+    // MARK: - Saved messages
+
+    /// Copies a message into a folder, or returns the copy already there.
+    ///
+    /// Idempotent by `messageID` **within the folder**: saving the same message
+    /// twice is a no-op, but the same message may legitimately sit in two
+    /// folders. Since CloudKit forbids a uniqueness constraint, this lookup is
+    /// the only thing enforcing it — which is why every save goes through here.
+    @discardableResult
+    func saveMessage(
+        _ envelope: MailMessage,
+        detail: MailMessageDetail?,
+        into folder: MailFolder
+    ) throws -> SavedMessage {
+        let messageID = Self.normalizedMessageID(detail?.messageID, fallbackFor: envelope)
+        if let existing = savedMessage(messageID: messageID, in: folder) { return existing }
+
+        let now = Date()
+        let message = SavedMessage(context: ctx)
+        message.uuid = UUID()
+        message.messageID = messageID
+        message.subject = envelope.subject
+        message.senderName = envelope.senderName
+        message.senderAddress = envelope.senderAddress
+        message.recipients = detail?.recipients
+        message.receivedAt = envelope.receivedAt
+        message.body = detail?.body
+        message.inReplyTo = detail?.inReplyTo
+        message.references = detail?.references
+        message.attachmentNames = detail?.attachmentNames
+        message.hasAttachments = detail?.hasAttachments ?? false
+        message.outlookID = envelope.id
+        message.createdAt = now
+        message.updatedAt = now
+        message.folder = folder
+        folder.updatedAt = now
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Save Message")
+        try saveOrThrow()
+        return message
+    }
+
+    /// Moves a saved message between folders, collapsing into the copy already
+    /// at the destination rather than creating a duplicate.
+    func moveMessage(_ message: SavedMessage, to folder: MailFolder) throws {
+        guard message.folder?.objectID != folder.objectID else { return }
+        let now = Date()
+        if let duplicate = savedMessage(messageID: message.messageID, in: folder),
+           duplicate.objectID != message.objectID {
+            ctx.delete(message)
+        } else {
+            message.folder = folder
+            message.updatedAt = now
+        }
+        folder.updatedAt = now
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Move Message")
+        try saveOrThrow()
+    }
+
+    func removeMessage(_ message: SavedMessage) throws {
+        message.folder?.updatedAt = Date()
+        ctx.delete(message)
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Remove Message")
+        try saveOrThrow()
+    }
+
+    /// Newest first, matching the reading order of a conversation.
+    func messages(in folder: MailFolder) -> [SavedMessage] {
+        folder.messages.sorted {
+            $0.receivedAt == $1.receivedAt ? $0.uuid < $1.uuid : $0.receivedAt > $1.receivedAt
+        }
+    }
+
+    func savedMessage(uuid: UUID) -> SavedMessage? {
+        let request = SavedMessage.fetchRequest()
+        request.predicate = NSPredicate(format: "uuid == %@", uuid as CVarArg)
+        request.fetchLimit = 1
+        return (try? ctx.fetch(request))?.first
+    }
+
+    /// Which folder already holds this message, for the "Saved to X" chip in
+    /// Recent Mail. Returns the first by `(sortIndex, uuid)` if somehow several
+    /// do — a chip has room for one name, and the list order settles which.
+    func folderContaining(messageID: String) -> MailFolder? {
+        guard !messageID.isEmpty else { return nil }
+        let request = SavedMessage.fetchRequest()
+        request.predicate = NSPredicate(format: "messageID == %@", messageID)
+        let folders = ((try? ctx.fetch(request)) ?? []).compactMap(\.folder)
+        return folders.min { ($0.sortIndex, $0.uuid) < ($1.sortIndex, $1.uuid) }
+    }
+
+    /// Every folder holding a copy of this message, keyed by message id — one
+    /// fetch for a whole list, rather than one per visible row.
+    func foldersByMessageID() -> [String: MailFolder] {
+        var index: [String: MailFolder] = [:]
+        for message in (try? ctx.fetch(SavedMessage.fetchRequest())) ?? [] {
+            guard let folder = message.folder, !message.messageID.isEmpty else { continue }
+            if let existing = index[message.messageID],
+               (existing.sortIndex, existing.uuid) <= (folder.sortIndex, folder.uuid) {
+                continue
+            }
+            index[message.messageID] = folder
+        }
+        return index
+    }
+
+    private func savedMessage(messageID: String, in folder: MailFolder) -> SavedMessage? {
+        guard !messageID.isEmpty else { return nil }
+        return folder.messages.first { $0.messageID == messageID }
+    }
+
+    /// A message with no `Message-ID` header still has to dedupe against
+    /// itself, so it falls back to a synthetic id derived from Outlook's record
+    /// id. Scoped by a prefix so it can never collide with a real header.
+    static func normalizedMessageID(_ headerValue: String?, fallbackFor envelope: MailMessage) -> String {
+        let trimmed = headerValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "outlook-id:\(envelope.id)" : trimmed
+    }
+
+    // MARK: - Tasks from messages
+
+    /// Creates a task under `parent` titled from the message and linked back to
+    /// it. The link is a UUID rather than a relationship, so removing the
+    /// message later leaves the task alone.
+    @discardableResult
+    func createTask(from message: SavedMessage, under parent: OutlineNode) throws -> TaskItem {
+        let task = try createTask(under: parent)
+        task.title = Self.taskTitle(fromSubject: message.subject)
+        task.sourceMessageUUID = message.uuid
+        task.updatedAt = Date()
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("New Task")
+        try saveOrThrow()
+        return task
+    }
+
+    /// The message this task came from, or nil if it was never linked or the
+    /// message has since been removed.
+    func sourceMessage(of task: TaskItem) -> SavedMessage? {
+        guard let uuid = task.sourceMessageUUID else { return nil }
+        return savedMessage(uuid: uuid)
+    }
+
+    /// Subjects arrive with reply and forward prefixes that say nothing about
+    /// the work; an empty subject falls back to the default task title rather
+    /// than an empty one, which the store forbids.
+    static func taskTitle(fromSubject subject: String) -> String {
+        let stripped = MailThreading.normalizedSubject(subject)
+        return stripped.isEmpty ? "Untitled Task" : stripped
+    }
+
     // MARK: - Delete
 
     func delete(_ node: OutlineNode) throws {
@@ -293,6 +491,15 @@ final class ModelController {
 
     static func nextSortIndex<T: OutlineNode>(in siblings: [T]) -> Int64 {
         (siblings.map(\.sortIndex).max() ?? -1) + 1
+    }
+
+    private static let folderSortDescriptors = [
+        NSSortDescriptor(key: "sortIndex", ascending: true),
+        NSSortDescriptor(key: "uuid", ascending: true),
+    ]
+
+    private func fetchedMailFolders() -> [MailFolder] {
+        (try? ctx.fetch(MailFolder.fetchRequest())) ?? []
     }
 
     private static let siblingSortDescriptors = [
