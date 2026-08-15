@@ -116,6 +116,12 @@ final class MailListViewController: NSViewController {
         configureOutlineView()
         startObserving()
         reload()
+
+        // The first sweep happens here rather than at launch, and this view is
+        // only built when mail mode is first entered — so a session spent
+        // entirely in tasks mode never pays the ten seconds. Not user-initiated:
+        // arriving in mail mode must not raise a consent dialog.
+        if mail.state == .idle { mail.refresh() }
     }
 
     private func configureOutlineView() {

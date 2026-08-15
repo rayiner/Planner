@@ -16,6 +16,11 @@ nonisolated enum OutlookError: LocalizedError, Equatable, ExternallyResolvableEr
     /// Consent has never been asked. An automatic refresh must not prompt;
     /// the status affordance lets the user start that conversation themselves.
     case consentRequired
+    /// The parallel columns of a bulk mail read came back with different
+    /// lengths, so no row can be trusted to belong to the message it appears
+    /// beside. Rare enough to be a bug if it ever happens, and dangerous enough
+    /// to be worth failing loudly rather than showing shuffled mail.
+    case misalignedPayload
 
     /// Deep link for the error affordance in the toolbar (PR 15).
     static let automationSettingsURL = URL(
@@ -51,7 +56,9 @@ nonisolated enum OutlookError: LocalizedError, Equatable, ExternallyResolvableEr
         case let .appleEvent(code):
             return "Outlook returned an error (\(code))."
         case .consentRequired:
-            return "Planner needs permission to read Outlook events."
+            return "Planner needs permission to read Outlook."
+        case .misalignedPayload:
+            return "Outlook returned mail Planner couldn’t line up."
         }
     }
 
@@ -61,7 +68,7 @@ nonisolated enum OutlookError: LocalizedError, Equatable, ExternallyResolvableEr
             return "Open Outlook and refresh. Planner won’t launch it for you."
         case .permissionDenied:
             return "Allow it under System Settings → Privacy & Security → Automation, then refresh."
-        case .scriptingUnavailable, .appleEvent:
+        case .scriptingUnavailable, .appleEvent, .misalignedPayload:
             return "Try refreshing. If it keeps happening, restart Outlook."
         case .consentRequired:
             return "Click to allow access."
@@ -75,10 +82,33 @@ nonisolated enum OutlookError: LocalizedError, Equatable, ExternallyResolvableEr
     /// empty match. Call this after every Apple event.
     static func throwIfSendFailed(_ lastError: Error?) throws {
         guard let lastError else { return }
-        let code = (lastError as NSError).code
+        throw fromAppleEvent(code: (lastError as NSError).code)
+    }
+
+    /// `NSAppleScript` reports failures as a dictionary rather than an `Error`.
+    /// The code inside is an ordinary Apple event error, so the two mechanisms
+    /// converge on the same cases here.
+    static func fromAppleScript(_ error: NSDictionary) -> OutlookError {
+        let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+        return fromAppleEvent(code: code)
+    }
+
+    private static func fromAppleEvent(code: Int) -> OutlookError {
+        switch code {
         // Consent revoked mid-fetch is the same refusal the preflight maps.
-        if code == -1743 { throw permissionDenied }
-        throw appleEvent(code: code)
+        case -1743: return .permissionDenied
+        case -600, -609: return .notRunning
+        default: return .appleEvent(code: code)
+        }
+    }
+
+    /// Whether this failure means "that one message is gone" rather than "the
+    /// connection to Outlook is broken". A message can be filed, archived or
+    /// deleted upstream between a sweep and a body fetch, and the reader should
+    /// say so plainly instead of reporting an Apple event number.
+    var isMissingObject: Bool {
+        // -1728: can't get the object. -1719: invalid index.
+        self == .appleEvent(code: -1728) || self == .appleEvent(code: -1719)
     }
 
     /// Naming what *is* there turns a configuration error into a self-service

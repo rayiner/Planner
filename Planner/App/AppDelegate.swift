@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let events = EventCoordinator(source: OutlookEventSource())
         // Same reasoning for mail: no Outlook, or no consent, simply means an
         // empty Recent Mail rather than a failure to launch.
-        let mail = MailCoordinator(source: NullMailSource())
+        let mail = MailCoordinator(source: OutlookMailSource())
         self.persistence = persistence
         self.model = model
         self.selection = selection
