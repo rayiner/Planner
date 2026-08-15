@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class MainSplitViewControllerTests: PersistenceTestCase {
     func testNewProjectSelectsCreatedProjectAndBeginsEditingOnNextRunLoop() async {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         var began: UUID?
         outline.beginEditingTitleHandler = { began = $0.uuid }
@@ -27,7 +27,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testNewTaskOnProjectCreatesAndSelectsTask() async throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -51,7 +51,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testNewTaskOnTaskCreatesChildAndExpandsParent() async throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -76,7 +76,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testCreateSaveFailedDoesNotChangeSelection() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -111,7 +111,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testUndoOfDeleteIsSavedAndRestoresTheOutlineRow() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         let uuid = project.uuid
@@ -133,7 +133,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testDeleteSelectsPreviousSiblingThenParent() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         let first = try model.createTask(in: project)
@@ -152,7 +152,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testDeleteLastProjectClearsSelection() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -164,7 +164,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testDeleteCancelLeavesTreeUnchanged() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -176,7 +176,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testDeleteSaveFailedDoesNotChangeSelection() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -190,7 +190,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testDeletingLastSubtaskRemovesDisclosureTriangle() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -207,7 +207,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testValidateMenuAndToolbarItems() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
 
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
@@ -254,7 +254,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testTextInputFirstResponderDisablesMutatingCommands() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         let project = try model.createProject()
         let task = try model.createTask(in: project)
@@ -279,7 +279,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testRenameSelectedBeginsEditing() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -291,7 +291,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testCreateSaveFailedDoesNotBeginEditing() async throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -332,7 +332,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testRevealTodaySetsVisibleWeekToThisWeek() {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let past = Calendar.current.date(byAdding: .day, value: -70, to: Date())!
         selection.setVisibleWeekStart(past)
         XCTAssertNotEqual(selection.visibleWeekStart, Calendar.current.startOfWeek(for: Date()))
@@ -343,7 +343,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testPreviousAndNextWeekShiftVisibleWeekBySevenDays() {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let start = selection.visibleWeekStart
         let (split, _) = makeSplit(selection: selection)
         let calendar = Calendar.current
@@ -431,14 +431,14 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         let leadingSpace = try! XCTUnwrap(identifiers.firstIndex(of: .flexibleSpace))
         let addProject = try! XCTUnwrap(identifiers.firstIndex(of: .addProject))
-        let toggleSidebar = try! XCTUnwrap(identifiers.firstIndex(of: .toggleSidebar))
+        let sidebarMode = try! XCTUnwrap(identifiers.firstIndex(of: .sidebarMode))
         let paneSeparator = try! XCTUnwrap(identifiers.firstIndex(of: .paneSeparator))
 
         // flexible space, then the group, then the divider: that ordering is what
         // pushes the group up against the splitter instead of the window edge.
         XCTAssertLessThan(leadingSpace, addProject)
-        XCTAssertLessThan(addProject, toggleSidebar)
-        XCTAssertLessThan(toggleSidebar, paneSeparator)
+        XCTAssertLessThan(addProject, sidebarMode)
+        XCTAssertLessThan(sidebarMode, paneSeparator)
     }
 
     func testSplitPanesHaveMinimumThickness() {
@@ -478,7 +478,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     func testShowTaskInfoExpandsInspectorOnlyForATask() throws {
-        let selection = SelectionModel()
+        let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
         split.toggleInspector(nil)
         XCTAssertFalse(split.isInspectorVisible)
@@ -495,16 +495,19 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
     }
 
     private func makeSplit(
-        selection: SelectionModel = SelectionModel()
+        selection: SelectionModel? = nil
     ) -> (MainSplitViewController, OutlineViewController) {
+        let defaults = isolatedDefaults()
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
-            selection: selection,
-            events: EventCoordinator(source: NullEventSource())
+            selection: selection ?? SelectionModel(defaults: defaults),
+            events: EventCoordinator(source: NullEventSource()),
+            mail: MailCoordinator(source: NullMailSource(), defaults: defaults),
+            userDefaults: defaults
         )
         split.loadViewIfNeeded()
-        let outline = split.splitViewItems[0].viewController as! OutlineViewController
+        let outline = split.outlineViewController
         outline.loadViewIfNeeded()
         return (split, outline)
     }

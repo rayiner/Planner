@@ -2,6 +2,15 @@ import CoreData
 import XCTest
 @testable import Planner
 
+/// A throwaway defaults suite.
+///
+/// Mode, window length and divider positions all persist now, so a test that
+/// used `.standard` would leak into the next one — and into whatever the
+/// developer had the real app set to.
+func isolatedDefaults() -> UserDefaults {
+    UserDefaults(suiteName: "PlannerTests.\(UUID().uuidString)")!
+}
+
 @MainActor
 class PersistenceTestCase: XCTestCase {
     var persistence: PersistenceController!

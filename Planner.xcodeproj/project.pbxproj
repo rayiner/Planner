@@ -83,6 +83,12 @@
 		A400000000000000000000000A /* MailThreading.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000A /* MailThreading.swift */; };
 		A400000000000000000000000B /* MailThreadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000B /* MailThreadingTests.swift */; };
 		A400000000000000000000000C /* MailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000C /* MailStoreTests.swift */; };
+		A400000000000000000000000D /* MailboxListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000D /* MailboxListViewController.swift */; };
+		A400000000000000000000000E /* MailListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000E /* MailListViewController.swift */; };
+		A400000000000000000000000F /* MailReaderViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000F /* MailReaderViewController.swift */; };
+		A4000000000000000000000010 /* ModeContainerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000010 /* ModeContainerViewController.swift */; };
+		A4000000000000000000000011 /* MailLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000011 /* MailLabels.swift */; };
+		A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000012 /* ModeSwitchTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -176,6 +182,12 @@
 		A300000000000000000000000A /* MailThreading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreading.swift; sourceTree = "<group>"; };
 		A300000000000000000000000B /* MailThreadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreadingTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000000C /* MailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStoreTests.swift; sourceTree = "<group>"; };
+		A300000000000000000000000D /* MailboxListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxListViewController.swift; sourceTree = "<group>"; };
+		A300000000000000000000000E /* MailListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListViewController.swift; sourceTree = "<group>"; };
+		A300000000000000000000000F /* MailReaderViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailReaderViewController.swift; sourceTree = "<group>"; };
+		A3000000000000000000000010 /* ModeContainerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeContainerViewController.swift; sourceTree = "<group>"; };
+		A3000000000000000000000011 /* MailLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailLabels.swift; sourceTree = "<group>"; };
+		A3000000000000000000000012 /* ModeSwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeSwitchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -241,6 +253,7 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000012 /* ModeSwitchTests.swift */,
 				A300000000000000000000000C /* MailStoreTests.swift */,
 				A300000000000000000000000B /* MailThreadingTests.swift */,
 				A3000000000000000000000007 /* MailCoordinatorTests.swift */,
@@ -297,6 +310,7 @@
 		A20000000000000000000008 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000011 /* MailLabels.swift */,
 				A300000000000000000000000A /* MailThreading.swift */,
 				A3000000000000000000000C /* Logger+Planner.swift */,
 				A30000000000000000000014 /* Calendar+Month.swift */,
@@ -311,6 +325,10 @@
 		A20000000000000000000009 /* Controllers */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000010 /* ModeContainerViewController.swift */,
+				A300000000000000000000000F /* MailReaderViewController.swift */,
+				A300000000000000000000000E /* MailListViewController.swift */,
+				A300000000000000000000000D /* MailboxListViewController.swift */,
 				A30000000000000000000015 /* MainSplitViewController.swift */,
 				A30000000000000000000016 /* OutlineViewController.swift */,
 				A30000000000000000000017 /* CalendarViewController.swift */,
@@ -469,6 +487,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000011 /* MailLabels.swift in Sources */,
+				A4000000000000000000000010 /* ModeContainerViewController.swift in Sources */,
+				A400000000000000000000000F /* MailReaderViewController.swift in Sources */,
+				A400000000000000000000000E /* MailListViewController.swift in Sources */,
+				A400000000000000000000000D /* MailboxListViewController.swift in Sources */,
 				A400000000000000000000000A /* MailThreading.swift in Sources */,
 				A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */,
 				A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */,
@@ -520,6 +543,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */,
 				A400000000000000000000000C /* MailStoreTests.swift in Sources */,
 				A400000000000000000000000B /* MailThreadingTests.swift in Sources */,
 				A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */,

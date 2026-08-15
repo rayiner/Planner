@@ -1,7 +1,17 @@
 import Foundation
 
 enum SelectionField: String {
-    case node, day, visibleWeek
+    case node, day, visibleWeek, mode, mailbox, message
+}
+
+/// Which of the two three-pane layouts the window is showing.
+///
+/// A mode, not a window: the sidebar swaps its content the way Preview swaps
+/// Thumbnails for a Table of Contents, and the two trailing panes are replaced
+/// wholesale. Each mode keeps its own selection, so switching back lands
+/// exactly where it was left.
+enum PlannerMode: String {
+    case tasks, mail
 }
 
 /// What currently holds the selection. A task (or project) in the outline and a
@@ -10,6 +20,22 @@ enum SelectionField: String {
 enum PlannerSelection: Equatable {
     case node(UUID)
     case day(Date)
+}
+
+/// Which mailbox the mail sidebar has selected. `recent` is the transient
+/// window over Outlook; a folder is Planner's own saved mail.
+enum MailboxSelection: Equatable {
+    case recent
+    case folder(UUID)
+}
+
+/// Which message is open in the reader. The two cases are genuinely different
+/// things — an Outlook record id that is only valid this session, and a
+/// `SavedMessage` UUID that is Planner's own — and conflating them is how a
+/// reader ends up showing the wrong message after a save.
+enum MessageSelection: Equatable {
+    case recent(Int64)
+    case saved(UUID)
 }
 
 extension Notification.Name {
@@ -23,9 +49,14 @@ enum SelectionUserInfoKey {
 
 @MainActor
 final class SelectionModel {
+    static let modeDefaultsKey = "planner.mode"
+
     private(set) var selection: PlannerSelection?
     /// First visible Monday. The calendar pages a week at a time.
     private(set) var visibleWeekStart: Date
+    private(set) var mode: PlannerMode
+    private(set) var mailbox: MailboxSelection = .recent
+    private(set) var message: MessageSelection?
 
     var selectedNodeUUID: UUID? {
         if case let .node(uuid) = selection { return uuid }
@@ -37,11 +68,22 @@ final class SelectionModel {
         return nil
     }
 
-    private let calendar: Calendar
+    var selectedFolderUUID: UUID? {
+        if case let .folder(uuid) = mailbox { return uuid }
+        return nil
+    }
 
-    init(now: Date = Date(), calendar: Calendar = .current) {
+    var isRecentMailSelected: Bool { mailbox == .recent }
+
+    private let calendar: Calendar
+    private let defaults: UserDefaults
+
+    init(now: Date = Date(), calendar: Calendar = .current, defaults: UserDefaults = .standard) {
         self.calendar = calendar
+        self.defaults = defaults
         visibleWeekStart = calendar.startOfWeek(for: now)
+        mode = defaults.string(forKey: Self.modeDefaultsKey)
+            .flatMap(PlannerMode.init(rawValue:)) ?? .tasks
     }
 
     func selectNode(uuid: UUID?) {
@@ -77,6 +119,44 @@ final class SelectionModel {
         guard visibleWeekStart != normalized else { return }
         visibleWeekStart = normalized
         post(changed: [.visibleWeek])
+    }
+
+    // MARK: - Mode
+
+    /// Switching modes posts **only** `.mode`. Neither mode's selection is
+    /// touched on the way through, which is what makes switching back land
+    /// where it was left — and what keeps every existing observer, all of
+    /// which inspect `changedFields`, correctly doing nothing.
+    func setMode(_ new: PlannerMode) {
+        guard mode != new else { return }
+        mode = new
+        defaults.set(new.rawValue, forKey: Self.modeDefaultsKey)
+        post(changed: [.mode])
+    }
+
+    func toggleMode() {
+        setMode(mode == .tasks ? .mail : .tasks)
+    }
+
+    // MARK: - Mail
+
+    /// Selecting a different mailbox clears the open message: the reader would
+    /// otherwise keep showing something the list no longer contains.
+    func selectMailbox(_ new: MailboxSelection) {
+        guard mailbox != new else { return }
+        mailbox = new
+        var changed: Set<SelectionField> = [.mailbox]
+        if message != nil {
+            message = nil
+            changed.insert(.message)
+        }
+        post(changed: changed)
+    }
+
+    func selectMessage(_ new: MessageSelection?) {
+        guard message != new else { return }
+        message = new
+        post(changed: [.message])
     }
 
     private func post(changed: Set<SelectionField>) {

@@ -160,8 +160,10 @@ final class EventStatusTests: XCTestCase {
         let split = MainSplitViewController(
             persistence: persistence,
             model: ModelController(persistence: persistence),
-            selection: SelectionModel(),
-            events: coordinator
+            selection: SelectionModel(defaults: isolatedDefaults()),
+            events: coordinator,
+            mail: MailCoordinator(source: NullMailSource(), defaults: isolatedDefaults()),
+            userDefaults: isolatedDefaults()
         )
         XCTAssertFalse(split.test_isEventStatusVisible, "idle shows nothing")
 
@@ -212,8 +214,10 @@ final class EventStatusTests: XCTestCase {
         let split = MainSplitViewController(
             persistence: persistence,
             model: ModelController(persistence: persistence),
-            selection: SelectionModel(),
-            events: coordinator
+            selection: SelectionModel(defaults: isolatedDefaults()),
+            events: coordinator,
+            mail: MailCoordinator(source: NullMailSource(), defaults: isolatedDefaults()),
+            userDefaults: isolatedDefaults()
         )
         split.loadViewIfNeeded()
         await waitUntil("launch refresh") { self.source.pendingCount >= 1 }

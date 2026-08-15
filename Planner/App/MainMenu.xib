@@ -72,6 +72,12 @@
                                     <action selector="newTask:" target="-1" id="nTk-ac-tion"/>
                                 </connections>
                             </menuItem>
+                            <menuItem title="New Folder" keyEquivalent="n" id="nFl-dr-new">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="newMailFolder:" target="-1" id="nFl-ac-tion"/>
+                                </connections>
+                            </menuItem>
                             <menuItem title="Rename" id="Ren-se-lec">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
@@ -289,6 +295,19 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="View" id="HyV-fh-RgO">
                         <items>
+                            <menuItem title="Tasks" keyEquivalent="1" id="Mde-ts-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="showTasksMode:" target="-1" id="Mde-ts-act"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Mail" keyEquivalent="2" id="Mde-ml-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="showMailMode:" target="-1" id="Mde-ml-act"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Mde-sp-rtr"/>
                             <menuItem title="Today" keyEquivalent="T" id="Tdy-vw-mnu">
                                 <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
                                 <connections>
@@ -308,10 +327,10 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="Vw0-sp-rtr"/>
-                            <menuItem title="Refresh Calendar Events" keyEquivalent="r" id="Rfr-vw-mnu">
+                            <menuItem title="Refresh" keyEquivalent="r" id="Rfr-vw-mnu">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                                 <connections>
-                                    <action selector="refreshCalendarEvents:" target="-1" id="Rfr-ac-tio"/>
+                                    <action selector="refreshCurrentMode:" target="-1" id="Rfr-ac-tio"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="Vw1-sp-rtr"/>

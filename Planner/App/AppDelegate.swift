@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var model: ModelController?
     private var selection: SelectionModel?
     private var events: EventCoordinator?
+    private var mail: MailCoordinator?
 
     override init() {
         super.init()
@@ -33,16 +34,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Outlook is read over Apple events, so a Mac without it (or without
         // consent) simply shows no events rather than failing to launch.
         let events = EventCoordinator(source: OutlookEventSource())
+        // Same reasoning for mail: no Outlook, or no consent, simply means an
+        // empty Recent Mail rather than a failure to launch.
+        let mail = MailCoordinator(source: NullMailSource())
         self.persistence = persistence
         self.model = model
         self.selection = selection
         self.events = events
+        self.mail = mail
 
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
             selection: selection,
-            events: events
+            events: events,
+            mail: mail
         )
 
         let window = NSWindow(
