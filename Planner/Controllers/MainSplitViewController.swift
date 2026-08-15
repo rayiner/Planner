@@ -475,15 +475,18 @@ final class MainSplitViewController: NSSplitViewController {
         Task { [weak self] in await self?.save(envelope, into: folder) }
     }
 
-    private func save(_ envelope: MailMessage, into folder: MailFolder?) async {
+    /// Returns the saved message's UUID rather than the object: a managed
+    /// object is not `Sendable`, and this value is produced across a suspension.
+    @discardableResult
+    private func save(_ envelope: MailMessage, into folder: MailFolder?) async -> UUID? {
         var target = folder
         var created = false
         if target == nil {
-            guard let new = try? model.createMailFolder() else { return }
+            guard let new = try? model.createMailFolder() else { return nil }
             target = new
             created = true
         }
-        guard let target else { return }
+        guard let target else { return nil }
 
         do {
             let detail = try await mail.loadDetail(for: envelope.id)
@@ -495,19 +498,113 @@ final class MainSplitViewController: NSSplitViewController {
                 mailboxListViewController.beginEditingName(of: target)
             }
             PlannerLog.mail.info("Saved message \(saved.outlookID, privacy: .public)")
+            return saved.uuid
         } catch {
             // Nothing was written, including the folder if this call made one.
             if created { try? model.deleteMailFolder(target) }
             present(error)
+            return nil
         }
     }
 
     /// Brings the original up in Outlook. Always explicit: opening an unread
     /// message marks it read upstream, which is a write Planner will not make
     /// on the user's behalf.
-    /// Lands with the New Task PR; declared here so the reader's button and the
-    /// list's context menu can bind to it now.
-    @objc func newTaskFromMessage(_ sender: Any?) {}
+    // MARK: - Tasks from mail
+
+    /// Turns the open message into a task.
+    ///
+    /// A task links to a **saved** message, not to a passing one — a link into
+    /// Recent Mail would dangle in three days — so an unsaved message is saved
+    /// first, and that needs a folder. Rather than picking one, the command
+    /// asks: the first call pops the folder menu, and choosing from it calls
+    /// back with the folder attached.
+    @objc func newTaskFromMessage(_ sender: Any?) {
+        if let saved = selectedSavedMessage {
+            createTask(from: saved)
+            return
+        }
+        guard case let .recent(id)? = selection.message, let envelope = mail.message(id: id) else {
+            return
+        }
+        guard let item = sender as? NSMenuItem, item.tag == Self.folderMenuItemTag else {
+            presentFolderMenu(from: sender, action: #selector(newTaskFromMessage(_:)))
+            return
+        }
+        let folder = item.representedObject as? MailFolder
+        Task { [weak self] in
+            guard let self,
+                  let uuid = await save(envelope, into: folder),
+                  let saved = model.savedMessage(uuid: uuid)
+            else { return }
+            createTask(from: saved)
+        }
+    }
+
+    /// Where a new task lands: under whatever the outline has selected, else
+    /// the first project, else a project made for it — the same fallback chain
+    /// ⌘T follows, so a task from mail is not a different kind of task.
+    private func createTask(from message: SavedMessage) {
+        do {
+            let parent = try taskParent()
+            let task = try model.createTask(from: message, under: parent)
+            // Switching modes is the point: the task is the thing to look at
+            // now, and it lives in the other half of the app.
+            selection.setMode(.tasks)
+            selectAndBeginEditing(task)
+        } catch {
+            // saveFailed already presented.
+        }
+    }
+
+    private func taskParent() throws -> OutlineNode {
+        if let node = selectedOutlineNode { return node }
+        if let project = try model.allProjects().first { return project }
+        return try model.createProject()
+    }
+
+    /// The inspector's "From: <subject>" chip: back to the message the task
+    /// came from, in the mode that can show it.
+    @objc func revealSourceMessage(_ sender: Any?) {
+        guard let uuid = selection.selectedNodeUUID,
+              let task = try? model.task(uuid: uuid),
+              let message = model.sourceMessage(of: task),
+              let folder = message.folder
+        else { return }
+        selection.setMode(.mail)
+        selection.selectMailbox(.folder(folder.uuid))
+        selection.selectMessage(.saved(message.uuid))
+    }
+
+    /// Tagged so a callback can tell "the user picked a folder" from "the user
+    /// invoked the command", which arrive at the same selector.
+    private static let folderMenuItemTag = 8_201
+
+    private func presentFolderMenu(from sender: Any?, action: Selector) {
+        let menu = NSMenu()
+        for folder in model.mailFolders() {
+            let item = NSMenuItem(title: folder.name, action: action, keyEquivalent: "")
+            item.representedObject = folder
+            item.tag = Self.folderMenuItemTag
+            item.target = self
+            menu.addItem(item)
+        }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let newFolder = NSMenuItem(title: "New Folder…", action: action, keyEquivalent: "")
+        newFolder.tag = Self.folderMenuItemTag
+        newFolder.target = self
+        menu.addItem(newFolder)
+
+        if let view = sender as? NSView {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+        } else if let event = NSApp.currentEvent, let contentView = view.window?.contentView {
+            menu.popUp(
+                positioning: nil,
+                at: contentView.convert(event.locationInWindow, from: nil),
+                in: contentView
+            )
+        }
+    }
 
     @objc func openMessageInOutlook(_ sender: Any?) {
         guard let id = outlookIDOfSelectedMessage else { return }
@@ -742,6 +839,8 @@ final class MainSplitViewController: NSSplitViewController {
     /// on, which is the case in tests.
     var test_windowTitle: String { isMailMode ? mailWindowTitle : calendarWindowTitle }
     /// Pane widths in pane order, which `splitView.subviews` does not give.
+    static var test_folderMenuItemTag: Int { folderMenuItemTag }
+    var test_inspectorSourceChip: String? { inspectorViewController.test_sourceMessageChip }
     var test_paneWidths: [CGFloat] {
         (0..<splitViewItems.count).map { paneFrame(at: $0)?.width ?? 0 }
     }
@@ -1068,8 +1167,12 @@ final class MainSplitViewController: NSSplitViewController {
         case #selector(openMessageInOutlook(_:)):
             return isMailMode && outlookIDOfSelectedMessage != nil
         case #selector(newTaskFromMessage(_:)):
-            // Lands with the New Task PR.
-            return false
+            return isMailMode && selection.message != nil
+        case #selector(revealSourceMessage(_:)):
+            guard let uuid = selection.selectedNodeUUID,
+                  let task = try? model.task(uuid: uuid)
+            else { return false }
+            return model.sourceMessage(of: task)?.folder != nil
         case #selector(refreshCalendarEvents(_:)):
             // Refreshing while one is in flight would just cancel and restart
             // it, which looks like the command did nothing.

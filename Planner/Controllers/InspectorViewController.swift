@@ -16,6 +16,9 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private let dueCaptionLabel = NSTextField(labelWithString: "")
     private let titleRow = NSStackView()
     private let deadlineRow = NSStackView()
+    /// "From: <subject>" on a task made from a message. A button rather than a
+    /// label because it is also the way back to the message it came from.
+    private let sourceMessageButton = NSButton()
     private let formatBar = NSSegmentedControl()
     private let notesScrollView = NSScrollView()
     private let notesTextView = NoteTextView()
@@ -271,9 +274,20 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             notesPlaceholder.topAnchor.constraint(equalTo: notesScrollView.topAnchor, constant: 4),
         ])
 
+        sourceMessageButton.bezelStyle = .inline
+        sourceMessageButton.controlSize = .small
+        sourceMessageButton.font = .systemFont(ofSize: 11)
+        sourceMessageButton.lineBreakMode = .byTruncatingTail
+        sourceMessageButton.isHidden = true
+        // Routed through the responder chain: revealing a message is the split
+        // controller's job, since it owns both modes.
+        sourceMessageButton.target = nil
+        sourceMessageButton.action = #selector(MainSplitViewController.revealSourceMessage(_:))
+
         let stack = NSStackView(views: [
             titleRow,
             captionLabel,
+            sourceMessageButton,
             deadlineRow,
             formatBar,
             notesScrollView,
@@ -421,6 +435,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         titleLabel.isEnabled = false
         titleLabel.textColor = .secondaryLabelColor
         captionLabel.isHidden = true
+        sourceMessageButton.isHidden = true
         completedCheckbox.isHidden = true
         completedCheckbox.isEnabled = false
         completedCheckbox.state = .off
@@ -446,6 +461,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         let count = descendantTaskCount(of: project)
         captionLabel.stringValue = count == 1 ? "1 task" : "\(count) tasks"
         captionLabel.isHidden = false
+        sourceMessageButton.isHidden = true
         completedCheckbox.isHidden = true
         completedCheckbox.isEnabled = false
         completedCheckbox.state = .off
@@ -469,6 +485,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         titleLabel.isEnabled = true
         titleLabel.textColor = .labelColor
         captionLabel.isHidden = true
+        updateSourceMessageChip(for: task)
         completedCheckbox.isHidden = false
         completedCheckbox.isEnabled = true
         completedCheckbox.state = task.isCompleted ? .on : .off
@@ -505,6 +522,22 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         updateNotesPlaceholder()
     }
 
+    /// The chip on a task made from a message, and the way back to it.
+    ///
+    /// Hidden when the link dangles — the message has been removed from its
+    /// folder since. The link is a UUID rather than a relationship precisely so
+    /// that case is a missing chip rather than a deleted task.
+    private func updateSourceMessageChip(for task: TaskItem) {
+        guard let message = model.sourceMessage(of: task) else {
+            sourceMessageButton.isHidden = true
+            return
+        }
+        let subject = message.subject.isEmpty ? "(No subject)" : message.subject
+        sourceMessageButton.title = "From: \(subject)"
+        sourceMessageButton.toolTip = "Show this message in Mail"
+        sourceMessageButton.isHidden = false
+    }
+
     /// A day has a note and nothing else: no completion flag, no due date.
     private func pushDay(_ day: Date, replaceNotes: Bool) {
         isUpdatingUI = true
@@ -512,6 +545,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
         let formatter = DateFormatter()
         formatter.calendar = Calendar.current
+        sourceMessageButton.isHidden = true
         formatter.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
         titleLabel.stringValue = formatter.string(from: day)
         titleLabel.isEnabled = true
@@ -887,5 +921,11 @@ extension InspectorViewController {
     func test_saveNoteIfMatching(_ objectID: NSManagedObjectID) {
         guard boundTaskObjectID == objectID else { return }
         persistBoundNote()
+    }
+}
+
+extension InspectorViewController {
+    var test_sourceMessageChip: String? {
+        sourceMessageButton.isHidden ? nil : sourceMessageButton.title
     }
 }

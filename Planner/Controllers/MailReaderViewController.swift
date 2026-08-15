@@ -480,9 +480,7 @@ final class MailReaderViewController: NSViewController {
 
         rebuildSaveMenu()
         rebuildMoveMenu()
-        // New Task lands in the next PR; drawn now so the bar's proportions are
-        // settled, disabled so it cannot lie about what it does.
-        newTaskButton.isEnabled = false
+        newTaskButton.isEnabled = displayedMessageID != nil || displayedSavedUUID != nil
         openInOutlookButton.isEnabled = displayedMessageID != nil
     }
 
