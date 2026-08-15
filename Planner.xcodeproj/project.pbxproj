@@ -101,6 +101,7 @@
 		A400000000000000000000001C /* MailListOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001C /* MailListOutlineView.swift */; };
 		A400000000000000000000001D /* MailSavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001D /* MailSavingTests.swift */; };
 		A400000000000000000000001E /* MailTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001E /* MailTaskTests.swift */; };
+		A400000000000000000000001F /* MailStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001F /* MailStatusTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -212,6 +213,7 @@
 		A300000000000000000000001C /* MailListOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListOutlineView.swift; sourceTree = "<group>"; };
 		A300000000000000000000001D /* MailSavingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSavingTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001E /* MailTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailTaskTests.swift; sourceTree = "<group>"; };
+		A300000000000000000000001F /* MailStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStatusTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -277,6 +279,7 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				A300000000000000000000001F /* MailStatusTests.swift */,
 				A300000000000000000000001E /* MailTaskTests.swift */,
 				A300000000000000000000001D /* MailSavingTests.swift */,
 				A300000000000000000000001B /* OutlookMailSourceTests.swift */,
@@ -585,6 +588,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A400000000000000000000001F /* MailStatusTests.swift in Sources */,
 				A400000000000000000000001E /* MailTaskTests.swift in Sources */,
 				A400000000000000000000001D /* MailSavingTests.swift in Sources */,
 				A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */,

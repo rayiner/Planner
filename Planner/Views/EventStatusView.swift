@@ -1,6 +1,36 @@
 import AppKit
 
-/// The calendar feed's only visible chrome.
+/// What a feed's status view actually needs to know.
+///
+/// Both external feeds have the same four states and the same three things to
+/// say about them, so they reduce to this on the way into the view — which is
+/// what lets one control serve the calendar and the mailbox without either
+/// coordinator learning about the other.
+@MainActor
+enum FeedStatus: Equatable {
+    /// Idle or loaded: nothing to report, which is the common case.
+    case quiet
+    case loading
+    case failed(String)
+
+    init(_ state: EventCoordinator.State) {
+        switch state {
+        case .idle, .loaded: self = .quiet
+        case .loading: self = .loading
+        case let .failed(message): self = .failed(message)
+        }
+    }
+
+    init(_ state: MailCoordinator.State) {
+        switch state {
+        case .idle, .loaded: self = .quiet
+        case .loading: self = .loading
+        case let .failed(message): self = .failed(message)
+        }
+    }
+}
+
+/// An external feed's only visible chrome.
 ///
 /// Shows a spinner while a refresh is in flight and a warning button when one
 /// failed, and **nothing at all** the rest of the time. A planner has no use
@@ -64,8 +94,21 @@ final class EventStatusView: NSView {
     /// - Parameter detail: what the feed is and how far it reaches, so the
     ///   window bounds are discoverable from somewhere rather than nowhere.
     func apply(_ state: EventCoordinator.State, settingsURL: URL?, detail: String) {
-        switch state {
-        case .idle:
+        apply(FeedStatus(state), settingsURL: settingsURL, detail: detail, noun: "events")
+    }
+
+    func apply(_ state: MailCoordinator.State, settingsURL: URL?, detail: String) {
+        apply(FeedStatus(state), settingsURL: settingsURL, detail: detail, noun: "mail")
+    }
+
+    func apply(_ status: FeedStatus, settingsURL: URL?, detail: String, noun: String) {
+        errorButton.image = NSImage(
+            systemSymbolName: "exclamationmark.triangle",
+            accessibilityDescription: "\(noun.capitalized) unavailable"
+        )
+
+        switch status {
+        case .quiet:
             spinner.stopAnimation(nil)
             errorButton.isHidden = true
             toolTip = nil
@@ -74,14 +117,8 @@ final class EventStatusView: NSView {
         case .loading:
             errorButton.isHidden = true
             spinner.startAnimation(nil)
-            toolTip = "Loading events…\n\(detail)"
+            toolTip = "Loading \(noun)…\n\(detail)"
             isHidden = false
-
-        case .loaded:
-            spinner.stopAnimation(nil)
-            errorButton.isHidden = true
-            toolTip = nil
-            isHidden = true
 
         case let .failed(message):
             spinner.stopAnimation(nil)

@@ -95,6 +95,14 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         for continuation in pending { continuation.resume(returning: messages) }
     }
 
+    func finishAll(throwing error: Error) {
+        lock.lock()
+        let pending = pendingEnvelopes
+        pendingEnvelopes = []
+        lock.unlock()
+        for continuation in pending { continuation.resume(throwing: error) }
+    }
+
     /// Completes the most recent outstanding sweep, leaving older ones hanging
     /// — the shape of a slow first call overtaken by a fast second.
     func finishLatest(with messages: [MailMessage]) {

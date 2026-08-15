@@ -403,11 +403,11 @@ final class MailReaderViewController: NSViewController {
             expiryBanner.isHidden = true
             return
         }
-        expiryBanner.stringValue = MailLabels.expiryNotice(
-            expiry: expiry,
-            now: now(),
-            calendar: calendar
-        )
+        let notice = MailLabels.expiryNotice(expiry: expiry, now: now(), calendar: calendar)
+        expiryBanner.stringValue = notice
+        // The banner is styled as a quiet caption, which VoiceOver would
+        // otherwise read as just another line of the header.
+        expiryBanner.setAccessibilityLabel("Expiry. \(notice)")
         expiryBanner.isHidden = false
     }
 
@@ -518,15 +518,21 @@ final class MailReaderViewController: NSViewController {
         excluding: MailFolder? = nil
     ) {
         for folder in model.mailFolders() where folder.objectID != excluding?.objectID {
-            let item = NSMenuItem(title: folder.name, action: action, keyEquivalent: "")
-            item.representedObject = folder
-            menu.addItem(item)
+            menu.addItem(MainSplitViewController.folderMenuItem(
+                title: folder.name,
+                folder: folder,
+                action: action
+            ))
         }
         if menu.items.count > 1 { menu.addItem(.separator()) }
         // Filing into a folder that does not exist yet is the common case the
         // first few times, so it lives in the same menu rather than behind a
         // trip to the sidebar.
-        menu.addItem(withTitle: "New Folder…", action: action, keyEquivalent: "")
+        menu.addItem(MainSplitViewController.folderMenuItem(
+            title: "New Folder…",
+            folder: nil,
+            action: action
+        ))
     }
 
     // MARK: - Actions

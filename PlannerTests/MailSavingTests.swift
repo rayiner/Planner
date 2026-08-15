@@ -98,9 +98,7 @@ final class MailSavingTests: PersistenceTestCase {
         failing: Error? = nil
     ) async {
         selection.selectMessage(.recent(message.id))
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.representedObject = folder
-        split.saveMessageToFolder(item)
+        split.saveMessageToFolder(folderMenuItem(folder))
 
         await settle { self.source.pendingDetailCount > 0 }
         if let failing {
@@ -139,9 +137,7 @@ final class MailSavingTests: PersistenceTestCase {
         await load([envelope])
 
         selection.selectMessage(.recent(5))
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.representedObject = folder
-        split.saveMessageToFolder(item)
+        split.saveMessageToFolder(folderMenuItem(folder))
         await settle { self.source.pendingDetailCount > 0 }
         source.finishDetail(id: 5, throwing: MailSourceError.messageUnavailable)
         try? await Task.sleep(for: .milliseconds(80))
@@ -170,7 +166,7 @@ final class MailSavingTests: PersistenceTestCase {
         await load([envelope])
 
         selection.selectMessage(.recent(5))
-        split.saveMessageToFolder(NSMenuItem(title: "", action: nil, keyEquivalent: ""))
+        split.saveMessageToFolder(folderMenuItem(nil))
         await settle { self.source.pendingDetailCount > 0 }
         source.finishDetail(id: 5, throwing: MailSourceError.messageUnavailable)
         try? await Task.sleep(for: .milliseconds(80))
@@ -344,9 +340,7 @@ final class MailSavingTests: PersistenceTestCase {
         selection.selectMailbox(.folder(source.uuid))
         selection.selectMessage(.saved(saved.uuid))
 
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.representedObject = destination
-        split.moveMessageToFolder(item)
+        split.moveMessageToFolder(folderMenuItem(destination))
 
         XCTAssertEqual(saved.folder?.uuid, destination.uuid)
         XCTAssertEqual(selection.selectedFolderUUID, destination.uuid, "the sidebar did not follow")
@@ -478,5 +472,15 @@ final class MailSavingTests: PersistenceTestCase {
 
     private func item(_ action: Selector) -> NSMenuItem {
         NSMenuItem(title: "", action: action, keyEquivalent: "")
+    }
+
+    /// Shaped like the item the folder menu delivers: tagged, so the command
+    /// can tell a chosen folder from a fresh invocation that has to ask.
+    private func folderMenuItem(_ folder: MailFolder?) -> NSMenuItem {
+        MainSplitViewController.folderMenuItem(
+            title: folder?.name ?? "New Folder…",
+            folder: folder,
+            action: #selector(MainSplitViewController.saveMessageToFolder(_:))
+        )
     }
 }

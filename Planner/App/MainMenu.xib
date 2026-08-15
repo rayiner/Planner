@@ -90,6 +90,36 @@
                                     <action selector="showTaskInfo:" target="-1" id="Inf-ac-tion"/>
                                 </connections>
                             </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Mai-se-p001"/>
+                            <menuItem title="Save to Folder…" keyEquivalent="s" id="Sav-ms-gmnu">
+                                <connections>
+                                    <action selector="saveMessageToFolder:" target="-1" id="Sav-ms-gact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Move to Folder…" id="Mov-ms-gmnu">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="moveMessageToFolder:" target="-1" id="Mov-ms-gact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="New Task from Message" id="NTk-ms-gmnu">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="newTaskFromMessage:" target="-1" id="NTk-ms-gact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Open in Outlook" keyEquivalent="o" id="Opn-ms-gmnu">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="openMessageInOutlook:" target="-1" id="Opn-ms-gact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Remove Message…" id="Rem-ms-gmnu">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="removeSavedMessage:" target="-1" id="Rem-ms-gact"/>
+                                </connections>
+                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="m54-Is-iLE"/>
                             <menuItem title="Close" keyEquivalent="w" id="DVo-aG-piG">
                                 <connections>

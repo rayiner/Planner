@@ -32,9 +32,11 @@ final class MainSplitViewController: NSSplitViewController {
     private let weekNavigationControl = NSSegmentedControl()
     private let sidebarModeControl = NSSegmentedControl()
     private let eventStatusView = EventStatusView()
-    /// Held so the item itself can be hidden. Hiding only the inner view still
-    /// leaves the toolbar drawing an empty pill where the slot is.
+    private let mailStatusView = EventStatusView()
+    /// Held so the items themselves can be hidden. Hiding only the inner view
+    /// still leaves the toolbar drawing an empty pill where the slot is.
     private var eventStatusToolbarItem: NSToolbarItem?
+    private var mailStatusToolbarItem: NSToolbarItem?
     /// Items that act on the sidebar's content, hidden while it is collapsed.
     private var sidebarToolbarItems: [NSToolbarItem] = []
     private var sidebarCollapseObservation: NSKeyValueObservation?
@@ -203,6 +205,12 @@ final class MainSplitViewController: NSSplitViewController {
             selector: #selector(eventsDidChange(_:)),
             name: .plannerEventsDidChange,
             object: events
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(mailDidChange(_:)),
+            name: .plannerMailDidChange,
+            object: mail
         )
         // Undo and redo mutate the context in memory only; nothing saves on
         // their behalf, and the outline reacts to did-save. Saving here is what
@@ -471,8 +479,31 @@ final class MainSplitViewController: NSSplitViewController {
         guard case let .recent(id)? = selection.message, let envelope = mail.message(id: id) else {
             return
         }
-        let folder = (sender as? NSMenuItem)?.representedObject as? MailFolder
+        // Invoked from the menu bar rather than from a folder menu: ask which
+        // folder rather than picking one. Plan Q1 — always show the menu.
+        guard let item = chosenFolderItem(sender) else {
+            presentFolderMenu(from: sender, action: #selector(saveMessageToFolder(_:)))
+            return
+        }
+        let folder = item.representedObject as? MailFolder
         Task { [weak self] in await self?.save(envelope, into: folder) }
+    }
+
+    /// A menu item that carries a folder choice, as opposed to the command
+    /// being invoked afresh. The two arrive at the same selector, so the tag is
+    /// what tells them apart.
+    private func chosenFolderItem(_ sender: Any?) -> NSMenuItem? {
+        guard let item = sender as? NSMenuItem, item.tag == Self.folderMenuItemTag else {
+            return nil
+        }
+        return item
+    }
+
+    static func folderMenuItem(title: String, folder: MailFolder?, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.representedObject = folder
+        item.tag = folderMenuItemTag
+        return item
     }
 
     /// Returns the saved message's UUID rather than the object: a managed
@@ -527,7 +558,7 @@ final class MainSplitViewController: NSSplitViewController {
         guard case let .recent(id)? = selection.message, let envelope = mail.message(id: id) else {
             return
         }
-        guard let item = sender as? NSMenuItem, item.tag == Self.folderMenuItemTag else {
+        guard let item = chosenFolderItem(sender) else {
             presentFolderMenu(from: sender, action: #selector(newTaskFromMessage(_:)))
             return
         }
@@ -583,15 +614,12 @@ final class MainSplitViewController: NSSplitViewController {
     private func presentFolderMenu(from sender: Any?, action: Selector) {
         let menu = NSMenu()
         for folder in model.mailFolders() {
-            let item = NSMenuItem(title: folder.name, action: action, keyEquivalent: "")
-            item.representedObject = folder
-            item.tag = Self.folderMenuItemTag
+            let item = Self.folderMenuItem(title: folder.name, folder: folder, action: action)
             item.target = self
             menu.addItem(item)
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let newFolder = NSMenuItem(title: "New Folder…", action: action, keyEquivalent: "")
-        newFolder.tag = Self.folderMenuItemTag
+        let newFolder = Self.folderMenuItem(title: "New Folder…", folder: nil, action: action)
         newFolder.target = self
         menu.addItem(newFolder)
 
@@ -630,7 +658,11 @@ final class MainSplitViewController: NSSplitViewController {
 
     @objc func moveMessageToFolder(_ sender: Any?) {
         guard let message = selectedSavedMessage else { return }
-        var target = (sender as? NSMenuItem)?.representedObject as? MailFolder
+        guard let item = chosenFolderItem(sender) else {
+            presentFolderMenu(from: sender, action: #selector(moveMessageToFolder(_:)))
+            return
+        }
+        var target = item.representedObject as? MailFolder
         if target == nil { target = try? model.createMailFolder() }
         guard let target else { return }
         do {
@@ -796,6 +828,14 @@ final class MainSplitViewController: NSSplitViewController {
         updateEventStatus()
     }
 
+    @objc private func mailDidChange(_ notification: Notification) {
+        updateMailStatus()
+        updateChrome()
+        // Refresh is disabled while a sweep is in flight, so its enablement
+        // changes with the feed rather than with anything the user did.
+        view.window?.toolbar?.validateVisibleItems()
+    }
+
     @objc private func undoManagerDidUndoOrRedo(_ notification: Notification) {
         // No-op when the context is clean (e.g. undoing rename keystrokes in
         // the title field editor, which shares this manager).
@@ -830,6 +870,8 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     var test_eventStatusView: EventStatusView { eventStatusView }
+    var test_mailStatusView: EventStatusView { mailStatusView }
+    func test_updateMailStatus() { updateMailStatus() }
     var test_isEventStatusVisible: Bool { isEventStatusVisible }
     func test_updateEventStatus() { updateEventStatus() }
     /// The split item holds a container, so the sidebar's actual content is a
@@ -1229,6 +1271,7 @@ extension NSToolbarItem.Identifier {
     static let windowRange = NSToolbarItem.Identifier("WindowRange")
     static let today = NSToolbarItem.Identifier("Today")
     static let eventStatus = NSToolbarItem.Identifier("EventStatus")
+    static let mailStatus = NSToolbarItem.Identifier("MailStatus")
     static let refreshMail = NSToolbarItem.Identifier("RefreshMail")
     static let getInfo = NSToolbarItem.Identifier("GetInfo")
 }
@@ -1265,7 +1308,7 @@ extension MainSplitViewController: NSToolbarDelegate {
             return [
                 .flexibleSpace, .newMailFolder, .sidebarMode,
                 .paneSeparator,
-                .mailTitle, .flexibleSpace, .windowRange, .refreshMail,
+                .mailTitle, .mailStatus, .flexibleSpace, .windowRange, .refreshMail,
                 .inspectorSeparator,
             ]
         }
@@ -1349,6 +1392,8 @@ extension MainSplitViewController: NSToolbarDelegate {
             return makeWindowRangeItem()
         case .eventStatus:
             return makeEventStatusItem()
+        case .mailStatus:
+            return makeMailStatusItem()
         case .sidebarMode:
             return makeSidebarModeItem()
         case .getInfo:
@@ -1515,6 +1560,50 @@ extension MainSplitViewController: NSToolbarDelegate {
         guard let days else { return }
         mail.setWindowDays(days)
         updateChrome()
+    }
+
+    /// The mailbox's counterpart to the calendar's status light, in the same
+    /// place relative to its own title. One control class serves both, because
+    /// a slow foreign feed has the same three things to say either way.
+    private func makeMailStatusItem() -> NSToolbarItem {
+        mailStatusView.onRetry = { [weak self] in self?.mail.refresh(userInitiated: true) }
+        mailStatusView.onOpenAutomationSettings = { [weak self] in
+            guard let url = self?.mail.failureSettingsURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        mailStatusView.translatesAutoresizingMaskIntoConstraints = false
+        mailStatusView.setContentHuggingPriority(.required, for: .horizontal)
+        mailStatusView.removeFromSuperview()
+
+        let item = NSToolbarItem(itemIdentifier: .mailStatus)
+        item.label = "Mail"
+        item.paletteLabel = "Mail"
+        item.view = mailStatusView
+        // Not a command: a status light that occasionally becomes a button must
+        // never be dimmed by toolbar validation.
+        item.autovalidates = false
+        mailStatusToolbarItem = item
+        updateMailStatus()
+        return item
+    }
+
+    /// Only loading and failure have anything to say; the rest of the time the
+    /// slot goes away entirely rather than sitting there empty.
+    private var isMailStatusVisible: Bool {
+        FeedStatus(mail.state) != .quiet
+    }
+
+    private func updateMailStatus() {
+        mailStatusToolbarItem?.isHidden = !isMailStatusVisible
+        mailStatusView.apply(
+            mail.state,
+            settingsURL: mail.failureSettingsURL,
+            detail: """
+            \(mail.sourceDisplayName)
+            \(MailLabels.windowRangeName(days: mail.windowDays)) · \
+            \(MailLabels.messageCount(mail.messages.count))
+            """
+        )
     }
 
     private func makeWeekNavigationItem() -> NSToolbarItem {
