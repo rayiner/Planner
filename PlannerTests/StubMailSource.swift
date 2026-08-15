@@ -82,6 +82,19 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         take()?.resume(throwing: error)
     }
 
+    /// Completes **every** outstanding sweep with the same result.
+    ///
+    /// The list view starts its own sweep when it loads, so a test that then
+    /// refreshes has two in flight. The coordinator's generation gate drops the
+    /// superseded one, so answering both is the way to settle on the newest.
+    func finishAll(with messages: [MailMessage]) {
+        lock.lock()
+        let pending = pendingEnvelopes
+        pendingEnvelopes = []
+        lock.unlock()
+        for continuation in pending { continuation.resume(returning: messages) }
+    }
+
     /// Completes the most recent outstanding sweep, leaving older ones hanging
     /// — the shape of a slow first call overtaken by a fast second.
     func finishLatest(with messages: [MailMessage]) {

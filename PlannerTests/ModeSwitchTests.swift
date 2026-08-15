@@ -382,7 +382,7 @@ final class ModeSwitchTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(newFolder))
     }
 
-    func testRefreshRoutesToWhicheverFeedTheModeShows() {
+    func testRefreshRoutesToWhicheverFeedTheModeShows() async {
         let (split, selection) = makeSplit()
         let refresh = NSMenuItem(
             title: "",
@@ -390,12 +390,19 @@ final class ModeSwitchTests: PersistenceTestCase {
             keyEquivalent: ""
         )
 
-        // In tasks mode ⌘R must not touch the mailbox at all.
+        // In tasks mode ⌘R must not touch the mailbox at all — and nothing
+        // else has, because the mail panes are not built yet.
         split.refreshCurrentMode(nil)
-        XCTAssertFalse(split.mail.isLoading, "⌘R in tasks mode swept the mailbox")
+        XCTAssertEqual(split.mail.state, .idle, "⌘R in tasks mode swept the mailbox")
 
+        // Entering mail mode builds the list, which starts the launch sweep.
         selection.setMode(.mail)
+        for _ in 0..<400 {
+            guard split.mail.isLoading else { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
         XCTAssertTrue(split.validateMenuItem(refresh))
+
         split.refreshCurrentMode(nil)
         XCTAssertTrue(split.mail.isLoading, "⌘R in mail mode did not sweep the mailbox")
         XCTAssertFalse(split.validateMenuItem(refresh), "refresh stayed enabled mid-flight")

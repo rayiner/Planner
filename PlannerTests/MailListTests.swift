@@ -87,17 +87,36 @@ final class MailListTests: PersistenceTestCase {
         )
     }
 
+    /// Waits for *this* sweep to reach the source before answering.
+    ///
+    /// Loading the list view starts a sweep of its own, so a request is
+    /// already outstanding when a test begins; waiting on a non-empty queue
+    /// would answer that one and leave this one hanging forever. Every pending
+    /// sweep is then answered together — the coordinator's generation gate
+    /// drops the superseded one, and the runtime traps on a continuation that
+    /// is never resumed.
     private func load(_ messages: [MailMessage]) async {
-        coordinator.refresh()
-        for _ in 0..<200 where source.pendingCount == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        source.finish(with: messages)
-        for _ in 0..<200 where coordinator.messages.count != messages.count {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await sweep { self.coordinator.refresh() } answering: { messages }
         list.reload()
         reader.rebind()
+    }
+
+    private func sweep(
+        _ trigger: @MainActor () -> Void,
+        answering messages: @MainActor () -> [MailMessage]
+    ) async {
+        let before = source.requestedRanges.count
+        trigger()
+        await settle { self.source.requestedRanges.count > before }
+        source.finishAll(with: messages())
+        await settle { !self.coordinator.isLoading }
+    }
+
+    private func settle(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<400 {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     // MARK: - Grouping
@@ -180,14 +199,7 @@ final class MailListTests: PersistenceTestCase {
     }
 
     func testASingleDayWindowSaysToday() async {
-        coordinator.setWindowDays(1)
-        for _ in 0..<200 where source.pendingCount == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        source.finish(with: [])
-        for _ in 0..<200 where coordinator.isLoading {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await sweep { self.coordinator.setWindowDays(1) } answering: { [] }
         list.reload()
         XCTAssertEqual(list.test_emptyStateText, "No mail today.")
     }
@@ -231,13 +243,9 @@ final class MailListTests: PersistenceTestCase {
     func testTheBodyArrivesLater() async {
         await load([message(id: 3, dayOffset: 0)])
         selection.selectMessage(.recent(3))
-        for _ in 0..<200 where source.pendingDetailCount == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await settle { self.source.pendingDetailCount > 0 }
         source.finishDetail(.fixture(id: 3, body: "The body", recipients: "you@example.com"))
-        for _ in 0..<200 where reader.test_body.isEmpty {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await settle { !self.reader.test_body.isEmpty }
 
         XCTAssertEqual(reader.test_body, "The body")
         XCTAssertFalse(reader.test_isBodyLoading)
@@ -249,9 +257,7 @@ final class MailListTests: PersistenceTestCase {
     func testABodyForAnotherMessageIsIgnored() async {
         await load([message(id: 1, dayOffset: 0), message(id: 2, dayOffset: 0, hour: 8)])
         selection.selectMessage(.recent(1))
-        for _ in 0..<200 where source.pendingDetailCount == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await settle { self.source.pendingDetailCount > 0 }
         selection.selectMessage(.recent(2))
 
         source.finishDetail(.fixture(id: 1, body: "First body"))
@@ -263,13 +269,9 @@ final class MailListTests: PersistenceTestCase {
     func testAFailedBodyIsReportedInThePaneRatherThanAsAnAlert() async {
         await load([message(id: 3, dayOffset: 0)])
         selection.selectMessage(.recent(3))
-        for _ in 0..<200 where source.pendingDetailCount == 0 {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await settle { self.source.pendingDetailCount > 0 }
         source.finishDetail(id: 3, throwing: MailSourceError.messageUnavailable)
-        for _ in 0..<200 where reader.test_bodyStatus == nil {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await settle { self.reader.test_bodyStatus != nil }
         XCTAssertEqual(reader.test_bodyStatus, "That message is no longer in Outlook.")
         XCTAssertFalse(reader.test_isBodyLoading)
     }
