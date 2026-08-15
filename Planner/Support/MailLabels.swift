@@ -40,7 +40,9 @@ enum MailLabels {
         count == 1 ? "1 message" : "\(count) messages"
     }
 
-    static func folderCount(_ count: Int) -> String {
-        count == 1 ? "1 message" : "\(count) messages"
+    /// A sidebar row reads as "Celerity, 4 messages" rather than as a name and
+    /// a bare number, which VoiceOver would otherwise announce as two things.
+    static func mailboxAccessibilityLabel(name: String, count: Int) -> String {
+        count == 0 ? name : "\(name), \(messageCount(count))"
     }
 }

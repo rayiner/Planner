@@ -78,7 +78,8 @@ final class MainSplitViewController: NSSplitViewController {
         mailboxListViewController = MailboxListViewController(
             persistence: persistence,
             model: model,
-            selection: selection
+            selection: selection,
+            mail: mail
         )
         mailListViewController = MailListViewController(
             persistence: persistence,
@@ -437,11 +438,17 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
+    /// A new folder arrives named and selected but not yet titled, so it goes
+    /// straight into rename — the same bargain New Project makes.
     @objc func newMailFolder(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
         do {
             let folder = try model.createMailFolder()
+            selection.setMode(.mail)
             selection.selectMailbox(.folder(folder.uuid))
+            DispatchQueue.main.async { [weak self] in
+                self?.mailboxListViewController.beginEditingName(of: folder)
+            }
         } catch {
             // saveFailed already presented; leave the selection alone.
         }
@@ -449,6 +456,11 @@ final class MainSplitViewController: NSSplitViewController {
 
     @objc func renameSelected(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
+        if isMailMode {
+            guard let folder = selectedMailFolder else { return }
+            mailboxListViewController.beginEditingName(of: folder)
+            return
+        }
         guard let node = selectedOutlineNode else { return }
         outlineViewController.beginEditingTitle(of: node)
     }
@@ -472,8 +484,16 @@ final class MainSplitViewController: NSSplitViewController {
 
     @objc func deleteSelected(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
+        if isMailMode {
+            guard let folder = selectedMailFolder else { return }
+            confirm(message: Self.deleteConfirmationMessage(for: folder)) { [weak self] confirmed in
+                guard confirmed else { return }
+                self?.performConfirmedDelete(folder)
+            }
+            return
+        }
         guard let node = selectedOutlineNode else { return }
-        confirmDelete(node) { [weak self] confirmed in
+        confirm(message: Self.deleteConfirmationMessage(for: node)) { [weak self] confirmed in
             guard confirmed else { return }
             self?.performConfirmedDelete(node)
         }
@@ -580,8 +600,13 @@ final class MainSplitViewController: NSSplitViewController {
 
     /// Tests pass a result to skip the confirmation sheet.
     func deleteSelected(confirmed: Bool) {
-        guard let node = selectedOutlineNode else { return }
         guard confirmed else { return }
+        if isMailMode {
+            guard let folder = selectedMailFolder else { return }
+            performConfirmedDelete(folder)
+            return
+        }
+        guard let node = selectedOutlineNode else { return }
         performConfirmedDelete(node)
     }
 
@@ -593,6 +618,17 @@ final class MainSplitViewController: NSSplitViewController {
             return "Delete “\(node.title)” and all of its tasks?"
         }
         return "Delete “\(node.title)”?"
+    }
+
+    /// Names the cascade, because it is the surprising part: the messages in a
+    /// folder are Planner's only copies, and deleting the folder discards them.
+    /// The Outlook originals are untouched either way, which the wording says
+    /// so the user is not left guessing.
+    static func deleteConfirmationMessage(for folder: MailFolder) -> String {
+        let count = folder.messages.count
+        guard count > 0 else { return "Delete “\(folder.name)”?" }
+        return "Delete “\(folder.name)” and the \(MailLabels.messageCount(count)) saved in it?"
+            + " The originals in Outlook aren’t affected."
     }
 
     static func isTextInputResponder(_ responder: NSResponder?) -> Bool {
@@ -617,6 +653,13 @@ final class MainSplitViewController: NSSplitViewController {
         return try? model.node(uuid: uuid)
     }
 
+    /// Nil when Recent Mail is selected: it is a view over Outlook, not a
+    /// folder, so nothing that acts on a folder applies to it.
+    private var selectedMailFolder: MailFolder? {
+        guard let uuid = selection.selectedFolderUUID else { return nil }
+        return model.mailFolders().first { $0.uuid == uuid }
+    }
+
     /// Tasks and days both own a note; projects do not.
     private var hasNoteEditableSelection: Bool {
         selection.selectedDay != nil || selectedOutlineNode is TaskItem
@@ -633,9 +676,9 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    private func confirmDelete(_ node: OutlineNode, completion: @escaping (Bool) -> Void) {
+    private func confirm(message: String, completion: @escaping (Bool) -> Void) {
         let alert = NSAlert()
-        alert.messageText = Self.deleteConfirmationMessage(for: node)
+        alert.messageText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Delete")
@@ -657,6 +700,20 @@ final class MainSplitViewController: NSSplitViewController {
             selection.selectNode(uuid: nextUUID)
         } catch {
             // saveFailed already presented; selection and tree stay put.
+        }
+    }
+
+    /// Falls back to Recent Mail, which is always there — unlike a project,
+    /// there is no "no mailbox" state to land in.
+    private func performConfirmedDelete(_ folder: MailFolder) {
+        let siblings = model.mailFolders()
+        let index = siblings.firstIndex { $0.uuid == folder.uuid }
+        let next = index.flatMap { $0 > 0 ? siblings[$0 - 1] : nil }
+        do {
+            try model.deleteMailFolder(folder)
+            selection.selectMailbox(next.map { .folder($0.uuid) } ?? .recent)
+        } catch {
+            // saveFailed already presented; selection and sidebar stay put.
         }
     }
 
@@ -858,7 +915,9 @@ final class MainSplitViewController: NSSplitViewController {
             return !isMailMode && !isFirstResponderTextInput
                 && (selectedOutlineNode is Project || selectedOutlineNode is TaskItem)
         case #selector(renameSelected(_:)), #selector(deleteSelected(_:)):
-            return !isMailMode && !isFirstResponderTextInput && selectedOutlineNode != nil
+            guard !isFirstResponderTextInput else { return false }
+            // Recent Mail is not a folder: it cannot be renamed or deleted.
+            return isMailMode ? selectedMailFolder != nil : selectedOutlineNode != nil
         case #selector(showTaskInfo(_:)):
             return !isMailMode && !isFirstResponderTextInput && hasNoteEditableSelection
         default:
