@@ -71,6 +71,13 @@
 		A4000000000000000000003E /* EventStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000042 /* EventStatusView.swift */; };
 		A4000000000000000000001A /* WeekCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001E /* WeekCalendarView.swift */; };
 		A4000000000000000000001B /* WeekCalendarViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001F /* WeekCalendarViewTests.swift */; };
+		A4000000000000000000000001 /* MailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000001 /* MailMessage.swift */; };
+		A4000000000000000000000002 /* MailWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000002 /* MailWindow.swift */; };
+		A4000000000000000000000003 /* MailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000003 /* MailSource.swift */; };
+		A4000000000000000000000004 /* MailCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000004 /* MailCoordinator.swift */; };
+		A4000000000000000000000005 /* StubMailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000005 /* StubMailSource.swift */; };
+		A4000000000000000000000006 /* MailWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000006 /* MailWindowTests.swift */; };
+		A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000007 /* MailCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -151,6 +158,13 @@
 		A30000000000000000000042 /* EventStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStatusView.swift; sourceTree = "<group>"; };
 		A3000000000000000000001E /* WeekCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekCalendarView.swift; sourceTree = "<group>"; };
 		A3000000000000000000001F /* WeekCalendarViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekCalendarViewTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000000001 /* MailMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailMessage.swift; sourceTree = "<group>"; };
+		A3000000000000000000000002 /* MailWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWindow.swift; sourceTree = "<group>"; };
+		A3000000000000000000000003 /* MailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000000004 /* MailCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailCoordinator.swift; sourceTree = "<group>"; };
+		A3000000000000000000000005 /* StubMailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubMailSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000000006 /* MailWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWindowTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000000007 /* MailCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailCoordinatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -216,6 +230,9 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000007 /* MailCoordinatorTests.swift */,
+				A3000000000000000000000006 /* MailWindowTests.swift */,
+				A3000000000000000000000005 /* StubMailSource.swift */,
 				A30000000000000000000006 /* PlannerTests.swift */,
 				A30000000000000000000011 /* PersistenceTestCase.swift */,
 				A30000000000000000000012 /* ModelConstraintTests.swift */,
@@ -248,6 +265,7 @@
 		A20000000000000000000007 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				A2000000000000000000000001 /* Mail */,
 				A3000000000000000000000E /* Planner.xcdatamodeld */,
 				A30000000000000000000008 /* PersistenceController.swift */,
 				A3000000000000000000000B /* OutlineNode.swift */,
@@ -322,6 +340,17 @@
 				A30000000000000000000042 /* EventStatusView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		A2000000000000000000000001 /* Mail */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000000004 /* MailCoordinator.swift */,
+				A3000000000000000000000003 /* MailSource.swift */,
+				A3000000000000000000000002 /* MailWindow.swift */,
+				A3000000000000000000000001 /* MailMessage.swift */,
+			);
+			path = Mail;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -424,6 +453,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000004 /* MailCoordinator.swift in Sources */,
+				A4000000000000000000000003 /* MailSource.swift in Sources */,
+				A4000000000000000000000002 /* MailWindow.swift in Sources */,
+				A4000000000000000000000001 /* MailMessage.swift in Sources */,
 				A40000000000000000000001 /* AppDelegate.swift in Sources */,
 				A4000000000000000000001C /* main.swift in Sources */,
 				A40000000000000000000005 /* PersistenceController.swift in Sources */,
@@ -468,6 +501,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */,
+				A4000000000000000000000006 /* MailWindowTests.swift in Sources */,
+				A4000000000000000000000005 /* StubMailSource.swift in Sources */,
 				A40000000000000000000004 /* PlannerTests.swift in Sources */,
 				A4000000000000000000000D /* PersistenceTestCase.swift in Sources */,
 				A4000000000000000000000E /* ModelConstraintTests.swift in Sources */,

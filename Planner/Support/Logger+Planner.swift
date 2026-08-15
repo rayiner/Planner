@@ -11,4 +11,7 @@ nonisolated enum PlannerLog {
     /// subjects, locations, or organizers: that is someone else's calendar
     /// content, under the same rule as note bodies.
     static let events = Logger(subsystem: "com.rihscb.Planner", category: "events")
+    /// External mail feed. Same rule, harder: log counts, timings, ids and
+    /// failures — never subjects, senders, recipients, or bodies.
+    static let mail = Logger(subsystem: "com.rihscb.Planner", category: "mail")
 }
