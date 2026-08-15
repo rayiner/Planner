@@ -248,7 +248,7 @@ final class ModelConstraintTests: PersistenceTestCase {
         XCTAssertEqual(undo?.undoActionName, "New Task")
 
         let subtask = try model.createSubtask(under: task)
-        XCTAssertEqual(undo?.undoActionName, "New Subtask")
+        XCTAssertEqual(undo?.undoActionName, "New Task")
 
         _ = try model.createSibling(of: task)
         XCTAssertEqual(undo?.undoActionName, "New Task")
@@ -278,11 +278,14 @@ final class ModelConstraintTests: PersistenceTestCase {
 
 @MainActor
 final class SelectionModelTests: XCTestCase {
-    func testVisibleMonthIsStartOfMonth() {
+    func testVisibleWeekStartIsTheMondayOfTheCurrentWeek() {
         let calendar = Self.utcCalendar
+        // 2026-08-13 is a Thursday; its week starts Monday the 10th.
         let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 18))!
         let selection = SelectionModel(now: now, calendar: calendar)
-        XCTAssertEqual(selection.visibleMonth, calendar.startOfMonth(for: now))
+        XCTAssertEqual(selection.visibleWeekStart, calendar.startOfWeek(for: now))
+        XCTAssertEqual(calendar.component(.day, from: selection.visibleWeekStart), 10)
+        XCTAssertEqual(calendar.component(.weekday, from: selection.visibleWeekStart), 2)
         XCTAssertNil(selection.selectedNodeUUID)
         XCTAssertNil(selection.selectedDay)
     }
@@ -299,6 +302,43 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertNil(selection.selectedNodeUUID)
     }
 
+    func testTaskAndDaySelectionAreMutuallyExclusive() {
+        let calendar = Self.utcCalendar
+        let selection = SelectionModel(now: Date(), calendar: calendar)
+        let uuid = UUID()
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 14, hour: 9))!
+
+        let toDay = observe(selection) {
+            selection.selectNode(uuid: uuid)
+            selection.selectDay(day)
+        }
+        XCTAssertNil(selection.selectedNodeUUID, "the day displaced the node")
+        XCTAssertEqual(selection.selectedDay, calendar.startOfDay(for: day))
+        // Moving between the two posts both fields, so observers of either react.
+        XCTAssertEqual(toDay, [["node"], ["node", "day"]])
+
+        let toNode = observe(selection) {
+            selection.selectNode(uuid: uuid)
+        }
+        XCTAssertEqual(selection.selectedNodeUUID, uuid)
+        XCTAssertNil(selection.selectedDay, "the node displaced the day")
+        XCTAssertEqual(toNode, [["node", "day"]])
+    }
+
+    func testClearSelectionEmptiesWhicheverSideHeldIt() {
+        let calendar = Self.utcCalendar
+        let selection = SelectionModel(now: Date(), calendar: calendar)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 14))!
+
+        selection.selectDay(day)
+        let fields = observe(selection) {
+            selection.clearSelection()
+            selection.clearSelection()
+        }
+        XCTAssertNil(selection.selection)
+        XCTAssertEqual(fields, [["day"]], "no post when already empty")
+    }
+
     func testSelectDayNormalizesToStartOfDay() {
         let calendar = Self.utcCalendar
         let selection = SelectionModel(now: Date(), calendar: calendar)
@@ -312,17 +352,19 @@ final class SelectionModelTests: XCTestCase {
         XCTAssertEqual(fields, [["day"], ["day"]])
     }
 
-    func testSetVisibleMonthNormalizesAndPostsOnlyWhenChanged() {
+    func testSetVisibleWeekStartNormalizesAndPostsOnlyWhenChanged() {
         let calendar = Self.utcCalendar
         let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 13))!
         let selection = SelectionModel(now: now, calendar: calendar)
         let midSeptember = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 8))!
         let fields = observe(selection) {
-            selection.setVisibleMonth(midSeptember)
-            selection.setVisibleMonth(calendar.startOfMonth(for: midSeptember))
+            selection.setVisibleWeekStart(midSeptember)
+            // Any day inside the same week normalizes to the same Monday.
+            selection.setVisibleWeekStart(calendar.startOfWeek(for: midSeptember))
+            selection.setVisibleWeekStart(calendar.date(byAdding: .day, value: 3, to: midSeptember)!)
         }
-        XCTAssertEqual(selection.visibleMonth, calendar.startOfMonth(for: midSeptember))
-        XCTAssertEqual(fields, [["visibleMonth"]])
+        XCTAssertEqual(selection.visibleWeekStart, calendar.startOfWeek(for: midSeptember))
+        XCTAssertEqual(fields, [["visibleWeek"]])
     }
 
     private static var utcCalendar: Calendar {

@@ -5,18 +5,21 @@ final class CalendarViewController: NSViewController {
     let persistence: PersistenceController
     let model: ModelController
     let selection: SelectionModel
-    let monthView = MonthCalendarView()
+    let events: EventCoordinator
+    let weekView = WeekCalendarView()
 
     private var fetchedResultsController: NSFetchedResultsController<TaskItem>?
 
     init(
         persistence: PersistenceController,
         model: ModelController,
-        selection: SelectionModel
+        selection: SelectionModel,
+        events: EventCoordinator
     ) {
         self.persistence = persistence
         self.model = model
         self.selection = selection
+        self.events = events
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -30,23 +33,44 @@ final class CalendarViewController: NSViewController {
     }
 
     override func loadView() {
-        monthView.visibleMonth = selection.visibleMonth
-        monthView.selectedDay = selection.selectedDay
-        monthView.selectedTaskID = selection.selectedNodeUUID
-        view = monthView
+        weekView.visibleWeekStart = selection.visibleWeekStart
+        weekView.selectedDay = selection.selectedDay
+        weekView.selectedTaskID = selection.selectedNodeUUID
+        weekView.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSVisualEffectView()
+        container.material = .contentBackground
+        container.blendingMode = .behindWindow
+        container.state = .followsWindowActiveState
+
+        container.addSubview(weekView)
+
+        NSLayoutConstraint.activate([
+            weekView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            weekView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            weekView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            weekView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -10),
+        ])
+        view = container
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        monthView.delegate = self
+        weekView.delegate = self
         startObserving()
-        rebuildFRC(for: selection.visibleMonth)
+        rebuildFRC(for: selection.visibleWeekStart)
+        applyDayNotes()
+        applyEvents()
+        events.refresh()
     }
 
-    static func request(for visibleMonth: Date, calendar: Calendar = .current) -> NSFetchRequest<TaskItem> {
-        let days = calendar.daysInMonthGrid(for: visibleMonth)
-        let start = days[0]
-        let end = calendar.date(byAdding: .day, value: 1, to: days[41])!
+    static func request(
+        for visibleWeekStart: Date,
+        weekCount: Int,
+        calendar: Calendar = .current
+    ) -> NSFetchRequest<TaskItem> {
+        let start = calendar.startOfWeek(for: visibleWeekStart)
+        let end = calendar.endOfWeeks(from: start, count: weekCount)
         let request = TaskItem.fetchRequest()
         request.predicate = NSPredicate(
             format: "deadline >= %@ AND deadline < %@",
@@ -68,26 +92,70 @@ final class CalendarViewController: NSViewController {
             name: .plannerSelectionDidChange,
             object: selection
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(eventsDidChange(_:)),
+            name: .plannerEventsDidChange,
+            object: events
+        )
+        // Day notes are not in the deadline FRC, so their dots refresh on save.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contextDidSave(_:)),
+            name: .NSManagedObjectContextDidSave,
+            object: persistence.viewContext
+        )
+    }
+
+    @objc private func contextDidSave(_ notification: Notification) {
+        applyDayNotes()
+    }
+
+    @objc private func eventsDidChange(_ notification: Notification) {
+        applyEvents()
+    }
+
+    /// Events are fetched for a window months wide, so only the chips for the
+    /// visible span are handed to the grid; paging within the window is a
+    /// dictionary lookup rather than a refetch.
+    private func applyEvents() {
+        let calendar = Calendar.current
+        let starts = calendar.weekStarts(
+            from: selection.visibleWeekStart,
+            count: weekView.visibleWeekCount
+        )
+        weekView.events = starts
+            .flatMap { calendar.days(inWeekStartingAt: $0) }
+            .flatMap { events.chips(forDay: $0) }
+    }
+
+    private func applyDayNotes() {
+        let calendar = Calendar.current
+        let start = calendar.startOfWeek(for: selection.visibleWeekStart)
+        let end = calendar.endOfWeeks(from: start, count: weekView.visibleWeekCount)
+        weekView.daysWithNotes = (try? model.daysWithNotes(from: start, to: end)) ?? []
     }
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
-        if fields.contains(SelectionField.visibleMonth.rawValue) {
-            monthView.visibleMonth = selection.visibleMonth
-            rebuildFRC(for: selection.visibleMonth)
+        if fields.contains(SelectionField.visibleWeek.rawValue) {
+            weekView.visibleWeekStart = selection.visibleWeekStart
+            rebuildFRC(for: selection.visibleWeekStart)
+            applyDayNotes()
+            applyEvents()
         }
         if fields.contains(SelectionField.day.rawValue) {
-            monthView.selectedDay = selection.selectedDay
+            weekView.selectedDay = selection.selectedDay
         }
         if fields.contains(SelectionField.node.rawValue) {
-            monthView.selectedTaskID = selection.selectedNodeUUID
+            weekView.selectedTaskID = selection.selectedNodeUUID
         }
     }
 
-    private func rebuildFRC(for visibleMonth: Date) {
+    private func rebuildFRC(for visibleWeekStart: Date) {
         fetchedResultsController?.delegate = nil
         let controller = NSFetchedResultsController(
-            fetchRequest: Self.request(for: visibleMonth),
+            fetchRequest: Self.request(for: visibleWeekStart, weekCount: weekView.visibleWeekCount),
             managedObjectContext: persistence.viewContext,
             sectionNameKeyPath: nil,
             cacheName: nil
@@ -105,7 +173,7 @@ final class CalendarViewController: NSViewController {
     private func applyDeadlines() {
         let calendar = Calendar.current
         let tasks = fetchedResultsController?.fetchedObjects ?? []
-        monthView.deadlines = tasks.compactMap { task in
+        weekView.deadlines = tasks.compactMap { task in
             guard let deadline = task.deadline else { return nil }
             return TaskDeadlineChip(
                 uuid: task.uuid,
@@ -117,18 +185,29 @@ final class CalendarViewController: NSViewController {
     }
 }
 
-extension CalendarViewController: MonthCalendarViewDelegate {
-    func monthCalendar(_ view: MonthCalendarView, didSelectTaskID uuid: UUID) {
+extension CalendarViewController: WeekCalendarViewDelegate {
+    func weekCalendar(_ view: WeekCalendarView, didSelectTaskID uuid: UUID) {
+        // The inspector is a pane now: it rebinds from SelectionModel on its own.
+        // Forcing focus into the note here would fight the outline's reveal.
         selection.selectNode(uuid: uuid)
     }
 
-    func monthCalendar(_ view: MonthCalendarView, didSelectDay date: Date) {
+    func weekCalendar(_ view: WeekCalendarView, didSelectDay date: Date) {
         selection.selectDay(date)
     }
 
-    func monthCalendar(_ view: MonthCalendarView, didChangeVisibleMonth date: Date) {
+    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekStart date: Date) {
         // Apply via the observer so the view setter never re-enters the delegate.
-        selection.setVisibleMonth(date)
+        selection.setVisibleWeekStart(date)
+    }
+
+    /// The pane got wider or narrower, so a different number of weeks is on
+    /// screen and the fetch window has to follow.
+    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekCount count: Int) {
+        rebuildFRC(for: selection.visibleWeekStart)
+        applyDayNotes()
+        applyEvents()
+        NSApp.sendAction(#selector(MainSplitViewController.refreshCalendarTitle), to: nil, from: self)
     }
 }
 
@@ -139,6 +218,14 @@ extension CalendarViewController: NSFetchedResultsControllerDelegate {
 }
 
 extension CalendarViewController {
-    var test_monthView: MonthCalendarView { monthView }
-    var test_title: String { monthView.test_title }
+    var test_weekView: WeekCalendarView { weekView }
+    var test_title: String { weekView.test_title }
+
+    func test_setWeekCount(_ count: Int) {
+        weekView.test_setWeekCount(count)
+        rebuildFRC(for: selection.visibleWeekStart)
+        applyEvents()
+    }
+
+    func test_applyEvents() { applyEvents() }
 }

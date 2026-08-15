@@ -50,24 +50,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertNil(outline.outlineView.currentEditor())
     }
 
-    func testNewTaskOnTaskCreatesSibling() throws {
-        let selection = SelectionModel()
-        let (split, _) = makeSplit(selection: selection)
-        let project = try model.createProject()
-        let task = try model.createTask(in: project)
-        selection.selectNode(uuid: task.uuid)
-
-        split.newTask(nil)
-
-        let tasks = try fetchAllTasks()
-        XCTAssertEqual(tasks.count, 2)
-        let sibling = try XCTUnwrap(tasks.first { $0.uuid != task.uuid })
-        XCTAssertEqual(sibling.project, project)
-        XCTAssertNil(sibling.parentTask)
-        XCTAssertEqual(selection.selectedNodeUUID, sibling.uuid)
-    }
-
-    func testNewSubtaskCreatesChildAndExpandsParent() async throws {
+    func testNewTaskOnTaskCreatesChildAndExpandsParent() async throws {
         let selection = SelectionModel()
         let (split, outline) = makeSplit(selection: selection)
         let project = try model.createProject()
@@ -76,18 +59,19 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         var began: UUID?
         outline.beginEditingTitleHandler = { began = $0.uuid }
-        split.newSubtask(nil)
+        split.newTask(nil)
 
-        let subtask = try XCTUnwrap(try fetchAllTasks().first { $0.parentTask == task })
-        XCTAssertEqual(selection.selectedNodeUUID, subtask.uuid)
+        let child = try XCTUnwrap(try fetchAllTasks().first { $0.parentTask == task })
+        XCTAssertNil(child.project)
+        XCTAssertEqual(selection.selectedNodeUUID, child.uuid)
         XCTAssertTrue(outline.outlineView.isItemExpanded(task))
-        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: subtask), 0)
+        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: child), 0)
         XCTAssertNil(began)
 
         let scheduled = expectation(description: "begin edit")
         DispatchQueue.main.async { scheduled.fulfill() }
         await fulfillment(of: [scheduled], timeout: 1)
-        XCTAssertEqual(began, subtask.uuid)
+        XCTAssertEqual(began, child.uuid)
         XCTAssertNil(outline.outlineView.currentEditor())
     }
 
@@ -102,6 +86,50 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         XCTAssertEqual(selection.selectedNodeUUID, project.uuid)
         XCTAssertTrue(try fetchAllTasks().isEmpty)
+    }
+
+    /// Structural undo only reaches the outline through a save: the outline
+    /// reacts to did-save, and an unsaved undo would also be lost on quit.
+    func testUndoOfCreateIsSavedAndRemovesTheOutlineRow() throws {
+        let (split, outline) = makeSplit()
+        _ = split
+        let project = try model.createProject()
+        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
+        let undoManager = try XCTUnwrap(persistence.viewContext.undoManager)
+
+        undoManager.undo()
+
+        XCTAssertFalse(persistence.viewContext.hasChanges, "the undone create is saved")
+        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+        XCTAssertTrue(try model.allProjects().isEmpty)
+
+        undoManager.redo()
+
+        XCTAssertFalse(persistence.viewContext.hasChanges, "the redone create is saved")
+        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
+        XCTAssertEqual((outline.outlineView.item(atRow: 0) as? Project)?.uuid, project.uuid)
+    }
+
+    func testUndoOfDeleteIsSavedAndRestoresTheOutlineRow() throws {
+        let selection = SelectionModel()
+        let (split, outline) = makeSplit(selection: selection)
+        let project = try model.createProject()
+        let uuid = project.uuid
+        selection.selectNode(uuid: uuid)
+        let undoManager = try XCTUnwrap(persistence.viewContext.undoManager)
+        // In the app the create and the delete are separate user events and so
+        // separate by-event undo groups; in a test they share one run-loop
+        // cycle. Drop the create from the stack so undo targets the delete.
+        undoManager.removeAllActions()
+
+        split.deleteSelected(confirmed: true)
+        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+
+        undoManager.undo()
+
+        XCTAssertFalse(persistence.viewContext.hasChanges, "the undone delete is saved")
+        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
+        XCTAssertEqual((outline.outlineView.item(atRow: 0) as? Project)?.uuid, uuid)
     }
 
     func testDeleteSelectsPreviousSiblingThenParent() throws {
@@ -184,9 +212,9 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
-        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.showTaskInfo(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.revealToday(_:)))))
 
         let addTask = toolbarItem(.addTask, action: #selector(MainSplitViewController.newTask(_:)))
@@ -197,17 +225,17 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
-        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.showTaskInfo(_:)))))
         XCTAssertTrue(split.validateToolbarItem(addTask))
 
         let task = try model.createTask(in: project)
         selection.selectNode(uuid: task.uuid)
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
-        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.showTaskInfo(_:)))))
     }
 
     func testTextInputResponderDetection() {
@@ -236,7 +264,6 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newProject(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newTask(_:)))))
-        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.newSubtask(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.renameSelected(_:)))))
         XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.deleteSelected(_:)))))
         XCTAssertFalse(split.validateToolbarItem(
@@ -300,19 +327,171 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         _ = try model.createSubtask(under: parent)
         XCTAssertEqual(
             MainSplitViewController.deleteConfirmationMessage(for: parent),
-            "Delete “Shopping” and all of its subtasks?"
+            "Delete “Shopping” and all of its tasks?"
         )
     }
 
-    func testRevealTodaySetsVisibleMonth() {
+    func testRevealTodaySetsVisibleWeekToThisWeek() {
         let selection = SelectionModel()
-        let past = Calendar.current.date(byAdding: .month, value: -3, to: Date())!
-        selection.setVisibleMonth(past)
-        XCTAssertNotEqual(selection.visibleMonth, Calendar.current.startOfMonth(for: Date()))
+        let past = Calendar.current.date(byAdding: .day, value: -70, to: Date())!
+        selection.setVisibleWeekStart(past)
+        XCTAssertNotEqual(selection.visibleWeekStart, Calendar.current.startOfWeek(for: Date()))
 
         let (split, _) = makeSplit(selection: selection)
         split.revealToday(nil)
-        XCTAssertEqual(selection.visibleMonth, Calendar.current.startOfMonth(for: Date()))
+        XCTAssertEqual(selection.visibleWeekStart, Calendar.current.startOfWeek(for: Date()))
+    }
+
+    func testPreviousAndNextWeekShiftVisibleWeekBySevenDays() {
+        let selection = SelectionModel()
+        let start = selection.visibleWeekStart
+        let (split, _) = makeSplit(selection: selection)
+        let calendar = Calendar.current
+
+        split.goToNextWeek(nil)
+        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: 7, to: start)!)
+
+        split.goToPreviousWeek(nil)
+        XCTAssertEqual(selection.visibleWeekStart, start)
+
+        split.goToPreviousWeek(nil)
+        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: -7, to: start)!)
+
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToNextWeek(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToPreviousWeek(_:)))))
+    }
+
+    func testSidebarStartsExpandedAndOnlyCollapsesOnPurpose() {
+        let (split, _) = makeSplit()
+        let sidebar = split.splitViewItems[0]
+        XCTAssertFalse(sidebar.isCollapsed)
+        XCTAssertTrue(sidebar.canCollapse, "the toolbar carries a Hide Sidebar button")
+        // The outline is the only place to create a project, so it must never
+        // vanish just because the window got narrow.
+        XCTAssertFalse(sidebar.canCollapseFromWindowResize)
+        split.viewDidAppear()
+        XCTAssertFalse(sidebar.isCollapsed)
+    }
+
+    func testToggleSidebarHidesAndRestoresTheOutline() {
+        let (split, _) = makeSplit()
+        XCTAssertTrue(split.isSidebarVisible)
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(NSSplitViewController.toggleSidebar(_:)))))
+
+        split.toggleSidebar(nil)
+        XCTAssertFalse(split.isSidebarVisible)
+
+        split.toggleSidebar(nil)
+        XCTAssertTrue(split.isSidebarVisible)
+    }
+
+    func testCollapsingTheSidebarHidesItsToolbarItems() throws {
+        let (split, _) = makeSplit()
+        let toolbar = NSToolbar(identifier: "test")
+        let addProject = try XCTUnwrap(split.toolbar(
+            toolbar, itemForItemIdentifier: .addProject, willBeInsertedIntoToolbar: true
+        ))
+        let addTask = try XCTUnwrap(split.toolbar(
+            toolbar, itemForItemIdentifier: .addTask, willBeInsertedIntoToolbar: true
+        ))
+
+        XCTAssertFalse(addProject.isHidden)
+        XCTAssertFalse(addTask.isHidden)
+
+        split.toggleSidebar(nil)
+        XCTAssertFalse(split.isSidebarVisible)
+        XCTAssertTrue(addProject.isHidden, "New Project acts on the hidden outline")
+        XCTAssertTrue(addTask.isHidden)
+
+        split.toggleSidebar(nil)
+        XCTAssertTrue(split.isSidebarVisible)
+        XCTAssertFalse(addProject.isHidden)
+        XCTAssertFalse(addTask.isHidden)
+    }
+
+    func testToolbarItemsBuiltWhileCollapsedStartHidden() throws {
+        let (split, _) = makeSplit()
+        split.toggleSidebar(nil)
+
+        // Items are created lazily by the toolbar, so one built while the sidebar
+        // is already shut must not appear until it reopens.
+        let addProject = try XCTUnwrap(split.toolbar(
+            NSToolbar(identifier: "test"), itemForItemIdentifier: .addProject, willBeInsertedIntoToolbar: true
+        ))
+        XCTAssertTrue(addProject.isHidden)
+
+        split.toggleSidebar(nil)
+        XCTAssertFalse(addProject.isHidden)
+    }
+
+    func testToolbarPutsTheSidebarGroupAgainstTheFirstDivider() {
+        let (split, _) = makeSplit()
+        let toolbar = NSToolbar(identifier: "test")
+        let identifiers = split.toolbarDefaultItemIdentifiers(toolbar)
+
+        let leadingSpace = try! XCTUnwrap(identifiers.firstIndex(of: .flexibleSpace))
+        let addProject = try! XCTUnwrap(identifiers.firstIndex(of: .addProject))
+        let toggleSidebar = try! XCTUnwrap(identifiers.firstIndex(of: .toggleSidebar))
+        let paneSeparator = try! XCTUnwrap(identifiers.firstIndex(of: .paneSeparator))
+
+        // flexible space, then the group, then the divider: that ordering is what
+        // pushes the group up against the splitter instead of the window edge.
+        XCTAssertLessThan(leadingSpace, addProject)
+        XCTAssertLessThan(addProject, toggleSidebar)
+        XCTAssertLessThan(toggleSidebar, paneSeparator)
+    }
+
+    func testSplitPanesHaveMinimumThickness() {
+        let (split, _) = makeSplit()
+        XCTAssertEqual(split.splitViewItems.count, 3, "sidebar, calendar, trailing inspector")
+
+        let sidebar = split.splitViewItems[0]
+        XCTAssertGreaterThanOrEqual(sidebar.minimumThickness, 220)
+        XCTAssertEqual(sidebar.maximumThickness, sidebar.minimumThickness * 2)
+        XCTAssertGreaterThanOrEqual(split.splitViewItems[1].minimumThickness, 420)
+
+        let inspector = split.splitViewItems[2]
+        XCTAssertGreaterThanOrEqual(inspector.minimumThickness, 240)
+        XCTAssertLessThanOrEqual(inspector.maximumThickness, 420)
+        XCTAssertTrue(inspector.canCollapse)
+    }
+
+    func testSplitPaneHoldingPrioritiesStayBelowWindowResizePriority() {
+        let (split, _) = makeSplit()
+        // Above 500 a pane outranks the window's own resize priority, which turns
+        // its restored thickness into a hard, self-growing window minimum.
+        for item in split.splitViewItems {
+            XCTAssertLessThan(item.holdingPriority.rawValue, 500)
+        }
+    }
+
+    func testToggleInspectorCollapsesAndRestoresWithoutSelection() {
+        let (split, _) = makeSplit()
+        XCTAssertTrue(split.isInspectorVisible)
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.toggleInspector(_:)))))
+
+        split.toggleInspector(nil)
+        XCTAssertFalse(split.isInspectorVisible)
+
+        split.toggleInspector(nil)
+        XCTAssertTrue(split.isInspectorVisible)
+    }
+
+    func testShowTaskInfoExpandsInspectorOnlyForATask() throws {
+        let selection = SelectionModel()
+        let (split, _) = makeSplit(selection: selection)
+        split.toggleInspector(nil)
+        XCTAssertFalse(split.isInspectorVisible)
+
+        let project = try model.createProject()
+        selection.selectNode(uuid: project.uuid)
+        split.showTaskInfo(nil)
+        XCTAssertFalse(split.isInspectorVisible, "Get Info targets tasks, not projects")
+
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        split.showTaskInfo(nil)
+        XCTAssertTrue(split.isInspectorVisible)
     }
 
     private func makeSplit(
@@ -321,7 +500,8 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
-            selection: selection
+            selection: selection,
+            events: EventCoordinator(source: NullEventSource())
         )
         split.loadViewIfNeeded()
         let outline = split.splitViewItems[0].viewController as! OutlineViewController

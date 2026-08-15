@@ -1,12 +1,21 @@
 import AppKit
 
-@main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// `NSApplication.delegate` is weak. Swift 6 `@main` + MainActor isolation
+    /// can drop the synthesized local before the run loop starts.
+    private static var running: AppDelegate?
+
     private var window: NSWindow?
     private var persistence: PersistenceController?
     private var model: ModelController?
     private var selection: SelectionModel?
+    private var events: EventCoordinator?
+
+    override init() {
+        super.init()
+        Self.running = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let persistence = PersistenceController()
@@ -21,31 +30,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = ModelController(persistence: persistence)
         let selection = SelectionModel()
+        // Outlook is read over Apple events, so a Mac without it (or without
+        // consent) simply shows no events rather than failing to launch.
+        let events = EventCoordinator(source: OutlookEventSource())
         self.persistence = persistence
         self.model = model
         self.selection = selection
+        self.events = events
 
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
-            selection: selection
+            selection: selection,
+            events: events
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1040, height: 660),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Planner"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.contentViewController = split
-        window.setContentSize(NSSize(width: 1040, height: 660))
-        window.contentMinSize = NSSize(width: 800, height: 500)
+        window.setContentSize(NSSize(width: 1100, height: 720))
+        // Sidebar 240 + calendar 420; the trailing inspector collapses out of the
+        // way rather than holding the window any wider than that.
+        window.contentMinSize = NSSize(width: 880, height: 520)
         window.tabbingMode = .disallowed
+        window.isReleasedWhenClosed = false
         window.center()
-        window.setFrameAutosaveName("MainWindow")
+        window.setFrameAutosaveName("MainWindow.v2")
         window.delegate = self
         window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
 
         model.presentingWindow = window
         self.window = window

@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22758" systemVersion="23F79" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="DayNote" representedClassName="DayNote" syncable="YES">
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="day" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="note" optional="YES" attributeType="String"/>
+        <attribute name="noteRTF" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="NO"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uuid" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <fetchIndex name="byDay">
+            <fetchIndexElement property="day" type="Binary" order="ascending"/>
+        </fetchIndex>
+    </entity>
     <entity name="Project" representedClassName="Project" syncable="YES">
         <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="sortIndex" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
@@ -13,6 +24,7 @@
         <attribute name="deadline" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="isCompleted" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="note" optional="YES" attributeType="String"/>
+        <attribute name="noteRTF" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="NO"/>
         <attribute name="sortIndex" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="title" optional="NO" attributeType="String" defaultValueString="Untitled Task"/>
         <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
@@ -25,6 +37,7 @@
         </fetchIndex>
     </entity>
     <elements>
+        <element name="DayNote" positionX="-63" positionY="171" width="128" height="119"/>
         <element name="Project" positionX="-63" positionY="-18" width="128" height="119"/>
         <element name="Task" positionX="160" positionY="-18" width="128" height="209"/>
     </elements>

@@ -1,7 +1,15 @@
 import Foundation
 
 enum SelectionField: String {
-    case node, day, visibleMonth
+    case node, day, visibleWeek
+}
+
+/// What currently holds the selection. A task (or project) in the outline and a
+/// day in the calendar are mutually exclusive: selecting one clears the other,
+/// so exactly one thing is ever active across the two panes.
+enum PlannerSelection: Equatable {
+    case node(UUID)
+    case day(Date)
 }
 
 extension Notification.Name {
@@ -15,35 +23,60 @@ enum SelectionUserInfoKey {
 
 @MainActor
 final class SelectionModel {
-    private(set) var selectedNodeUUID: UUID?
-    private(set) var selectedDay: Date?
-    private(set) var visibleMonth: Date
+    private(set) var selection: PlannerSelection?
+    /// First visible Monday. The calendar pages a week at a time.
+    private(set) var visibleWeekStart: Date
+
+    var selectedNodeUUID: UUID? {
+        if case let .node(uuid) = selection { return uuid }
+        return nil
+    }
+
+    var selectedDay: Date? {
+        if case let .day(date) = selection { return date }
+        return nil
+    }
 
     private let calendar: Calendar
 
     init(now: Date = Date(), calendar: Calendar = .current) {
         self.calendar = calendar
-        visibleMonth = calendar.startOfMonth(for: now)
+        visibleWeekStart = calendar.startOfWeek(for: now)
     }
 
     func selectNode(uuid: UUID?) {
-        guard selectedNodeUUID != uuid else { return }
-        selectedNodeUUID = uuid
-        post(changed: [.node])
+        apply(uuid.map { PlannerSelection.node($0) })
     }
 
     func selectDay(_ date: Date?) {
-        let normalized = date.map { calendar.startOfDay(for: $0) }
-        guard selectedDay != normalized else { return }
-        selectedDay = normalized
-        post(changed: [.day])
+        apply(date.map { PlannerSelection.day(calendar.startOfDay(for: $0)) })
     }
 
-    func setVisibleMonth(_ date: Date) {
-        let normalized = calendar.startOfMonth(for: date)
-        guard visibleMonth != normalized else { return }
-        visibleMonth = normalized
-        post(changed: [.visibleMonth])
+    func clearSelection() {
+        apply(nil)
+    }
+
+    /// Posts `.node` and/or `.day` according to which of the two derived values
+    /// actually changed, so observers that only care about one keep working
+    /// even though a single write can move the selection between them.
+    private func apply(_ new: PlannerSelection?) {
+        guard selection != new else { return }
+        let previousNode = selectedNodeUUID
+        let previousDay = selectedDay
+        selection = new
+
+        var changed: Set<SelectionField> = []
+        if selectedNodeUUID != previousNode { changed.insert(.node) }
+        if selectedDay != previousDay { changed.insert(.day) }
+        guard !changed.isEmpty else { return }
+        post(changed: changed)
+    }
+
+    func setVisibleWeekStart(_ date: Date) {
+        let normalized = calendar.startOfWeek(for: date)
+        guard visibleWeekStart != normalized else { return }
+        visibleWeekStart = normalized
+        post(changed: [.visibleWeek])
     }
 
     private func post(changed: Set<SelectionField>) {

@@ -12,9 +12,9 @@
 
 ## Overview
 
-Planner is a small, native macOS task manager: a source-list outline of projects and nested tasks on the left, and a monthly deadline calendar on the right. Tasks can be marked complete (a flag, no rollup). v1 persists locally with Core Data (`NSPersistentContainer`). The model, identifiers, object-lifecycle hooks, and store configuration are chosen so enabling CloudKit later is a container/entitlement/history-consumer change, not a remodel.
+Planner is a small, native macOS task manager: a source-list outline of projects and nested tasks on the left, and a week-column deadline calendar on the right. Tasks can be marked complete (a flag, no rollup). v1 persists locally with Core Data (`NSPersistentContainer`). The model, identifiers, object-lifecycle hooks, and store configuration are chosen so enabling CloudKit later is a container/entitlement/history-consumer change, not a remodel.
 
-The app is AppKit-first (not SwiftUI-hosted, not Catalyst). The outline is a **view-based** `NSOutlineView`; Finder-style rename uses `editColumn(_:row:with:select:)` plus a title-field `acceptsFirstResponder` gate (not the cell-based `shouldEdit` API). The calendar is a small custom `NSView` month grid that fetches the visible 42-day range. There is no existing Xcode project; this document specifies the project, object graph, model, UI architecture, and an incremental PR plan.
+The app is AppKit-first (not SwiftUI-hosted, not Catalyst). The outline is a **view-based** `NSOutlineView`; Finder-style rename uses `editColumn(_:row:with:select:)` plus a title-field `acceptsFirstResponder` gate (not the cell-based `shouldEdit` API). The calendar is a small custom `NSView` week grid: each column is one week running Monday at the top to a collapsed Saturday/Sunday row at the bottom, and it fetches the visible span of whole weeks. There is no existing Xcode project; this document specifies the project, object graph, model, UI architecture, and an incremental PR plan.
 
 ---
 
@@ -42,8 +42,9 @@ Pain points a naïve implementation would hit, and that this design exists to av
 - Create projects from a blank store (menu bar, toolbar, empty-area context menu).
 - Create tasks and subtasks from the outline context menu (and matching main-menu items).
 - Finder-style inline rename on the outline (delayed click on the already-selected row, plus Return).
-- Optional deadline on tasks only; month grid shows those deadlines (including spillover days); user can set and clear them.
+- Optional deadline on tasks only; the week grid shows those deadlines; user can set and clear them.
 - Optional `isCompleted` flag on tasks (not projects). Outline checkbox is the primary control; no parent/child rollup. Completed tasks stay on the calendar, dimmed.
+- **Read-only Outlook events** on the week grid, fetched asynchronously and rendered so they cannot be mistaken for tasks (§8.6).
 - Local Core Data store that is CloudKit-ready but does **not** use `NSPersistentCloudKitContainer`.
 - Cascade delete with a confirmation alert.
 - Unit tests for model invariants and month/grid deadline fetches, using an ephemeral SQLite store (`NSSQLiteStoreType` at `/dev/null`), not `NSInMemoryStoreType`.
@@ -52,7 +53,7 @@ Pain points a naïve implementation would hit, and that this design exists to av
 
 - CloudKit / iCloud sync, sharing, or multi-device merge UX.
 - Drag-and-drop reordering or reparenting (sibling `sortIndex` is still stored; new items append; duplicate indices are legal).
-- Recurring tasks, reminders, notifications, or EventKit integration.
+- Recurring **tasks**, reminders, or notifications. (Recurring *calendar events* are read and expanded — see §8.6. EventKit remains rejected as a store and as a UI; the external feed is Outlook over Apple events.)
 - Tags, priorities, projects-on-the-calendar, or project deadlines. Completion is **in** v1 (task flag only; no rollup).
 - Multiple windows, tabs, or a document-based architecture.
 - SwiftUI or SwiftData as the primary stack; Catalyst; iOS/iPad companion.
@@ -71,7 +72,7 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Entry point | `@main AppDelegate`; File’s Owner of `MainMenu.xib` is `NSApplication`; **no** AppDelegate object in the xib | Avoids dual-instantiation. `@main` is the sole `NSApplication.delegate`. Menu items target First Responder. |
 | Object graph | `AppDelegate` creates `PersistenceController`, `ModelController`, and `SelectionModel`; injects all three into `MainSplitViewController` | One owner. View controllers never look up singletons and never retain each other. |
 | Menu/toolbar actions | Implemented on `MainSplitViewController` | Always in the window responder chain. Not on `AppDelegate`, not only on the outline VC. |
-| Entities | **Two entities**: `Project` and `Task` | Domain differs (only Task has note/deadline; only Project is a root). Entity inheritance is rejected (CloudKit). A single `Item` entity is the main alternative; see [Alternatives](#alternatives-considered). SwiftData is rejected (same section). |
+| Entities | **Three entities**: `Project`, `Task`, `DayNote` | Domain differs (only Task has note/deadline; only Project is a root). Entity inheritance is rejected (CloudKit). A single `Item` entity is the main alternative; see [Alternatives](#alternatives-considered). SwiftData is rejected (same section). |
 | Task parent | Two optional to-one relations: `project` **xor** `parentTask` | Core Data cannot point one relationship at two destinations. `ModelController` + tests enforce exactly one. **No** `validateForInsert/Update` throws (CloudKit import would abort). |
 | Ordering | Explicit `sortIndex: Int64`, unordered relationships | Ordered relationships are incompatible with CloudKit. Duplicate `sortIndex` values are **legal**; siblings sort by `(sortIndex, uuid)`. |
 | Identity | `uuid: UUID` assigned in `ModelController` create paths, not in `awakeFromInsert` | App-stable ID for expansion, chips, reveal, import/export. Not `NSManagedObjectID` (changes on first save). Not `CKRecord.recordName`. No uniqueness constraint. |
@@ -83,21 +84,33 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Outline items | Registered `Project`/`TaskItem` objects **after** first save (permanent `objectID`) | Never insert a row for a temporary ID. Restore selection/expansion by UUID after any `reloadData`. |
 | Rename | View-based `NSTableCellView` + `TitleTextField.acceptsFirstResponder` gate + `editColumn` | `shouldEdit` is cell-based and does not stop click-to-focus. No overlay field. `objectValueFor` / `setObjectValue` unused. |
 | Delayed click | Snapshot `clickedRow == selectedRow` in `mouseDown` **before** `super.mouseDown` | `selectionDidChange` runs before `action`, so a UUID-after-change test starts rename on the first click. |
-| Calendar | Custom `NSView` 7×6 month grid | No first-party AppKit month view; EventKit is the wrong domain; no third-party kit. |
-| Calendar fetch | Closed-open range over the **42 grid days**, not the civil month | Spillover cells show real chips. Clicking spillover navigates month without chips popping in. |
-| Calendar month source of truth | `SelectionModel.visibleMonth` only. Gestures call the view delegate; they do not mutate `MonthCalendarView.visibleMonth`. Programmatic `visibleMonth` set does **not** fire the delegate. | Prevents a gesture → SelectionModel → view → delegate loop. |
+| Calendar | Custom `NSView` week grid: N week columns × 6 rows (Mon–Fri, then a collapsed weekend row) | No first-party AppKit calendar view; EventKit is the wrong domain; no third-party kit. Week columns give each day a full-width band, so chip titles stay readable. |
+| Calendar fetch | Closed-open range over the **visible whole weeks**, not the civil month | Every visible cell is inside the range, so no cell is ever chip-less by construction. The range grows with the pane, since the column count follows its width. |
+| Week start | Hardcoded **Monday**, not `Calendar.firstWeekday` | The layout collapses Sat+Sun into one row, which only holds when they are adjacent at the end of the week. A Sunday- or Saturday-start locale would put the weekend mid-column. |
+| Weekend emphasis | Sat and Sun keep their own rows in the same column, each at 0.5 the height of a weekday row | The product is for work-week deadlines. This replaces the narrowed weekend *columns* of the month grid; the intent is unchanged. A half-height row fits one chip, so a busy weekend shows `+K more`. |
+| Weekday markers | A single 34pt left gutter, one label per row | Repeating `MON`…`SUN` inside every cell multiplies the same seven strings by the column count; at 5–8 columns that is the loudest thing on screen. |
+| Visible week count | Derived from pane width (`targetColumnWidth`, clamped 2–8) | Columns stay readable at any window size. The fetch window follows the count, so widening the pane loads the extra weeks. |
+| Minimum column width | **Measured, not hardcoded**: the width of `chipWidthCalibrationTitle` in the chip font plus the chip's horizontal insets, rounded up (130pt today) | A magic number drifts the moment the chip font or padding changes. Deriving it means the narrowest column always shows a realistic longest task title whole. |
+| Calendar week source of truth | `SelectionModel.visibleWeekStart` only (always a Monday). Gestures call the view delegate; they do not mutate `WeekCalendarView.visibleWeekStart`. Programmatic set does **not** fire the delegate. | Prevents a gesture → SelectionModel → view → delegate loop. |
 | Bundle ID | `com.rihscb.Planner` | User decision. Use this in the target, log subsystem, container path, and any future iCloud container. |
 | App name | Planner (display name and product name) | User decision. App icon still TBD; that is assets, not architecture. |
 | Deadline | Optional `Date` on `Task` only, stored as start-of-day in `Calendar.current`. No `timeZone` attribute in v1. | Calendar requirement implies it. Multi-device day identity deferred. |
 | Completion | `isCompleted: Bool` on `Task` only, default `false`. Outline checkbox is primary; inspector mirrors it. No child/parent rollup. | User decision: in v1. Complete is a flag; delete remains the destructive path. |
-| Notes UI | Inspector under the calendar: has-deadline checkbox + date picker (no Clear button) + plain `NSTextView` (`String`, not rich text) | Attribute must not be dead. Unchecked ⇔ `deadline = nil`. Notes stay plain `String`. |
+| Notes UI | Collapsible **trailing inspector** (`NSSplitViewItem(inspectorWithViewController:)`): has-deadline checkbox + date picker (no Clear button) + plain `NSTextView` (`String`, not rich text) | Attribute must not be dead. Unchecked ⇔ `deadline = nil`. Notes stay plain `String`. Trailing, not under the calendar: too little content to justify a full-width strip. |
 | Inspector undo | `windowWillReturnUndoManager` returns `viewContext.undoManager`. Notes view gets a dedicated `UndoManager` via `textView(_:undoManagerFor:)`. Do **not** assign `window.undoManager` (it is get-only). Title field editor may share the Core Data manager; one `Rename` group on commit. | `NSTextView.undoManager` walks to the window by default; a private manager is required to keep keystrokes off the Core Data stack. |
 | Drag-and-drop | Deferred | Not cheap enough with the manual data source to justify v1 scope. |
 | Delete | Confirm sheet; cascade children; ⌘⌫ disabled while a field editor / `NSTextView` is first responder | Prevents silent tree wipes and deleting a task while editing a note. |
 | Deployment | macOS 15.0 Sequoia | See [Xcode project](#1-xcode-project--target-layout). |
 | Save | `viewContext` save after each meaningful edit; debounce notes 0.4s. Create/delete **throw** after rollback; they never return a rolled-back object. | Typical Core Data Mac app. A failed save leaves the tree unchanged. |
-| Sidebar collapse | `canCollapse = false` on the sidebar `NSSplitViewItem` | v1 has no Show Sidebar command; a dragged divider must not hide the only create surface. |
+| Sidebar collapse | `canCollapse = true`, `canCollapseFromWindowResize = false` | The toolbar carries a Hide Sidebar button and View → Hide Sidebar (⌃⌘S), so there is always a way back. Resize-driven collapse stays off: the outline is the only place to create a project, so it should only vanish when the user asks. |
 | Sync | Not in v1 | Model + lifecycle are prepared; container subclass, entitlements, and history consumer wait. |
+| Calendar events source | Microsoft Outlook running locally, over **ScriptingBridge** (Apple events). Read-only; never writes, never contacts Exchange. | The user's calendar already lives in Outlook on this Mac. Validated by spike (§8.6.7). |
+| Event storage | **Not Core Data.** In-memory `Sendable` values only. | The store is CloudKit-bound and `ModelController` is its only writer. Mirroring a read-only foreign feed into it would add a second writer, sync junk to CloudKit later, and create a delete-reconcile problem when events vanish upstream. Cost: events are absent for ~2s after launch, which is what asynchronous population means. |
+| Event fetch window | `[today − 2 months, today + 3 months)`, snapped outward to whole weeks; fetched in **one** refresh, not per visible span. | Cost tracks the number of Apple-event queries, not the span. One slow refresh then instant paging beats re-fetching as the user pages. |
+| Recurrence expansion | Local, in Swift. Outlook returns masters at their *first* occurrence plus per-slot exceptions; it does **not** expand series. | Without expansion a 3-month window shows 22 of 70 events on the author's calendar. This is the bulk of the feature. |
+| Event selection | Event chips are **not** selectable. Clicking one selects the day. | `PlannerSelection` stays `.node | .day`. An `.event` case would ripple into every `changedFields` consumer to represent something with no detail view. |
+
+**Events are read-only, and that is structural, not a policy.** There is no write path, no `ModelController` method, and no entity. The only way an event could ever be modified is by adding all three.
 
 **Deadline as a first-class Task attribute.** The product brief did not list a deadline field, but the calendar is defined to show deadlines. v1 stores an optional `Date` on `Task` only. Projects stay title-only. Revisit only if a later product decision needs project-level milestones.
 
@@ -119,8 +132,9 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Swift language mode | Swift 6, with `@MainActor` on all AppKit types |
 | UI | AppKit. Programmatic window and view controllers. `MainMenu.xib` only. |
 | Lifecycle | `NSApplicationDelegate` via `@main`, not SwiftUI `@main` |
-| Sandbox | On (Xcode default for new Mac apps). No extra entitlements in v1. |
-| Hardened Runtime | On (notarization-ready). |
+| Sandbox | **Off.** Reading Outlook over Apple events (§8.6) needs it off; the sanctioned `com.apple.security.scripting-targets` route requires the target app to publish scripting access groups, and Outlook does not. App Store submission is already a non-goal. |
+| Hardened Runtime | On (notarization-ready). Requires `com.apple.security.automation.apple-events` to send Apple events — that gate is the Hardened Runtime's, not the sandbox's, so it survives turning the sandbox off. |
+| Entitlements | `com.apple.security.automation.apple-events` only. The `app-sandbox` key is removed, not set to `false`. |
 | Document type | None (single local store, not NSDocument). |
 
 **Why macOS 15, not 14 or 26-only.** APIs used here (`NSSplitViewController`, `NSOutlineView`, `NSPersistentHistoryTrackingKey`, `UUID` attributes, `NSSplitViewItem(sidebarWithViewController:)`) exist well before Sequoia. Targeting 15 (roughly current-minus-one as of August 2026) covers machines that still receive OS updates without forcing Tahoe-only APIs. Drop to 14.0 if Sonoma support is a hard requirement; nothing in this design depends on 15-only symbols. Do not target 26-only.
@@ -147,7 +161,7 @@ After cleanup, the on-disk layout:
     ├── Views/
     │   ├── PlannerOutlineView.swift
     │   ├── TitleTextField.swift
-    │   └── MonthCalendarView.swift
+    │   └── WeekCalendarView.swift
     ├── Model/
     │   ├── Planner.xcdatamodeld/
     │   │   └── Planner.xcdatamodel/   # model version 1
@@ -173,7 +187,10 @@ Info.plist can remain the generated “generate Info.plist” file. Required key
 - `NSMainNibFile` = `MainMenu`
 - `LSMinimumSystemVersion` = `15.0`
 - `NSHumanReadableCopyright` = placeholder
+- `NSAppleEventsUsageDescription` = “Planner reads your Outlook calendar to show events alongside your task deadlines. It never modifies your calendar.” Required by TCC on macOS 10.14+ **regardless of sandbox**; without it the first Apple event is denied outright rather than prompting.
 - Do **not** set `NSMainStoryboardFile`
+
+**Store location.** With the sandbox off, `NSApplicationSupportDirectory` is no longer container-redirected: the store is `~/Library/Application Support/Planner/Planner.sqlite` and defaults live in `~/Library/Preferences/com.rihscb.Planner.plist`. Anything written while the app was sandboxed sits under `~/Library/Containers/com.rihscb.Planner/Data/…` and must be copied across by hand (all three of `.sqlite`, `-shm`, `-wal` — dropping the WAL loses whatever has not checkpointed).
 
 Application is **not** an agent (`LSUIElement` unset). Closing the last window terminates (`applicationShouldTerminateAfterLastWindowClosed` → `true`).
 
@@ -207,7 +224,7 @@ flowchart TB
   OV[OutlineViewController]
   CV[CalendarViewController]
   IV[InspectorViewController]
-  Grid[MonthCalendarView]
+  Grid[WeekCalendarView]
   Store[(Planner.sqlite)]
 
   AD --> PC
@@ -257,7 +274,7 @@ Rules:
 
 ```swift
 enum SelectionField: String {
-    case node, day, visibleMonth
+    case node, day, visibleWeek
 }
 
 extension Notification.Name {
@@ -271,21 +288,24 @@ enum SelectionUserInfoKey {
 
 @MainActor
 final class SelectionModel {
-    private(set) var selectedNodeUUID: UUID?
-    private(set) var selectedDay: Date?          // start-of-day, or nil
-    private(set) var visibleMonth: Date          // start-of-month
+    /// Exclusive: a task/project in the outline and a day in the calendar
+    /// cannot both be selected. `selectedNodeUUID` / `selectedDay` are derived.
+    private(set) var selection: PlannerSelection?   // .node(UUID) | .day(Date)
+    private(set) var visibleWeekStart: Date      // Monday
 
     init(now: Date = Date(), calendar: Calendar = .current) {
-        visibleMonth = calendar.startOfMonth(for: now)
+        visibleWeekStart = calendar.startOfWeek(for: now)
     }
 
     func selectNode(uuid: UUID?) { /* post only if changed; userInfo[.changedFields] = ["node"] */ }
     func selectDay(_ date: Date?) { /* startOfDay; post only if changed */ }
-    func setVisibleMonth(_ date: Date) { /* startOfMonth; post only if changed */ }
+    func setVisibleWeekStart(_ date: Date) { /* startOfWeek; post only if changed */ }
 }
 ```
 
-Observers: `NotificationCenter.default` on the main queue, name `.plannerSelectionDidChange`. Keep it NotificationCenter (no Combine requirement). **Every observer must inspect `userInfo[SelectionUserInfoKey.changedFields]` and no-op unless a field it cares about changed.** Month paging must not look like a node change (that would flush notes / rebind the inspector). Snapshotting the previous value is an acceptable alternative if an observer does not want to parse userInfo, but it must still no-op when its field is unchanged.
+**Selection is exclusive.** `selection` holds *either* a node *or* a day, never both, so exactly one thing is active across the outline and the calendar. `selectNode(uuid:)` and `selectDay(_:)` both write the single slot; whichever is called last wins and the other side clears. `apply(_:)` compares the derived `selectedNodeUUID` / `selectedDay` before and after and posts `.node`, `.day`, or **both** — moving the selection from a task to a day posts both, so observers that watch only one field still react. Existing observers therefore needed no change beyond the inspector, which now binds on either field.
+
+Observers: `NotificationCenter.default` on the main queue, name `.plannerSelectionDidChange`. Keep it NotificationCenter (no Combine requirement). **Every observer must inspect `userInfo[SelectionUserInfoKey.changedFields]` and no-op unless a field it cares about changed.** Week paging must not look like a node change (that would flush notes / rebind the inspector). Snapshotting the previous value is an acceptable alternative if an observer does not want to parse userInfo, but it must still no-op when its field is unchanged.
 
 Lookups go through `ModelController`, not ad-hoc fetch requests in the VCs:
 
@@ -296,9 +316,9 @@ Lookups go through `ModelController`, not ad-hoc fetch requests in the VCs:
 | Publisher | Writes |
 | --- | --- |
 | Outline user click / keyboard selection | `selectNode(uuid:)` |
-| Calendar chip click | `selectNode(uuid:)` and `selectDay` for that chip’s day. Does **not** change `visibleMonth`. |
+| Calendar chip click | `selectNode(uuid:)` **only** — emitting the day too would immediately displace the task. Does **not** change `visibleWeekStart`. |
 | Calendar day / `+K more` click | `selectDay` only. Does **not** clear `selectedNodeUUID`. |
-| Calendar prev/next / Today / spillover-day navigation | `setVisibleMonth`; spillover also `selectDay` |
+| Calendar prev/next week / Today | `setVisibleWeekStart` |
 | Create item | `selectNode` of the new UUID (after save) |
 | Delete selected | `selectNode` of previous sibling, else parent, else `nil` |
 | Inspector | **read-only** on `SelectionModel` |
@@ -322,25 +342,25 @@ Chip click → reveal path (no VC-to-VC call):
 - `contentMinSize` ≈ `800×500`
 - Tabbing mode: `.disallowed` (single-window v1)
 
-`MainSplitViewController` is a vertical-then-horizontal split:
+`MainSplitViewController` is a single three-item horizontal split:
 
 ```
-+----------------------+----------------------------------+
-|                      |  CalendarViewController          |
-|  OutlineViewController|  (MonthCalendarView)            |
-|  min 200, default 280|                                  |
-|                      +----------------------------------+
-|                      |  InspectorViewController         |
-|                      |  height ~168, min 120            |
-+----------------------+----------------------------------+
++----------------------+--------------------------+---------------+
+|                      |  CalendarViewController  |  Inspector    |
+|  OutlineViewController|  (WeekCalendarView)     |  min 260      |
+|  min 240, default 260|  min 420                 |  default 300  |
+|                      |                          |  collapsible  |
++----------------------+--------------------------+---------------+
 ```
 
 Implementation:
 
-- Outer `NSSplitViewController` (horizontal).
-- **Left item:** `NSSplitViewItem(sidebarWithViewController: outlineVC)` — source-list vibrancy and sidebar metrics. Set `minimumThickness = 200`, `preferredThicknessFraction` such that the initial width is ~280, holding priority **low**. **`canCollapse = false`.** v1 has no View → Show Sidebar item and no toolbar toggle; a dragged divider must not hide the outline (the only create surface) for the rest of the session. A Show Sidebar command is a later polish PR if we want collapse.
-- **Right item:** a nested vertical `NSSplitViewController` (calendar above, inspector below), holding priority **high** on the calendar item, **low** on the inspector (`minimumThickness = 120`, initial ~168).
-- Autosave names: `MainHorizontalSplit`, `RightVerticalSplit`.
+- One `NSSplitViewController` (horizontal), three items.
+- **Left item:** `NSSplitViewItem(sidebarWithViewController: outlineVC)` — source-list material and sidebar metrics. `minimumThickness = 240`, `maximumThickness = 480`, `preferredThicknessFraction` for ~260. **Collapsible on purpose only** (`canCollapse = true`, `canCollapseFromWindowResize = false`).
+- **Middle item:** the calendar, `minimumThickness = 420`.
+- **Right item:** `NSSplitViewItem(inspectorWithViewController: inspectorVC)` — a narrow trailing column (`minimumThickness = 260`, `maximumThickness = 380`, default ~300), **collapsible**. A full-width strip under the calendar was tried and rejected: the inspector holds a title, a date, and a note, which is far too little content for a 700pt-wide pane. Toggled by `NSSplitViewController.toggleInspector(_:)` from the trailing toolbar button and View → Show Inspector (⌥⌘I). File → Get Info (⌘I) uncollapses it and focuses the note, and stays selection-gated on tasks.
+- **Holding priorities must stay below `NSLayoutConstraint.Priority(500)`** (sidebar 260, calendar 240, inspector 260). At `.defaultHigh` a pane outranks the window's own resizing priority, so its restored thickness becomes a hard window minimum that the split autosave then feeds back — the window's minimum height grew on every launch until it could not be resized at all. Note this inverts the earlier "sidebar holding priority **low**" guidance: higher priority means *resists resizing*, so the sidebar needs the **higher** value to keep its width while the calendar absorbs slack.
+- Autosave names: `MainHorizontalSplit.v3`. Bump the suffix whenever the item layout changes; a stored position from a different pane structure restores as a broken (or zero-width) pane.
 
 A thin `NSToolbar` on the window (icon-only, `.unifiedCompact` if available, else default). Toolbar items have the same selectors as the File menu; validation is `MainSplitViewController.validateToolbarItem`.
 
@@ -415,6 +435,23 @@ Configuration: Default (the unnamed default configuration; do not create extra c
 | `project` | Project | to-one, **optional** | `tasks` | Nullify | n/a |
 | `parentTask` | Task | to-one, **optional** | `subtasks` | Nullify | n/a |
 | `subtasks` | Task | to-many | `parentTask` | **Cascade** | **NO** |
+
+**Entity `DayNote`**
+
+A note attached to a calendar day. Deliberately **not** an `OutlineNode`: no title, no parent, no children, and — by design — **no deadline and no completion flag**. A day is addressed by its date, not by a position in the project tree, so it never appears in the outline or in a deadline fetch.
+
+| Attribute | Type | Optional | Assigned by |
+| --- | --- | --- | --- |
+| `uuid` | UUID | NO | `ModelController.setDayNote` |
+| `day` | Date | NO | `setDayNote` (start-of-day; the row's identity) |
+| `note` | String | YES | `setDayNote` |
+| `createdAt` / `updatedAt` | Date | NO | `setDayNote` |
+
+No relationships. Non-unique index on `day`.
+
+**Lifecycle:** rows are created lazily on the first non-empty write and **deleted when the text is cleared**, so paging through days never accumulates empty rows. `dayNote(for:)` is a pure fetch and never inserts — binding the inspector to a day must not dirty the context.
+
+**Duplicates are legal.** `day` carries no uniqueness constraint (CloudKit forbids them), so a future sync could produce two rows for one date. `fetchedDayNote(for:)` orders by `(createdAt, uuid)` and takes the first — the same tie-break the outline uses for duplicate `sortIndex` values.
 
 No other entities in v1. No fetched properties. Add a **non-unique** index on `Task.deadline` (SQLite index, not a uniqueness constraint).
 
@@ -685,7 +722,7 @@ Note-typing vs Core Data undo is specified in §7.
 
 #### 3.9 Scale assumptions
 
-Single user, local SSD. Expected working set: tens of projects, hundreds of tasks, tens of deadlines in a visible 42-day grid. Outline reload-on-save is O(visible rows). Grid fetch is one indexed predicate. No paging.
+Single user, local SSD. Expected working set: tens of projects, hundreds of tasks, tens of deadlines across the visible weeks. Outline reload-on-save is O(visible rows). Grid fetch is one indexed predicate. No paging.
 
 ---
 
@@ -1089,6 +1126,8 @@ Notes and deadlines are not visible in the outline. Without an inspector they ar
 4. “Notes” label.
 5. `NSScrollView` wrapping `NSTextView` (`isRichText = false`, `usesFontPanel = false`, system body font, `delegate = inspector` so `textView(_:undoManagerFor:)` can return `noteUndoManager`). Plain `String` only — not rich text.
 
+The inspector has three modes, chosen by what holds the selection: **task** (completion, due date, note), **project** (title + task count, no note), and **day** (formatted date + note only — no completion control, no due-date row). The note plumbing — dirty buffer, 0.4s debounce, flush-on-switch, failed-flush revert — is shared: the debounce is keyed on a `NoteTarget` (`.task(NSManagedObjectID)` / `.day(Date)`) rather than an object ID, because a day has no row until its note first exists.
+
 | Selection | Inspector |
 | --- | --- |
 | None | Disabled, placeholder “Select a task” |
@@ -1132,21 +1171,191 @@ Required wiring:
 
 ---
 
-### 8. Monthly calendar view
+### 7A. Rich text notes (planned)
+
+Notes gain **bold, italic, underline, bulleted lists and numbered lists, with nesting** — and, amended 2026-08-15, **hyperlinks** (see §7A.2). Explicitly **not** font family, size, or colour: the constraint is enforced on input, not merely by withholding the commands.
+
+#### 7A.1 Storage — RTF, with a plain-text shadow
+
+`NSTextView` reads and writes RTF natively (`textStorage.rtf(from:documentAttributes:)` / `NSAttributedString(rtf:documentAttributes:)`), and RTF round-trips every feature above, including nested `NSTextList` stacks. That buys the whole format with no parser of our own.
+
+Both `Task` and `DayNote` gain one attribute:
+
+| Attribute | Type | Optional | Holds |
+| --- | --- | --- | --- |
+| `noteRTF` | Binary Data | YES | The real content. **`allowsExternalBinaryDataStorage` OFF.** |
+| `note` | String | YES | Plain-text shadow (`attributed.string`), unchanged |
+
+The shadow is deliberate redundancy: existing rows stay readable, the migration is additive and inferrable, and a cheap plain column remains for a future search predicate. Drift is contained because `ModelController` is the only writer and sets both fields together.
+
+**Amends the “no binary attributes” rule in §3.2.** That rule was over-broad. `NSPersistentCloudKitContainer` supports Binary Data attributes; what it rejects is **external** binary storage. Binary Data is legal here as long as `allowsExternalBinaryDataStorage` stays off.
+
+*Rejected: Markdown.* No underline in CommonMark, and Foundation parses Markdown but will not serialise it back, so every save would be lossy.
+
+#### 7A.2 The sanitiser is the feature
+
+“No size or colour” is achieved by rejecting them on input. Paste is the leak — anything from a browser arrives with fonts, sizes and colours. One function, applied on **load**, **paste** and **drop**:
+
+- `.font` → keep only the bold/italic traits; force family and size back to `.systemFont(ofSize: 13)`
+- `.underlineStyle` → single only
+- `.paragraphStyle` → keep only `textLists`; **recompute indents from the list depth** rather than trusting pasted values
+- `.link` → kept, normalised to a `URL` *(amended 2026-08-15 — a planner note is where ticket and meeting URLs land; the link appearance comes from the text view, never from a stored colour)*
+- strip everything else: colour, background, strikethrough, kern, attachments — including the U+FFFC placeholder character an attachment hangs on — and superscript
+
+`textView(_:shouldChangeTypingAttributesTo:)` clamps what typing can introduce. `isRichText` becomes `true`; `usesFontPanel` and `importsGraphics` stay `false`.
+
+The leak is also closed at the flavor level *(2026-08-15)*: `readablePasteboardTypes` is restricted to **RTF, HTML and plain text**, so a WebArchive or RTFD drop can never reach the buffer through a type the sanitiser does not decode — AppKit picks the flavor before `readSelection` runs, so intercepting types one by one cannot be airtight. HTML is decoded and then sanitised like everything else; it is the only rich flavor browsers actually put on the pasteboard, so without it a paste from Safari silently arrived plain. Content that fails to decode is refused outright, never handed to `super` to insert raw. Typed URLs become links via `isAutomaticLinkDetectionEnabled`.
+
+#### 7A.3 Nested lists
+
+`NSParagraphStyle.textLists` **is** the nesting stack — outermost first — so a second-level item carries two `NSTextList`s. Depth is capped at **5**.
+
+| Level | Bulleted | Numbered |
+| --- | --- | --- |
+| 1 | `disc` | `decimal` |
+| 2 | `circle` | `lowerAlpha` |
+| 3 | `square` | `lowerRoman` |
+| 4+ | cycle | cycle |
+
+`firstLineHeadIndent` / `headIndent` scale at 20pt per level and are always derived from `textLists.count`, never stored independently — that keeps pasted content consistent with typed content.
+
+**An empty note has no characters to attribute** — and TextKit renders markers from **storage only**, never from typing attributes (verified by offscreen rendering: an empty final paragraph draws no marker whatever the typing attributes say). The original plan — park the style in `typingAttributes` until something is typed — therefore produced invisible edits: toggling a list on an empty line, Tab on a fresh item, and Return-continuation at the end of the note all showed nothing until the next character. *(Amended 2026-08-15:)* a list edit whose result is still a list **materialises** the charless paragraph instead — it gets a newline to carry the style, caret kept in front — so the marker renders immediately; the same happens when Return grows a list at the end of the note. A blank line that already owns a newline just carries the style on that newline. Edits that *leave* the list still go through typing attributes: there is no marker to show. State queries (`isInList`, the format bar) read typing attributes when there is no selection, mirroring how bold and italic already behave.
+
+Interaction, matching Notes:
+
+- **Tab / Shift-Tab** indent and outdent, but **only when the caret is inside a list paragraph**; elsewhere Tab keeps its normal meaning. Implemented by overriding `insertTab:` / `insertBacktab:`.
+- **Return** on an empty item outdents one level; at level 1 it exits the list.
+- Renumbering is level-aware: each sublist restarts, and the parent level resumes its own sequence after a nested block ends.
+
+Menu items for Increase/Decrease Indent carry **no key equivalent**: the standard ⌘[ / ⌘] already belong to Previous/Next Week (§6.3), and Tab/Shift-Tab is the interaction people actually use inside a note.
+
+**TextKit draws the markers.** The spike (§7A.6) overturned the assumption this plan was written on: given `textLists`, TextKit renders the marker *and* numbers it, restarting nested levels and resuming the parent afterwards. So the code never writes marker characters — an early attempt did, and produced two markers per line (`1  1.  Pack boxes`). Consequences:
+
+- There is **no renumbering pass** to write or maintain.
+- List edits are **attribute-only** with one deliberate exception: the text never changes, ranges stay valid, the caret does not move, and one edit is one undo step. The exception is the materialised newline for a charless paragraph (§ above) — a real newline, never a marker glyph, inserted through `shouldChangeText`/`didChangeText` so it shares the command's undo group.
+- The plain-text shadow stays free of marker punctuation, so `note` is clean for search.
+
+The real work is therefore key handling, not markers: Tab/Shift-Tab, Return-continues/exits, and Backspace-at-start.
+
+#### 7A.4 Commands and shortcuts
+
+A new **Format** menu, validated only while the notes view is first responder, with state reflecting the selection:
+
+| Command | Shortcut |
+| --- | --- |
+| Bold | ⌘B |
+| Italic | ⌘I |
+| Underline | ⌘U |
+| Bulleted List | ⇧⌘8 |
+| Numbered List | ⇧⌘7 |
+| Increase / Decrease Indent | *(none — Tab / Shift-Tab)* |
+
+**⌘I moved to Italic** in phase 2, taking the standard binding. View → Show Inspector keeps **⌥⌘I**, the standard macOS Inspector binding.
+
+File → Get Info moved to **⇧⌘I** rather than losing its shortcut outright. Dropping it left no keyboard route into the note at all — Show Inspector only toggles the pane, it does not focus the field — which surfaced immediately in testing. ⇧⌘I is free and adjacent to the other two.
+
+Alongside the menu, the inspector carries a three-segment **format bar** (B / I / U) above the note. It is `refusesFirstResponder`, so clicking a segment leaves the caret and its selection in place, and focus is explicitly returned to the note afterwards. Its state is driven from the text view, which is the single source of truth: `NoteTextView.onFormattingStateChange` fires on both selection moves and formatting changes, since selection alone never reaches `textDidChange`.
+
+**Mixed selections read as off.** A trait counts as on only when the *whole* selection carries it, so one press over a partly-bold run makes it uniformly bold rather than stripping it.
+
+Bold and Italic are implemented as our own `toggleBold:` / `toggleItalic:` rather than routed through `NSFontManager.addFontTrait:` — that avoids font-panel coupling and makes “traits only, never size” structurally true. Each list toggle and indent change is wrapped in one undo group on `noteUndoManager`.
+
+#### 7A.5 Phasing
+
+1. ~~**Storage and sanitiser.**~~ **Done.** New attribute, `ModelController` writes both fields, inspector loads/saves attributed text, sanitiser applied on load, paste and drop. `persistBoundNote` compares RTF as well as the string; `shouldReplaceNotes` compares attributed content.
+2. ~~**Bold / italic / underline.**~~ **Done.** Format menu, format bar, validation, shortcut reassignment.
+3. ~~**Lists, including nesting.**~~ **Done.** Tab/Shift-Tab, Return/Backspace behaviour, typing-attribute lists on empty lines. Markers and numbering come free from TextKit.
+
+#### 7A.6 Risks
+
+~~**Spike before scheduling phase 3.**~~ **Done, and it changed the design.** TextKit 2 handles `NSTextList` well: nested stacks survive an RTF round trip with formats and indents intact, and markers are drawn *and numbered* automatically. No TextKit 1 fallback was needed. The spike's value was negative-space: it removed the marker-insertion and renumbering machinery this section originally specified.
+
+**Shortcut spelling.** ⇧⌘7 / ⇧⌘8 must be written as `keyEquivalent="7"` plus an explicit shift+command mask. Using the shifted character (`&`, `*`) also binds, but the menu then displays **⌘&** instead of ⇧⌘7.
+
+Lesser: RTF round-trip drift across OS versions (mitigated by sanitising on every load) and ~200 bytes of RTF overhead per note (irrelevant at this scale).
+
+**Building the text view by hand has one trap.** The notes editor is constructed directly rather than via `NSTextView.scrollableTextView()`, so the document view can be the sanitising `NoteTextView` subclass. That convenience method also sets `textContainer.containerSize` to an unbounded height; building the view yourself does not, and the default is **finite** — text past it silently stops being laid out, so long notes appear truncated with no scrollbar. Set it explicitly. A test asserts the container height is unbounded.
+
+The notes field also owns all spare vertical space whenever it is showing; the bottom spacer that keeps a project's title top-aligned is hidden in that case, so the two never compete for the slack.
+
+#### 7A.7 Out of scope
+
+Colour, size, font family, images, attachments, tables, rich text in outline titles, Markdown import/export. *(Links were originally listed here; promoted to in-scope 2026-08-15.)*
+
+---
+
+### 8. Week calendar view
 
 #### 8.1 Why a custom NSView
 
-There is no AppKit month grid. EventKit’s calendar UI is for calendar events, not Planner tasks. Third-party calendars are a dependency we do not need. A SwiftUI `Calendar` in `NSHostingView` would split the UI toolkit; rejected for v1.
+There is no AppKit calendar grid. EventKit’s calendar UI is for calendar events, not Planner tasks. Third-party calendars are a dependency we do not need. A SwiftUI `Calendar` in `NSHostingView` would split the UI toolkit; rejected for v1.
 
-`MonthCalendarView: NSView` draws:
+`WeekCalendarView: NSView` draws **week columns**, not a month grid:
 
-- Header: `[ < ]  August 2026  [ > ]` and a “Today” button (Today also lives in the toolbar).
-- Weekday row: `Calendar.current.veryShortWeekdaySymbols` rotated so `firstWeekday` is respected.
-- Grid: 7 columns × 6 rows = **42 cells, always**, so the view does not jump height between months.
-- Each cell: day number (dim if the day is outside the civil month) and up to **3** title chips. If more, a `+K more` label.
-- **Spillover cells show chips.** They are not day-number-only. The fetch covers the 42-day range (§8.3).
+```
+        ┌──────────┬──────────┬──────────┐
+   MON  │  31      │   7      │  14      │
+        ├──────────┼──────────┼──────────┤
+   TUE  │   1  Sep │   8      │  15      │  ← month badge on the 1st
+        ├──────────┼──────────┼──────────┤
+   WED  │   2      │   9      │  16      │
+        ├──────────┼──────────┼──────────┤
+   THU  │   3      │  10      │  17      │
+        ├──────────┼──────────┼──────────┤
+   FRI  │   4      │  11      │  18      │
+        ├──────────┼──────────┼──────────┤
+   SAT  │   5      │  12      │  19      │  ← half height
+        ├──────────┼──────────┼──────────┤
+   SUN  │   6      │  13      │  20      │  ← half height
+        └──────────┴──────────┴──────────┘
+     ↑ weekday gutter (34pt)
+```
 
-Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility). No Auto Layout inside the 42 cells; frames come from `bounds`.
+- One column per week; **Monday at the top** down to Sunday. Every day owns a full-width row in its column.
+- Seven row bands: Mon–Fri at weight 1, Sat and Sun at weight `0.5` each. Five full rows plus two halves is exactly six rows of height — the weekend is present but costs half as much room, which is the work-week emphasis the month grid expressed by narrowing weekend *columns*.
+- A **34pt gutter** down the left carries one `MON`…`SUN` label per row, aligned to the day-number baseline. Printing the marker once per row instead of once per cell is what keeps a wide, many-column grid quiet.
+- Each cell carries its day number. The **first day of a month** additionally gets an accent-tinted badge with the abbreviated month (`Aug`), which is what supplies month context now that there is no month title.
+- Chips fill the remaining cell height; capacity is computed per cell, with a `+K more` row when it overflows.
+- No spillover concept: every visible cell is inside the fetched range by construction.
+
+Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility); frames come from `bounds`. `rowFrames(in:)`, `columnFrames(in:count:)` and `dayColumnFrames(in:count:)` (the gutter-inset variant) are static and unit-tested. Grid rules stop at the gutter so the weekday labels sit on clean background.
+
+**Header.** The range label and `‹ Today ›` navigation live in the **toolbar**, but positioned as if they were a header bar inside the calendar pane. Two `NSTrackingSeparatorToolbarItem`s do this: one at `dividerIndex: 0` (sidebar | calendar) and one at `dividerIndex: 1` (calendar | inspector). Items between them are confined to the calendar pane's width; a leading flexible space pushes the sidebar's own group up against divider 0 so it hugs the splitter the way the inspector toggle hugs divider 1:
+
+```
+(flex) [Add Project][Add Task] [Sidebar] ┊ Aug 10 – 30 2026 (flex) ‹ Today › ┊ [Inspector]
+                                         ↑ divider 0                         ↑ divider 1
+```
+
+The sidebar toggle is the **system `.toggleSidebar` item**: the delegate returns nil for that identifier and AppKit supplies it, so it keeps the standard icon, tooltip and validation. It renders as its own pill beside the Add buttons' capsule rather than merging into it, which matches the inspector toggle on the far side.
+
+**Collapsing the sidebar rearranges the leading toolbar**, following Preview:
+
+- **New Project / New Task hide** (`NSToolbarItem.isHidden`, macOS 15+). They act on the outline, so they go away with it. ⌘N still works from the File menu.
+- **The leading flexible space is removed**, so the toggle sits beside the window buttons instead of floating where the divider used to be. Re-expanding re-inserts it and the group hugs the splitter again.
+
+Both are driven by **KVO on `sidebarSplitItem.isCollapsed`**, not just the toggle action: the divider can be dragged shut and the split autosave can restore a collapsed sidebar at launch. Items are also created lazily by the toolbar, so `itemForItemIdentifier` stamps the current visibility on each one as it is built.
+
+The leading-space swap is verified by hand, not by test: `NSToolbar` does not populate `items` synchronously for an off-screen window, so a unit test around it is timing-dependent. The identifier *ordering* that produces the hugging behaviour is covered.
+
+The label draws the span bold and the year in a lighter weight and secondary colour. Both separators track live: collapsing the inspector widens the calendar, the visible week count grows, and the range label and navigation re-anchor to the new divider position on their own.
+
+Hosting these in the toolbar rather than a header view inside the pane keeps the grid flush under the title bar — an in-pane header left a dead horizontal band above the weeks. If a header view is ever reintroduced, its height constraint must be **exact**, not `>=`: the grid below has no intrinsic height, so an open-ended header absorbs the whole pane and collapses the weeks to nothing.
+
+**Visible week count** follows the pane: `weekCount(fittingWidth:)` divides by `targetColumnWidth` and clamps to 2…8. The gutter width is subtracted before the division, since it is not available to columns.
+
+Because `count = floor(available / target)`, the resulting `available / count` is always ≥ `target`: **`targetColumnWidth` is a floor on column width**, not just a hint. (The exception is the 2-column clamp, where a very narrow pane can go below it.) That floor is what guarantees chip titles fit, so it is derived rather than picked:
+
+```swift
+static let chipWidthCalibrationTitle = "Qualcomm brief due"
+static let targetColumnWidth: CGFloat = {
+    let width = (chipWidthCalibrationTitle as NSString)
+        .size(withAttributes: [.font: DeadlineChipView.titleFont]).width
+    return (width + chipTextHorizontalInset).rounded(.up)   // 130pt today
+}()
+```
+
+`chipTextHorizontalInset` sums the cell inset on both sides and the chip's bar gutter and trailing padding, so the calibration tracks any change to chip padding automatically. A test asserts the title renders whole at the minimum **using the layout manager**, not `.size()` — the final glyph's trailing side bearing means text fits a few points tighter than its measured width suggests, so a `.size()`-based assertion would be measuring the wrong thing. When it changes during layout the view calls `didChangeVisibleWeekCount`, and `CalendarViewController` rebuilds the FRC over the wider or narrower span.
 
 #### 8.2 Date storage and comparison
 
@@ -1159,13 +1368,12 @@ Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibi
 
 #### 8.3 Fetch
 
-`CalendarViewController` owns an `NSFetchedResultsController<TaskItem>`. The predicate is the **42-day grid**, closed-open, not the civil month.
+`CalendarViewController` owns an `NSFetchedResultsController<TaskItem>`. The predicate is the **visible whole weeks**, closed-open, not the civil month.
 
 ```swift
-func request(for visibleMonth: Date, calendar: Calendar = .current) -> NSFetchRequest<TaskItem> {
-    let days = calendar.daysInMonthGrid(for: visibleMonth)   // 42 start-of-day Dates
-    let start = days[0]
-    let end = calendar.date(byAdding: .day, value: 1, to: days[41])!
+func request(for visibleWeekStart: Date, weekCount: Int, calendar: Calendar = .current) -> NSFetchRequest<TaskItem> {
+    let start = calendar.startOfWeek(for: visibleWeekStart)      // always a Monday
+    let end = calendar.endOfWeeks(from: start, count: weekCount) // exclusive
     let req = TaskItem.fetchRequest()   // entityName: "Task"
     req.predicate = NSPredicate(format: "deadline >= %@ AND deadline < %@", start as NSDate, end as NSDate)
     req.sortDescriptors = [
@@ -1177,38 +1385,37 @@ func request(for visibleMonth: Date, calendar: Calendar = .current) -> NSFetchRe
 }
 ```
 
-Spillover chips are therefore real. Changing `visibleMonth` after a spillover click is only a navigation/FRC rebuild; chips do not “pop in.”
-
-Rebuild the FRC when `SelectionModel.visibleMonth` changes (observer checks `.visibleMonth` in `changedFields`, then assigns `monthView.visibleMonth` — which must not re-enter the delegate — and recreates the FRC). FRC delegate (`controllerDidChangeContent`) maps fetched tasks to `TaskDeadlineChip` and assigns `monthView.deadlines`.
+Rebuild the FRC when `SelectionModel.visibleWeekStart` changes (observer checks `.visibleWeek` in `changedFields`, then assigns `weekView.visibleWeekStart` — which must not re-enter the delegate — and recreates the FRC) **and** when the view reports a new visible week count. FRC delegate (`controllerDidChangeContent`) maps fetched tasks to `TaskDeadlineChip` and assigns `weekView.deadlines`.
 
 Projects never appear. Tasks with `deadline == nil` never appear. **Completed tasks with a deadline still appear** — do not add `isCompleted == false` to the predicate.
 
 `TaskDeadlineChip` includes `isCompleted`. The day cell draws completed chips dimmed (`tertiaryLabelColor`) and struck through. Incomplete chips use the normal label / accent-when-selected appearance.
 
-`ModelController.tasks(deadlineInMonthOf:calendar:)` used by tests should have a sibling `tasks(deadlineInGridOf:calendar:)` that uses the same 42-day range. Test both: civil-month edges *and* a deadline on a leading/trailing spillover day is returned by the grid fetch.
+`ModelController.tasks(deadlineInMonthOf:calendar:)` used by tests has a sibling `tasks(deadlineInWeeksFrom:count:calendar:)` over the same week range. Test both: civil-month edges *and* that the week fetch covers the first and last visible day while excluding the days either side, and that raising `count` widens the window.
 
 #### 8.4 Interaction
 
 | Gesture | v1 behavior |
 | --- | --- |
-| Click a deadline chip | `selection.selectNode(uuid:)` + `selectDay` for that day. Outline reveals (expand ancestors, select, scroll, focus outline). Inspector rebinds. **Does not** clear selection. |
-| Click a day number / empty cell | `selection.selectDay` only. Subtle day highlight. **Does not** create a task. **Does not** clear outline selection. |
+| Click a deadline chip | `selection.selectNode(uuid:)` only. Outline reveals (expand ancestors, select, scroll, focus outline). Inspector rebinds to the task. Any selected day is released. |
+| Click a day number / empty cell | `selection.selectDay`. Subtle day highlight; the inspector binds that day's note. **Does not** create a task, and **does not** create a `DayNote` row until text is typed. Clears the outline selection — selection is exclusive. |
 | Click `+K more` | Same as clicking the day (select-day only). Does not pick a hidden task. |
 | Double-click empty day | No-op in v1. |
-| Prev/Next month | Gesture calls `delegate.monthCalendar(_:didChangeVisibleMonth:)` **only**. The view does **not** assign `self.visibleMonth`. |
+| Prev/Next week | Gesture calls `delegate.weekCalendar(_:didChangeVisibleWeekStart:)` **only**. The view does **not** assign `self.visibleWeekStart`. |
 | Today | Same: delegate only (or toolbar `revealToday:` writes `SelectionModel` directly). |
-| Click a spillover day (leading/trailing) | Delegate `didSelectDay` + `didChangeVisibleMonth`. Chips were already visible. |
+| Arrow keys | Up/Down walk a day within the column; Left/Right jump a whole week, matching the layout. Delegate `didSelectDay`, plus `didChangeVisibleWeekStart` only when the new day falls off screen. With nothing selected the first press lands on **today** rather than a day away from it. |
+| Taking focus | **Never changes the selection.** The view deliberately does not select a day in `becomeFirstResponder`: collapsing a pane moves first responder into the calendar, and that must not silently retarget the inspector. Seeding a day is the first arrow press's job. |
 
-**`visibleMonth` source of truth and no-loop rule:**
+**`visibleWeekStart` source of truth and no-loop rule:**
 
-- `SelectionModel.visibleMonth` is the only source of truth.
-- User gestures on `MonthCalendarView` call the delegate; they do **not** mutate `visibleMonth` themselves.
-- `CalendarViewController` writes `selection.setVisibleMonth(...)`.
-- The selection observer (when `.visibleMonth` is in `changedFields`) assigns `monthView.visibleMonth` and rebuilds the FRC.
-- The `visibleMonth` setter on the view must **not** invoke the delegate. Use a private `isApplyingSelection` flag or split “apply” vs “gesture” paths.
+- `SelectionModel.visibleWeekStart` is the only source of truth, and is always a Monday.
+- User gestures on `WeekCalendarView` call the delegate; they do **not** mutate `visibleWeekStart` themselves.
+- `CalendarViewController` writes `selection.setVisibleWeekStart(...)`.
+- The selection observer (when `.visibleWeek` is in `changedFields`) assigns `weekView.visibleWeekStart` and rebuilds the FRC.
+- The `visibleWeekStart` setter on the view must **not** invoke the delegate; it only re-applies the cells.
 - `revealToday()` on the view is a convenience that only calls the delegate with `Date()`; it does not set the property.
 
-Highlight: if `selection.selectedNodeUUID` matches a chip on screen, that chip uses `NSColor.controlAccentColor`. Today’s cell gets a filled circle on the day number. The calendar observer updates `selectedTaskID` / `selectedDay` only when `.node` / `.day` changed.
+Highlight: if `selection.selectedNodeUUID` matches a chip on screen, that chip uses `NSColor.controlAccentColor`. Today’s cell gets a filled **capsule** behind the day number — see §8.6.9 for why it is not a circle. The calendar observer updates `selectedTaskID` / `selectedDay` only when `.node` / `.day` changed.
 
 #### 8.5 Calendar helpers
 
@@ -1217,11 +1424,234 @@ Highlight: if `selection.selectedNodeUUID` matches a chip on screen, that chip u
 ```swift
 func startOfMonth(for date: Date) -> Date
 func endOfMonth(for date: Date) -> Date          // start of next month
-func daysInMonthGrid(for date: Date) -> [Date]   // 42 start-of-day Dates
+func startOfWeek(for date: Date) -> Date         // always a Monday
+func weekStarts(from: Date, count: Int) -> [Date]
+func days(inWeekStartingAt: Date) -> [Date]      // 7 start-of-day Dates, Monday first
+func endOfWeeks(from: Date, count: Int) -> Date  // exclusive
 func monthYearString(for date: Date) -> String   // “August 2026”
 ```
 
 Always `Calendar.current`. Do not cache a static `Calendar(identifier: .gregorian)` without the current timezone.
+
+---
+
+### 8.6 External calendar events (Outlook, read-only)
+
+The grid shows the user's Outlook calendar alongside their own deadlines. Events are **read-only**, **never persisted**, and rendered so they cannot be confused with a task.
+
+#### 8.6.1 Shape of the data
+
+```swift
+/// One occurrence as the source reports it. Sendable: crosses actors.
+struct CalendarEvent: Hashable, Sendable {
+    let id: String            // sourceID + UID + occurrence start
+    let title: String
+    let start: Date
+    let end: Date             // exclusive
+    let isAllDay: Bool
+    let location: String?
+    let organizer: String?
+    let calendarName: String?
+    let isRecurring: Bool
+    let isRescheduled: Bool   // an occurrence moved off its usual slot
+}
+
+/// One row in one day cell. Multi-day events expand to one chip per day.
+struct CalendarEventChip: Hashable, Sendable {
+    let id: String            // event id + day
+    let title: String
+    let day: Date             // start-of-day — matches TaskDeadlineChip.day
+    let startTime: Date?      // nil for all-day and for continuation days
+    let isAllDay: Bool
+    let continuesFromPreviousDay: Bool
+    let continuesToNextDay: Bool
+    // tooltip-only:
+    let location: String?
+    let organizer: String?
+    let calendarName: String?
+    let isRecurring: Bool
+    let isRescheduled: Bool
+}
+```
+
+`CalendarEventChip` mirrors `TaskDeadlineChip`'s `(id, title, day)` so the grid's existing group-by-`startOfDay` needs no restructuring.
+
+**No intra-day time layout.** Chips stack in list order; the start time is text in the label and nothing more. Order within a day is `(isAllDay desc, start, title, id)` — deterministic so the grid does not shuffle between refreshes, but it is list order, not a time axis.
+
+#### 8.6.2 Source protocol
+
+```swift
+protocol CalendarEventSource: Sendable {
+    var sourceID: String { get }
+    var displayName: String { get }
+    func events(in range: Range<Date>) async throws -> [CalendarEvent]
+}
+```
+
+Not `@MainActor`. Implementations: `OutlookEventSource` (§8.6.4), `NullEventSource` (returns `[]`, the default when Outlook is unavailable), `StubEventSource` (tests). The protocol is the seam that keeps every Apple-event concern out of PRs 11, 12 and 14.
+
+#### 8.6.3 Window
+
+`EventWindow.current()` is `[startOfWeek(today − 2 months), startOfWeek(today + 3 months) + 1 week)` — anchored on **today**, not on `visibleWeekStart`, and snapped outward to Mondays so a window edge never bisects a visible column. Recomputed on launch, `NSCalendarDayChanged`, and manual refresh.
+
+The bound applies **asymmetrically by record kind**, which is the part that is easy to get wrong:
+
+| Record | Fetch bound |
+| --- | --- |
+| Plain events | The window |
+| Recurring masters | **Unbounded** — a series that began in 2018 still occurs this week |
+| Exceptions | **Unbounded** — an occurrence moved *out* of the window must still suppress the slot it vacated |
+| Expansion output | The window |
+
+**Outside the window the grid shows nothing, silently.** Marking every out-of-range cell would be the loudest thing on screen — the same argument §8.1 makes about the weekday gutter. The range is surfaced in the refresh control's tooltip instead.
+
+No age cutoff on the master scan. CalendarList's `--max-age-months` defaults to 0 for a measured reason: cost tracks query count, so a cutoff buys ~0.2s of a ~1.9s run while silently dropping whole long-running series (38 of 70 events across four series at a six-month cutoff). Do not add the knob.
+
+#### 8.6.4 `OutlookEventSource`
+
+Three `whose` queries, each asking the matching collection for `properties` so one Apple event returns every field of every match:
+
+| # | Query | Bounded |
+| --- | --- | --- |
+| 1 | `isRecurring == NO AND isOccurrence == NO AND endTime >= start AND startTime <= end` | window |
+| 2 | `isRecurring == YES` — masters, with `recurrence` and `icalendarData` | no |
+| 3 | `isOccurrence == YES` — exceptions, with `recurrenceId` and `icalendarData` | no |
+
+Exceptions are joined to masters by **iCalendar UID**, read from the `icalendarData` already in the properties dictionaries. CalendarList uses a fourth query (`exceptions.master.id`); the UID join costs 10ms against that query's 622ms and agreed on 35/35 exceptions in the spike.
+
+Setup and guards:
+
+- **Never launch Outlook.** `SBApplication` launches its target lazily on first send, so check `NSRunningApplication.runningApplications(withBundleIdentifier:)` first and fail with “Outlook isn't running” if empty.
+- `sendMode = [.waitForReply, .neverInteract]` so Outlook can never raise a dialog behind the app's back; `timeout` in ticks (1/60 s).
+- `AEDeterminePermissionToAutomateTarget(…, askUserIfNeeded: false)` at startup reads TCC consent **without** prompting, so a first launch shows a quiet affordance instead of firing a system dialog. Prompt only on an explicit refresh.
+- Never call `get occurrence of` — it materializes a stored exception as a side effect, which would be a write.
+
+**Threading.** A dedicated **serial `DispatchQueue`**, not an actor: Apple events block the caller and `SBApplication` wants thread affinity, which the cooperative pool does not provide. `events(in:)` wraps the synchronous fetch in `withCheckedThrowingContinuation`. Only `[CalendarEvent]` crosses back, so no ScriptingBridge object — none of which are `Sendable` — ever leaves the queue. Combined with events never reaching Core Data, **no managed object and no SB object ever crosses a thread boundary in this feature.**
+
+#### 8.6.5 ScriptingBridge facts of life
+
+Each of these cost a debugging cycle in the spike; none are guessable from the docs.
+
+1. **There is no generated header at all.** `sdp`-generated headers do not link from Swift (`Undefined symbols: _OBJC_CLASS_$_Outlook*`) because the classes exist only at runtime. Declaring `@objc` protocols instead does not rescue it either: the object `SBApplication` vends is an `SBScriptableApplication`, which a conformance category on `SBApplication` does not reach, so the protocol cast fails at runtime. Everything is therefore dispatched **by selector name**, and `OutlookScripting.swift` holds that vocabulary in one place — those strings *are* the API contract, since a typo is a runtime nil rather than a compile error. Re-verify against a new Outlook build by regenerating `sdef` and grepping the Calendar Suite; the sdef is not checked in, because a 170KB blob nobody diffs is not a contract.
+2. **`perform()` on a primitive-returning selector segfaults.** `id` returns `NSInteger`, and `perform` reads it as an object pointer. Use KVC or `array(byApplying:)`, which box correctly.
+3. **`array(byApplying:)` drops nil results**, so per-property arrays are **not index-aligned** — a calendar with a null name shifts every later index, and the code silently reads the wrong object. Always take one `properties` dictionary per object. This is a correctness argument for `properties`, independent of the speed one.
+4. **Enum properties arrive as `NSAppleEventDescriptor`, not `String`.** JXA yields `"weekly"`; ScriptingBridge yields `'eRwp'`. Decode with `enumCodeValue`:
+
+   | Recurrence type | Code | | End type | Code |
+   | --- | --- | --- | --- | --- |
+   | daily | `eRdp` | | never | `eNEt` |
+   | weekly | `eRwp` | | until date | `eEDt` |
+   | relative monthly | `eRrm` | | after N | `eENt` |
+   | absolute monthly | `eRam` | | | |
+   | relative yearly | `eRry` | | | |
+   | absolute yearly | `eRay` | | | |
+
+5. `daysOfWeek` is a nested dictionary of booleans keyed `sunday`…`saturday`. The sdef also declares `allDays` / `weekdays` / `weekends` aggregates, but **no observed record carried them** — Outlook expands them into the individual flags first. The decoder honours them anyway, since doing so costs nothing.
+6. **An Exchange account does not answer `properties`.** The bulk call returns an *empty* array rather than failing, which strands the fetch on a bogus "no Exchange accounts". Accounts are therefore read one object at a time by KVC — there are only ever one to three, and per-object reads are index-safe by construction. Calendars and events do answer `properties` normally. (`perform()` cannot be used for this: `id` returns `NSInteger` and `perform` reads the integer as an object pointer, which segfaults.)
+7. `ordinal`, `dayOfMonth` and `monthNumber` are **absent keys**, not null values, when the pattern does not use them; `location` is `NSNull` rather than an absent key when empty. Every read has to tolerate both.
+
+#### 8.6.6 Recurrence expansion
+
+Outlook exposes a series as one master at its **first** occurrence plus one exception per individually moved, edited or cancelled slot. Listing a range means replaying the rule locally. This is the bulk of the feature and it is pure, synchronous, fully testable Swift.
+
+```
+Planner/Support/Outlook/
+├── OutlookRecurrenceRule.swift   # normalized rule
+├── OutlookRecurrence.swift       # lazy slot sequence, expansion, series end bound
+├── OutlookExceptions.swift       # suppression index; exact-then-fuzzy slot claiming
+├── OutlookAgenda.swift           # plain + expanded + exceptions -> [CalendarEvent]
+└── ICalendar.swift               # EXDATE extraction, UID extraction
+```
+
+Every date computation uses `Calendar.current`, per §8.5.
+
+Rules that must survive the port — each is a bug someone already paid for:
+
+1. **Six rule types.** “Every weekday” arrives as a *daily* rule carrying a Mon–Fri mask, not a weekly rule. An unrecognized type still yields its first occurrence, never zero.
+2. **Ordinal 5 means “last”**, and anything past the end of the month clamps to the last match.
+3. **Short months clamp**: a 31st-of-the-month series lands on Feb 28/29.
+4. **Count-limited series count from the series start**, not from the window, so occurrences before the window must still be generated (then discarded) or the tail runs too long.
+5. **`MAX_SLOTS = 20_000`** guards a malformed rule. As a `prefix()` on the lazy sequence this doubles as the termination condition.
+6. **The half-day nudge.** Outlook writes all-day events and series end dates as UTC midnight, which reads as *the previous day* in US Eastern. `allDayBoundary(d) = startOfDay(d + 12h)` recovers the intended day under either convention and never moves a value already at local midnight. Applies to both `UNTIL` and `DTSTART;VALUE=DATE`. **Get this wrong and every all-day event is off by one**, in a way that looks like a timezone bug forever.
+7. **Exception reconciliation**: an exact pass at 60s tolerance across *all* exceptions first, then a fuzzy pass at `min(26h, smallestGap / 2)`, nearest-wins, one claim per slot. The two-pass order is what stops a well-formed `recurrence id` from losing its slot to a shifted neighbour.
+8. **EXDATEs**: a deleted occurrence has no record and no exception — it exists *only* as an `EXDATE` line in `icalendarData`. Unfold iCalendar's 75-character line folding before matching; parse as wall-clock local; feed into the same claim mechanism as exceptions.
+9. **Cancelled occurrences** are detected by the `^Cancell?ed:\s*` subject prefix. Outlook exposes no flag. Port the limitation verbatim (English-only) rather than inventing a worse heuristic.
+
+#### 8.6.7 Spike results (2026-08-14, Outlook 16.103.2)
+
+Measured against a live calendar of 1335 events over a 3-month window:
+
+| Approach | Cost |
+| --- | --- |
+| `whose` → `arrayByApplyingSelector("properties")` | **~0.4s per query** — one Apple event |
+| Per-property bulk | ~0.39s **each** |
+| Naive per-object | ~0.41s **per property read** (≈4 min for one window) |
+
+`filteredArrayUsingPredicate:` builds a lazy `SBElementArray` in 0.1ms and translates to a real `whose` clause. Three production queries total **~1.9s**, matching the JXA implementation. Sample: 16 masters, 35 exceptions, 22 plain events in-window, 56 EXDATE lines.
+
+**Not validated against live data:** that calendar contains only weekly (`eRwp`) and relative-monthly (`eRrm`) series and **no** count-limited (`eENt`) series. Daily, absolute-monthly, both yearly types, and count-limited termination are covered by unit tests only. “It worked against the real calendar” is therefore not an acceptance signal for the expansion PR.
+
+**End-to-end result (PR 13, same calendar).** 195 events over the full five-month window in **3.5s**, all sorted, all inside the window, ids unique, expanding to 224 chips across 97 days. The all-day path is the part live data confirms best: 17 single-day events each snapped to exactly midnight → next midnight, plus three genuine multi-day blocks of 5, 12 and 15 days, giving 49 all-day chips. An off-by-one nudge would show as 20:00 boundaries or a shifted day, and does not.
+
+#### 8.6.8 `EventCoordinator`
+
+```swift
+@MainActor
+final class EventCoordinator {
+    enum State: Equatable { case idle, loading, loaded(Date), failed(String) }
+    private(set) var state: State
+    private(set) var window: Range<Date>
+    func refresh()
+    func chips(forDay day: Date) -> [CalendarEventChip]
+}
+```
+
+- `refresh()` cancels any in-flight `Task` and starts a new one. A generation counter plus a window equality check gate the apply step, so a late response for a superseded window is dropped rather than painted.
+- **A failed refresh keeps the previously loaded chips.** Blanking the grid on a transient failure is worse than showing stale events; `state` becomes `.failed` and the chips stand.
+- A 30s coordinator-level backstop guarantees the UI leaves `.loading` even behind a source that neither returns nor throws. Sources set their own timeouts as well.
+- Window filtering and per-day chip expansion happen **inside** the coordinator, so a source returning out-of-range events cannot leak them onto the grid.
+- Publishes `.plannerEventsDidChange` (`object: coordinator`), matching the `SelectionModel` notification vocabulary — there are two consumers, the calendar VC and the toolbar indicator.
+
+Ownership follows §2: `AppDelegate` constructs it and injects through `MainSplitViewController` → `CalendarViewController`. No singleton.
+
+#### 8.6.9 Rendering
+
+`WeekCalendarView` gains `var events: [CalendarEventChip]` beside `deadlines`, feeding the same grouping. `DayCellView` composes **one ordered row list — task chips first, then event chips — sharing a single `+K more`**, so the existing `visibleChipCount` capacity math generalizes over rows rather than being duplicated.
+
+Tasks win the top slots deliberately: this is a task planner, and a meeting-heavy Tuesday must not push a deadline out of sight. Consequence to accept: a half-height weekend row fits ~1 row, so a weekend with a deadline *and* an event shows the deadline plus `+1 more` — consistent with the weekend de-emphasis decision.
+
+| | Task chip | Event row |
+| --- | --- | --- |
+| Leading mark | 3pt rounded **bar**, accent/red/tertiary | 4pt **dot**, secondary |
+| Title color | `.labelColor` / accent / red | `.secondaryLabelColor` |
+| Font | 11pt **medium** | 11pt **regular** |
+| Text | title | the subject alone — **no time** |
+| Height | 18pt | 16pt |
+| Selection | accent fill + accent title | **none, ever** |
+
+A filled tinted capsule was considered and rejected: heavier than a task chip, so secondary content would dominate the grid.
+
+**The grid shows no time at all.** Planner is not a calendar: an event is context for the day's deadlines, not an appointment to be read off the grid, so a time prefix spends characters of subject on something the user is not here to do. It also means event labels get the same width budget as task titles, so the `targetColumnWidth` calibration (§8.1) covers both.
+
+The time is not lost, only relocated: the **tooltip** carries the full range on hover, and the **VoiceOver label** carries it too — a screen-reader user has no hover, so putting it in the spoken label is what keeps the two at parity rather than what breaks it. Both use a cached `DateFormatter` with template `"j:mm"` (locale-aware 12/24h), keyed on the locale identifier rather than invalidated by notification, so a stale format is impossible by construction.
+
+**Capacity is a greedy top-down fill, not a slot count**, because task rows (18pt) and event rows (16pt) are different heights and a uniform divisor would either waste a row or overflow the cell. Rows are taken in order until the next would not fit; if anything is left over, trailing rows are dropped until `+K more` also fits.
+
+**Cells are short more often than the arithmetic suggests.** A weekend row is `gridHeight / 12` — half a weekday row — and a cell spends 22pt on chrome before any content. So `+K more` needs a **56pt** weekend row, i.e. a 672pt grid, i.e. roughly a 750pt window: taller than the 720pt the app opens at. Three rules keep that honest:
+
+1. **Nothing is ever positioned past the cell.** `layout` clamps each row to the space remaining and hides it below 10pt, and `+K more` is only given a line when one fits. `DayCellView` also sets `clipsToBounds` as a backstop — before this, the overflow line escaped and drew through the following day's number.
+2. **Weekend cells get a shorter header** (15pt band, 2pt pad, day number centred at 8pt rather than 10). At minimum height that takes usable space from 15.5pt — which fits nothing — to 20.5pt, enough for a real task chip. The weekday gutter aligns to the day number, so `dayNumberCenterY(isWeekend:)` is shared by both.
+3. **The today marker is fitted to the header band, not to the day number.** A circle enclosing two digits needs ~21pt, which neither the 18pt weekday band nor the 15pt weekend band has — sizing it from the label box made it overhang the cell top by 1pt and the first row by 3pt. It is a capsule instead: `height = headerHeight − 4`, `width = max(height, dayNumberWidth + 6)`, corner radius half the height. It does **not** promise an exact circle for single digits: `NSTextField.sizeToFit` bakes in its own padding, so whether "1" comes out square depends on the font, and tuning the inset to force it would break at the next font change.
+4. **Rows start `rowTopGap` below the header band** (2pt, 1pt on weekends). Without it the day number's label ends exactly where the first chip begins and the two touch — `contentPadding` was only ever subtracted when computing capacity, so it acted as bottom padding and left no gap at the top.
+5. **When the `+K more` line will not fit, the count becomes a badge** beside the day number (`15 +1`). The header band always exists, and its leading zone is free: the month label is centred and only appears on the 1st, the note dot is trailing. The badge hides rather than colliding with either. The cell's accessibility label carries the count too — VoiceOver has no tooltip, and in badge form there is no button to focus.
+
+**Column width does not change.** `targetColumnWidth` stays calibrated on `chipWidthCalibrationTitle` in the *task* chip font (§8.1). Event labels carry a time prefix and truncate sooner; that is correct, because the derived floor exists to guarantee a realistic *task* title renders whole, and widening every column to fit an event label would cost a whole week column on a narrow pane for secondary content. Full text lives in the tooltip.
+
+Interaction: clicking an event chip calls `didSelectDay`, exactly like clicking empty cell space. No context menu, no drag, no delete, no completion. The tooltip carries the full time range, location, organizer, calendar name, `↻` for a series occurrence and `(moved)` for a rescheduled one — none of which are drawn in the grid, where at 11pt in a 130pt column a glyph has to earn its character of subject.
+
+Accessibility carries the distinction the dot cannot: role `.staticText` (not `.button`) with a label like `"9:30 AM to 10:00 AM, Design review, Work, Event"`. The trailing “Event” is the part that matters.
+
+**Empty state:** there is no empty-state copy in the calendar today — PR 10 never added one, so there is nothing to gate. If one is introduced, it must show only when the visible span has neither tasks nor events, and be **suppressed while `state == .loading`**; otherwise it flashes on every launch and every refresh before the slow source answers.
 
 ---
 
@@ -1290,6 +1720,19 @@ Target `PlannerTests` (XCTest). Each test case uses a fresh `PersistenceControll
 | UUID lookup | `task(uuid:)` / `project(uuid:)` / `node(uuid:)` return the created object; unknown UUID returns nil |
 | Empty note | `setNote(task, "")` stores `nil` |
 
+**Calendar events (§8.6).** No test touches Outlook: one captured `properties` payload is checked in as a JSON fixture and everything downstream runs against it. The three `whose` queries are the only untested surface, which is the right place to draw that line. **Port CalendarList's fixtures** (`recurrence.test.js`, `exdates.test.js`, `agenda.test.js`) rather than rebuilding a corpus that has already been validated against a live calendar; where a Swift case disagrees with the JS one, the JS is right until proven otherwise.
+
+| Area | Cases |
+| --- | --- |
+| Rule expansion | All six types; “every weekday” as *daily + mask*; ordinal 5 = last; short-month clamping; count-from-series-start; `MAX_SLOTS`; a weekly series holding wall-clock time across a DST boundary |
+| All-day / half-day nudge | Both storage conventions; series `UNTIL`; multi-day spans; exclusive→inclusive end pullback |
+| EXDATE | Line unfolding; comma lists; `VALUE=DATE` vs datetime; a mismatched TZID absorbed by the tolerance |
+| Agenda merge | A moved occurrence appears **once** at its real time; a cancelled one disappears; exact-before-fuzzy claim order |
+| Enum decoding | Each four-char code maps to its rule/end type; an unknown code degrades to “first occurrence only”, never to a crash |
+| Coordinator | Chips empty synchronously after `refresh()`, populated when the stub resolves; a second `refresh()` supersedes the first and the first's late result is **discarded**; a thrown error sets `.failed` and **leaves prior chips intact**; out-of-window events from the source are filtered |
+| Window | Monday snapping; 2-back/3-forward across month-length and DST boundaries; day-rollover recompute |
+| Grid | N task chips then M event rows with one shared overflow; event click fires `didSelectDay`, never `didSelectTaskID`; a11y label contains the time and “Event”; a day outside the window renders no events |
+
 **Not worth automated UI tests in v1** unless XCUITest infra already exists. Highest-value later UI test: “⌘N creates a project and (after PR 7) starts editing.”
 
 ```swift
@@ -1310,8 +1753,10 @@ class PersistenceTestCase: XCTestCase {
 
 | Topic | v1 stance |
 | --- | --- |
-| Threat model | Single-user local app. No network in v1. Data is the user’s task titles/notes/deadlines on disk. |
-| Sandbox | Enabled. No file, network, or Apple Events entitlements. Store lives in the container. |
+| Threat model | Single-user local app. **No network at all**, including the calendar feed. Data is the user’s task titles/notes/deadlines on disk, plus calendar events held only in memory. |
+| Sandbox | **Disabled** (§1). Hardened Runtime stays on with `com.apple.security.automation.apple-events`. Store lives at `~/Library/Application Support/Planner/`. |
+| Apple events | Outgoing only, to `com.microsoft.Outlook`, gated by TCC Automation consent the user can revoke at any time in System Settings → Privacy & Security → Automation. Consent is keyed to the code signature, so re-signing resets it. |
+| Calendar data | **Read-only and never persisted.** No entity, no write path, no `ModelController` method. Subjects, locations and organizers are pulled into memory for the visible window and discarded on quit. Planner never contacts Exchange or Microsoft 365 — only the Outlook process already running on this Mac. |
 | Auth | None. |
 | Keychain | Unused. |
 | Notes / titles | Not encrypted at rest beyond FileVault. Acceptable for v1. |
@@ -1330,10 +1775,13 @@ enum PlannerLog {
     static let persistence = Logger(subsystem: "com.rihscb.Planner", category: "persistence")
     static let outline = Logger(subsystem: "com.rihscb.Planner", category: "outline")
     static let calendar = Logger(subsystem: "com.rihscb.Planner", category: "calendar")
+    static let events = Logger(subsystem: "com.rihscb.Planner", category: "events")
 }
 ```
 
 Log: store load success/failure, save failures (error object), FRC fetch failures. Do not log every insert at default level (`debug` is fine).
+
+For events, log refresh start/finish with **counts and elapsed time**, the resolved account and calendar *name*, and Apple-event failures. **Never log event subjects, locations, organizers, or `icalendarData`** — that is someone else's calendar content and the same rule as note bodies (§11).
 
 No metrics or alerts. If save fails, the user sees `NSAlert`.
 
@@ -1345,7 +1793,7 @@ Greenfield; there is no existing user base.
 
 1. Ship locally (Debug/Release) from Xcode.
 2. No feature flags. If a piece is incomplete, it is not merged (see PR plan).
-3. **Rollback:** delete `~/Library/Containers/com.rihscb.Planner/`. Model v1 has no migration to roll back.
+3. **Rollback:** delete `~/Library/Application Support/Planner/` and `~/Library/Preferences/com.rihscb.Planner.plist` (pre-PR-13 builds kept both under `~/Library/Containers/com.rihscb.Planner/`). Model v1 has no migration to roll back. Revoking Automation consent in System Settings is the rollback for calendar access alone.
 4. When CloudKit is enabled later, that is a new app version with entitlements + `NSPersistentCloudKitContainer` + a history consumer. Provide a backup reminder before the first sync-enabled launch (future spec).
 
 ---
@@ -1365,13 +1813,21 @@ Greenfield; there is no existing user base.
 | ⌘⌫ deletes a task while editing a note | High | `validateMenuItem` requires first responder is not a text input |
 | Note debounce writes the old buffer onto the new task | High | Flush previous, then bind; timer captures `objectID`; ignore notifications whose `changedFields` lack `.node` |
 | `window.undoManager` assignment / note keystrokes on the MOC stack | High | `windowWillReturnUndoManager`; `textView(_:undoManagerFor:)` returns a dedicated manager |
-| `visibleMonth` gesture ↔ observer loop | Medium | Gestures call delegate only; programmatic setter does not |
+| `visibleWeekStart` gesture ↔ observer loop | Medium | Gestures call delegate only; programmatic setter does not |
 | `TitleTextField` reuse accepts a raw click | High | `viewFor` clears flag; failed `editColumn` calls `endTitleEditing`; walk visible rows |
 | Create returns a rolled-back object | High | Create/delete throw after rollback; callers do not select/edit the result |
 | Sidebar dragged shut with no Show Sidebar | Medium | `canCollapse = false` |
 | Swift 6 vs AppKit Sendable | Medium | `@MainActor` on UI and `ModelController`; do not hop contexts in v1 |
 | Dual AppDelegate from MainMenu.xib | High | No AppDelegate object in the xib; `@main` only |
 | Store-load race in tests | High | `shouldAddStoreAsynchronously = false`; assert `storeLoadError` |
+| Recurrence port drift from CalendarList | High | Port the JS fixtures, not just the logic; the JS is authoritative on disagreement. Four of six rule types have no live-data coverage (§8.6.7) |
+| All-day events off by one | High | The half-day nudge (§8.6.6 rule 6), covered by tests in both storage conventions |
+| `array(byApplying:)` index misalignment reads the wrong object | High | Never zip per-property arrays; always one `properties` dictionary per object |
+| Apple event blocks the main thread | High | Dedicated serial queue; only `Sendable` values cross back |
+| Automation consent denied or revoked | Medium | Preflight without prompting; persistent quiet affordance with a deep link to Settings; empty grid, never a crash |
+| Outlook not running (the normal state for many users) | Medium | Guard on `NSRunningApplication`; never launch it; treat as an ordinary empty state, not an error banner |
+| Outlook `sdef` changes across versions | Medium | Header checked in; every property read optional-guarded; a malformed record is skipped, never fatal |
+| Stale events after a failed refresh | Low | Deliberate: keep prior chips, surface `.failed` in the toolbar. Blanking on a transient failure is worse |
 
 ---
 
@@ -1438,25 +1894,27 @@ func validateMenuItem(_ item: NSMenuItem) -> Bool
 func validateToolbarItem(_ item: NSToolbarItem) -> Bool
 ```
 
-### MonthCalendarView
+### WeekCalendarView
 
 ```swift
-protocol MonthCalendarViewDelegate: AnyObject {
-    func monthCalendar(_ view: MonthCalendarView, didSelectTaskID uuid: UUID)
-    func monthCalendar(_ view: MonthCalendarView, didSelectDay date: Date)
-    func monthCalendar(_ view: MonthCalendarView, didChangeVisibleMonth date: Date)
+protocol WeekCalendarViewDelegate: AnyObject {
+    func weekCalendar(_ view: WeekCalendarView, didSelectTaskID uuid: UUID)
+    func weekCalendar(_ view: WeekCalendarView, didSelectDay date: Date)
+    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekStart date: Date)
+    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekCount count: Int)
 }
 
-final class MonthCalendarView: NSView {
-    weak var delegate: MonthCalendarViewDelegate?
+final class WeekCalendarView: NSView {
+    weak var delegate: WeekCalendarViewDelegate?
     /// Displayed month. **Setter must not call the delegate.**
     /// Gestures call the delegate and leave this property alone;
-    /// `CalendarViewController` applies `SelectionModel.visibleMonth` here.
-    var visibleMonth: Date { get set }
+    /// `CalendarViewController` applies `SelectionModel.visibleWeekStart` here.
+    var visibleWeekStart: Date { get set }
+    private(set) var visibleWeekCount: Int
     var deadlines: [TaskDeadlineChip] { get set }
     var selectedTaskID: UUID?
     var selectedDay: Date?
-    /// Calls `didChangeVisibleMonth` with `Date()`; does not assign `visibleMonth`.
+    /// Calls `didChangeVisibleWeekStart` with `Date()`; does not assign `visibleWeekStart`.
     func revealToday()
 }
 
@@ -1468,7 +1926,39 @@ struct TaskDeadlineChip: Hashable {
 }
 ```
 
-`CalendarViewController` is the `MonthCalendarViewDelegate`. It writes `SelectionModel` only; it does not call the outline VC. It is also the only type that assigns `monthView.visibleMonth`.
+### Calendar events
+
+```swift
+protocol CalendarEventSource: Sendable {
+    var sourceID: String { get }
+    var displayName: String { get }
+    func events(in range: Range<Date>) async throws -> [CalendarEvent]
+}
+
+@MainActor
+final class EventCoordinator {
+    enum State: Equatable { case idle, loading, loaded(Date), failed(String) }
+    init(source: CalendarEventSource, calendar: Calendar = .current)
+    private(set) var state: State
+    private(set) var window: Range<Date>
+    func refresh()
+    func chips(forDay day: Date) -> [CalendarEventChip]
+}
+
+enum EventWindow {
+    static let monthsBack = 2
+    static let monthsForward = 3
+    static func current(now: Date = Date(), calendar: Calendar = .current) -> Range<Date>
+}
+
+extension Notification.Name {
+    static let plannerEventsDidChange = Notification.Name("plannerEventsDidChange")
+}
+```
+
+`CalendarEvent` / `CalendarEventChip` as in §8.6.1. `WeekCalendarView` gains `var events: [CalendarEventChip]`; there is no new delegate callback, because an event chip click reuses `didSelectDay`.
+
+`CalendarViewController` is the `WeekCalendarViewDelegate`. It writes `SelectionModel` only; it does not call the outline VC. It is also the only type that assigns `weekView.visibleWeekStart`.
 
 ---
 
@@ -1600,6 +2090,9 @@ None remain open. User decisions:
 | **Completion checkbox** | **In v1.** `isCompleted: Bool` on `Task` / `TaskItem` only, default `false`. Outline checkbox is primary; inspector mirrors it. No parent/child rollup. Calendar still shows completed tasks, dimmed/struck. Complete is non-destructive; delete stays cascade-confirm. |
 | **Notes format** | Plain `String` / `NSTextView`. Not rich text. |
 | **Deadline time zone** | Deferred. v1 stores `Date` at local start-of-day. No `timeZone` attribute. |
+| **Event source** | Microsoft Outlook running locally, read over ScriptingBridge. Read-only. |
+| **Event account / calendar** | First Exchange account, calendar named `Calendar`. `UserDefaults` overrides exist; a configuration **UI is deferred** — a wrong name lists the available calendars, which is the discovery mechanism for now. |
+| **App sandbox** | Off. Apple events to Outlook require it, and App Store submission is already a non-goal. |
 
 Architecture already locked above (not product questions): deadline on Task only; notes inspector with checkbox+picker and no Clear; how projects are created; custom month grid; 42-day fetch with spillover chips; no CloudKit in v1; no drag-and-drop in v1; cascade delete with confirmation; `SelectionModel` + split-owned actions; insert-site identity; view-based rename gate; blocking SQLite store load; no `validateForInsert` throws; inspector undo via `windowWillReturnUndoManager` + `undoManagerFor:`; create/delete throw after rollback; sidebar `canCollapse = false`.
 
@@ -1680,15 +2173,60 @@ Incremental, each PR reviewable and mergeable on its own. No feature-flag scaffo
 ### PR 9 — Month calendar grid
 
 - **Title:** Add custom month grid for task deadlines
-- **Files/components:** `MonthCalendarView.swift`, `CalendarViewController.swift`, `Calendar+Month.swift`
+- **Files/components:** `WeekCalendarView.swift`, `CalendarViewController.swift`, `Calendar+Month.swift`
 - **Depends on:** PR 8 (deadlines can be set; otherwise the grid is always empty)
-- **Description:** 7×6 grid, month navigation, Today, FRC over the **42-day** range (predicate does **not** exclude `isCompleted`). Chips (max 3 + overflow); completed chips are dimmed and struck. Gestures call the delegate only; `visibleMonth` setter does not. `CalendarViewController` writes `SelectionModel` then applies `visibleMonth` from the observer. Chip click writes `SelectionModel` (reveal happens because PR 5’s outline already observes). Day / `+K more` select-day only and do not clear outline selection. Spillover days show chips and navigate month. Projects never shown. `Calendar.current.firstWeekday`.
+- **Description:** week columns (Mon top, collapsed weekend row), week navigation, Today, FRC over the **visible whole weeks** (predicate does **not** exclude `isCompleted`). Chips sized to the cell + overflow; completed chips are dimmed and struck, overdue chips red. Gestures call the delegate only; the `visibleWeekStart` setter does not. `CalendarViewController` writes `SelectionModel` then applies `visibleWeekStart` from the observer. Chip click writes `SelectionModel` (reveal happens because PR 5’s outline already observes). Day / `+K more` select-day only and do not clear outline selection. Month badge on each month's first day. Projects never shown. Week start is hardcoded to Monday.
 
 ### PR 10 — Polish: reveal, highlight, empty calendar
 
 - **Title:** Polish calendar highlight and empty states
-- **Files/components:** outline reveal robustness, `MonthCalendarView` selected-task accent chip, empty-month copy
+- **Files/components:** outline reveal robustness, `WeekCalendarView` selected-task accent chip, empty-state copy
 - **Depends on:** PR 9
 - **Description:** Selected task’s chip uses accent color. Empty month: “No deadlines this month.” Toolbar validation already landed in PR 6; undo names already landed in PR 3. Last v1 PR.
+
+### PR 11 — Event model, window, and coordinator
+
+- **Title:** Add calendar-event model and async coordinator
+- **Files/components:** `Planner/Model/Events/CalendarEvent.swift`, `CalendarEventChip.swift`, `EventWindow.swift`, `CalendarEventSource.swift`, `NullEventSource.swift`, `EventCoordinator.swift`; `PlannerTests/EventWindowTests.swift`, `EventChipTests.swift`, `EventCoordinatorTests.swift`, `StubEventSource.swift`; injection through `AppDelegate` → `MainSplitViewController` → `CalendarViewController`
+- **Depends on:** PR 10
+- **Description:** §8.6.1, §8.6.3, §8.6.8. Value types, window math, source protocol, coordinator with supersede/keep-stale-on-failure/backstop semantics, `.plannerEventsDidChange`. Multi-day expansion and ordering live here. **No Outlook, no UI** — the app ships with `NullEventSource` and looks unchanged.
+
+### PR 12 — Outlook recurrence engine
+
+- **Title:** Expand Outlook recurrence rules locally
+- **Files/components:** `Planner/Support/Outlook/OutlookRecurrenceRule.swift`, `OutlookRecurrence.swift`, `OutlookExceptions.swift`, `OutlookAgenda.swift`, `ICalendar.swift`; ported test corpus + a checked-in `properties` JSON fixture
+- **Depends on:** PR 11
+- **Description:** §8.6.6 in full. Six rule types, ordinal-5-is-last, short-month clamping, count-from-series-start, `MAX_SLOTS`, the half-day nudge, exact-then-fuzzy exception claiming, EXDATE extraction, cancelled-by-prefix. Pure and synchronous. **No Outlook, no UI**; runs entirely against fixtures. Largest PR, easiest to review.
+
+### PR 13 — OutlookEventSource (ScriptingBridge)
+
+- **Title:** Read Outlook events over ScriptingBridge
+- **Files/components:** `Planner/Support/Outlook/OutlookScripting.swift` (the name vocabulary), `OutlookError.swift`, `OutlookRecordDecoder.swift`, `OutlookEventSource.swift`; `Planner.entitlements`; `project.pbxproj` (`ENABLE_APP_SANDBOX = NO`, `INFOPLIST_KEY_NSAppleEventsUsageDescription`). **No** generated header and no bridging header — see §8.6.5.
+- **Depends on:** PR 12
+- **Description:** §8.6.4, §8.6.5. Three `whose` queries, `properties` bulk, UID join, serial queue, enum decoding, error mapping with a Settings deep link, TCC preflight, never-launch guard. Account/calendar default to the first Exchange account and a calendar named `Calendar`, overridable via `UserDefaults` (`events.accountName`, `events.calendarName`); a wrong name lists the available ones. **Highest-risk PR, and the only one that touches entitlements.** Also carries the sandbox-off store relocation note.
+
+### PR 14 — Events on the grid
+
+- **Title:** Render Outlook events in the week calendar
+- **Files/components:** `WeekCalendarView.swift`, `CalendarViewController.swift`
+- **Depends on:** PR 11 (can land before PR 13, against the stub)
+- **Description:** §8.6.9. Event rows below task chips with one shared `+K more`, greedy mixed-height fill, dot-not-bar styling, compact time prefixes, full-form tooltips and VoiceOver labels, `.staticText` accessibility, click-to-select-day. `CalendarEventChip` gains `endTime` for the tooltip and spoken label. `EventLabels` holds every user-visible string, so the wording is testable. No `SelectionModel` change, and no empty state to gate.
+
+### PR 15 — Refresh affordances
+
+- **Title:** Add calendar refresh, status, and error surfacing
+- **Files/components:** `MainSplitViewController.swift` (toolbar item, `refreshCalendarEvents:`, validation), `MainMenu.xib`
+- **Depends on:** PR 13, PR 14
+- **Description:** `EventStatusView` in the toolbar immediately after the range label: a small spinner while loading, a warning button on failure, and **nothing at all** otherwise — a planner has no use for a permanent "everything is fine" light. The **toolbar item itself** is hidden, not just its view; hiding only the view leaves an empty pill sitting in the toolbar that reads as a broken control.
+
+  The loading tooltip names the source and the event window, which is where the §8.6.3 range becomes discoverable. On failure the tooltip carries the message and says what clicking does: **retry**, except for a consent refusal, where it opens Privacy & Security → Automation instead — retrying into a refusal just refuses again. The coordinator records that distinction as a `failureSettingsURL`, supplied by the error itself through `ExternallyResolvableError`, so the model layer never has to recognise an Outlook consent message.
+
+  Plus View → Refresh Calendar Events (⌘R), disabled while a refresh is in flight (restarting one looks like the command did nothing), and an `NSCalendarDayChanged` observer **in the coordinator**, which owns the window — an app left open overnight would otherwise keep yesterday's range.
+
+### PR 16 — Optional: cold-launch cache
+
+- **Title:** Cache events for instant cold launch
+- **Depends on:** PR 15
+- **Description:** Serialize the last good `[CalendarEvent]` to Application Support and load it before the first refresh returns, so a cold launch shows events immediately and the ~2s fetch becomes a background update. Periodic auto-refresh. Only worth building if the ~2s gap proves annoying in daily use.
 
 **Explicitly not in the PR plan (non-goals):** CloudKit container swap, drag-and-drop, notifications, multi-select, Sparkle, App Store metadata. Completion is in v1 (attribute PR 2/3, outline checkbox PR 6, inspector mirror PR 8, calendar dimming PR 9).

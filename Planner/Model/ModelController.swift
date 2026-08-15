@@ -59,7 +59,7 @@ final class ModelController {
         task.parentTask = parent
         task.project = nil
         ctx.processPendingChanges()
-        ctx.undoManager?.setActionName("New Subtask")
+        ctx.undoManager?.setActionName("New Task")
         try saveOrThrow()
         return task
     }
@@ -124,11 +124,102 @@ final class ModelController {
     }
 
     func setNote(_ task: TaskItem, _ note: String?) throws {
-        task.note = (note?.isEmpty == true) ? nil : note
+        try setNote(task, NoteFormatting.attributedString(rtf: nil, plain: note))
+    }
+
+    /// Writes both columns together: `noteRTF` is the content, `note` its
+    /// plain-text shadow. They are only ever set here, so they cannot drift.
+    func setNote(_ task: TaskItem, _ attributed: NSAttributedString) throws {
+        task.noteRTF = NoteFormatting.rtf(from: attributed)
+        task.note = NoteFormatting.plainText(from: attributed)
         task.updatedAt = Date()
         ctx.processPendingChanges()
         ctx.undoManager?.setActionName("Edit Note")
         try saveOrThrow()
+    }
+
+    func noteText(of task: TaskItem) -> NSAttributedString {
+        NoteFormatting.attributedString(rtf: task.noteRTF, plain: task.note)
+    }
+
+    /// Writes a day's note, creating the row on first use and deleting it when
+    /// the text is cleared, so browsing days never leaves empty rows behind.
+    func setDayNote(_ text: String?, on day: Date, calendar: Calendar = .current) throws {
+        try setDayNote(
+            NoteFormatting.attributedString(rtf: nil, plain: text),
+            on: day,
+            calendar: calendar
+        )
+    }
+
+    func setDayNote(
+        _ attributed: NSAttributedString,
+        on day: Date,
+        calendar: Calendar = .current
+    ) throws {
+        let normalized = calendar.startOfDay(for: day)
+        let plain = NoteFormatting.plainText(from: attributed)
+        let rtf = NoteFormatting.rtf(from: attributed)
+        let existing = fetchedDayNote(for: normalized)
+
+        switch (existing, plain) {
+        case (nil, nil):
+            return
+        case let (note?, nil):
+            ctx.delete(note)
+        case let (note?, value?):
+            guard note.note != value || note.noteRTF != rtf else { return }
+            note.note = value
+            note.noteRTF = rtf
+            note.updatedAt = Date()
+        case let (nil, value?):
+            let now = Date()
+            let note = DayNote(context: ctx)
+            note.uuid = UUID()
+            note.day = normalized
+            note.note = value
+            note.noteRTF = rtf
+            note.createdAt = now
+            note.updatedAt = now
+        }
+
+        ctx.processPendingChanges()
+        ctx.undoManager?.setActionName("Edit Note")
+        try saveOrThrow()
+    }
+
+    func dayNote(for day: Date, calendar: Calendar = .current) -> DayNote? {
+        fetchedDayNote(for: calendar.startOfDay(for: day))
+    }
+
+    func dayNoteText(for day: Date, calendar: Calendar = .current) -> NSAttributedString {
+        let note = dayNote(for: day, calendar: calendar)
+        return NoteFormatting.attributedString(rtf: note?.noteRTF, plain: note?.note)
+    }
+
+    /// No uniqueness constraint on `day` (CloudKit forbids them), so duplicates
+    /// are legal. Order by `(createdAt, uuid)` and take the first, the same
+    /// tie-break the outline uses for duplicate `sortIndex` values.
+    private func fetchedDayNote(for startOfDay: Date) -> DayNote? {
+        let request = DayNote.fetchRequest()
+        request.predicate = NSPredicate(format: "day == %@", startOfDay as NSDate)
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "createdAt", ascending: true),
+            NSSortDescriptor(key: "uuid", ascending: true),
+        ]
+        request.fetchLimit = 1
+        return (try? ctx.fetch(request))?.first
+    }
+
+    /// Days in `[from, to)` that carry a non-empty note.
+    func daysWithNotes(from start: Date, to end: Date) throws -> Set<Date> {
+        let request = DayNote.fetchRequest()
+        request.predicate = NSPredicate(
+            format: "day >= %@ AND day < %@ AND note != nil AND note != ''",
+            start as NSDate,
+            end as NSDate
+        )
+        return Set(try ctx.fetch(request).map(\.day))
     }
 
     func setDeadline(_ task: TaskItem, date: Date?, calendar: Calendar = .current) throws {
@@ -180,11 +271,9 @@ final class ModelController {
         return try fetchTasks(deadlineFrom: start, to: end)
     }
 
-    func tasks(deadlineInGridOf date: Date, calendar: Calendar) throws -> [TaskItem] {
-        let days = calendar.daysInMonthGrid(for: date)
-        let start = days[0]
-        let end = calendar.date(byAdding: .day, value: 1, to: days[41])!
-        return try fetchTasks(deadlineFrom: start, to: end)
+    func tasks(deadlineInWeeksFrom weekStart: Date, count: Int, calendar: Calendar) throws -> [TaskItem] {
+        let start = calendar.startOfWeek(for: weekStart)
+        return try fetchTasks(deadlineFrom: start, to: calendar.endOfWeeks(from: start, count: count))
     }
 
     // MARK: - Invariants

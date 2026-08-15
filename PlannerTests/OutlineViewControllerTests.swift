@@ -73,10 +73,11 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         let taskRow = outline.outlineView.row(forItem: task)
         let taskMenu = outline.outlineView.menu(forRow: taskRow)
         XCTAssertEqual(outline.outlineView.selectedRow, taskRow)
-        XCTAssertEqual(taskMenu.items.map(\.title), ["New Subtask", "Rename", "Delete\u{2026}"])
+        XCTAssertEqual(taskMenu.items.map(\.title), ["New Task", "Rename", "Get Info", "Delete\u{2026}"])
         XCTAssertEqual(taskMenu.items.map(\.action), [
-            #selector(MainSplitViewController.newSubtask(_:)),
+            #selector(MainSplitViewController.newTask(_:)),
             #selector(MainSplitViewController.renameSelected(_:)),
+            #selector(MainSplitViewController.showTaskInfo(_:)),
             #selector(MainSplitViewController.deleteSelected(_:)),
         ])
 

@@ -62,8 +62,9 @@ final class PlannerOutlineView: NSOutlineView {
                 ])
             case is TaskItem:
                 return Self.makeMenu([
-                    ("New Subtask", #selector(MainSplitViewController.newSubtask(_:))),
+                    ("New Task", #selector(MainSplitViewController.newTask(_:))),
                     ("Rename", #selector(MainSplitViewController.renameSelected(_:))),
+                    ("Get Info", #selector(MainSplitViewController.showTaskInfo(_:))),
                     ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
                 ])
             default:

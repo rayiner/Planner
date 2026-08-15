@@ -8,32 +8,69 @@
 
 /* Begin PBXBuildFile section */
 		A40000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000001 /* AppDelegate.swift */; };
+		A4000000000000000000001C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000020 /* main.swift */; };
 		A40000000000000000000002 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* MainMenu.xib */; };
 		A40000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000003 /* Assets.xcassets */; };
 		A40000000000000000000004 /* PlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000006 /* PlannerTests.swift */; };
 		A40000000000000000000005 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000008 /* PersistenceController.swift */; };
 		A40000000000000000000006 /* Project+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000009 /* Project+CoreData.swift */; };
+		A4000000000000000000001D /* DayNote+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000021 /* DayNote+CoreData.swift */; };
 		A40000000000000000000007 /* TaskItem+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000A /* TaskItem+CoreData.swift */; };
 		A40000000000000000000008 /* OutlineNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000B /* OutlineNode.swift */; };
 		A40000000000000000000009 /* Logger+Planner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000C /* Logger+Planner.swift */; };
 		A4000000000000000000000A /* Planner.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000E /* Planner.xcdatamodeld */; };
-		A40000000000000000000011 /* MainSplitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000015 /* MainSplitViewController.swift */; };
-		A40000000000000000000012 /* OutlineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000016 /* OutlineViewController.swift */; };
-		A40000000000000000000013 /* CalendarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000017 /* CalendarViewController.swift */; };
-		A40000000000000000000014 /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000018 /* InspectorViewController.swift */; };
 		A4000000000000000000000B /* ModelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000F /* ModelController.swift */; };
 		A4000000000000000000000C /* SelectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000010 /* SelectionModel.swift */; };
 		A4000000000000000000000D /* PersistenceTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000011 /* PersistenceTestCase.swift */; };
 		A4000000000000000000000E /* ModelConstraintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000012 /* ModelConstraintTests.swift */; };
 		A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000013 /* DeadlineFetchTests.swift */; };
+		A40000000000000000000020 /* NoteFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000024 /* NoteFormattingTests.swift */; };
+		A40000000000000000000022 /* NoteListEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000026 /* NoteListEditingTests.swift */; };
 		A40000000000000000000010 /* Calendar+Month.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000014 /* Calendar+Month.swift */; };
+		A40000000000000000000035 /* OutlookScripting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000039 /* OutlookScripting.swift */; };
+		A40000000000000000000036 /* OutlookError.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003A /* OutlookError.swift */; };
+		A40000000000000000000037 /* OutlookRecordDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003B /* OutlookRecordDecoder.swift */; };
+		A40000000000000000000038 /* OutlookEventSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003C /* OutlookEventSource.swift */; };
+		A4000000000000000000002B /* ICalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002F /* ICalendar.swift */; };
+		A4000000000000000000002C /* OutlookRecurrenceRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000030 /* OutlookRecurrenceRule.swift */; };
+		A4000000000000000000002D /* OutlookRecurrence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000031 /* OutlookRecurrence.swift */; };
+		A4000000000000000000002E /* OutlookExceptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000032 /* OutlookExceptions.swift */; };
+		A4000000000000000000002F /* OutlookAgenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000033 /* OutlookAgenda.swift */; };
+		A40000000000000000000023 /* CalendarEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000027 /* CalendarEvent.swift */; };
+		A40000000000000000000024 /* EventWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000028 /* EventWindow.swift */; };
+		A40000000000000000000025 /* CalendarEventSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000029 /* CalendarEventSource.swift */; };
+		A40000000000000000000026 /* EventCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002A /* EventCoordinator.swift */; };
+		A40000000000000000000030 /* OutlookFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000034 /* OutlookFixtures.swift */; };
+		A40000000000000000000031 /* OutlookRecurrenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000035 /* OutlookRecurrenceTests.swift */; };
+		A40000000000000000000032 /* OutlookExceptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000036 /* OutlookExceptionTests.swift */; };
+		A40000000000000000000033 /* ICalendarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000037 /* ICalendarTests.swift */; };
+		A4000000000000000000003C /* EventLabelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000040 /* EventLabelsTests.swift */; };
+		A40000000000000000000040 /* CalendarCellOverflowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000044 /* CalendarCellOverflowTests.swift */; };
+		A4000000000000000000003F /* EventStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000043 /* EventStatusTests.swift */; };
+		A4000000000000000000003D /* CalendarEventRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000041 /* CalendarEventRenderingTests.swift */; };
+		A40000000000000000000039 /* OutlookRecordDecoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003D /* OutlookRecordDecoderTests.swift */; };
+		A4000000000000000000003A /* OutlookEventSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003E /* OutlookEventSourceTests.swift */; };
+		A40000000000000000000034 /* OutlookAgendaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000038 /* OutlookAgendaTests.swift */; };
+		A40000000000000000000027 /* StubEventSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002B /* StubEventSource.swift */; };
+		A40000000000000000000028 /* EventWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002C /* EventWindowTests.swift */; };
+		A40000000000000000000029 /* EventChipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002D /* EventChipTests.swift */; };
+		A4000000000000000000002A /* EventCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002E /* EventCoordinatorTests.swift */; };
+		A4000000000000000000003B /* EventLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003F /* EventLabels.swift */; };
+		A4000000000000000000001E /* NoteFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000022 /* NoteFormatting.swift */; };
+		A40000000000000000000021 /* NoteListEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000025 /* NoteListEditing.swift */; };
+		A40000000000000000000011 /* MainSplitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000015 /* MainSplitViewController.swift */; };
+		A40000000000000000000012 /* OutlineViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000016 /* OutlineViewController.swift */; };
+		A40000000000000000000013 /* CalendarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000017 /* CalendarViewController.swift */; };
+		A40000000000000000000014 /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000018 /* InspectorViewController.swift */; };
 		A40000000000000000000015 /* PlannerOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000019 /* PlannerOutlineView.swift */; };
+		A4000000000000000000001F /* NoteTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000023 /* NoteTextView.swift */; };
 		A40000000000000000000016 /* OutlineViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001A /* OutlineViewControllerTests.swift */; };
 		A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001B /* MainSplitViewControllerTests.swift */; };
 		A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001C /* InspectorViewControllerTests.swift */; };
 		A40000000000000000000019 /* TitleTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001D /* TitleTextField.swift */; };
-		A4000000000000000000001A /* MonthCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001E /* MonthCalendarView.swift */; };
-		A4000000000000000000001B /* MonthCalendarViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001F /* MonthCalendarViewTests.swift */; };
+		A4000000000000000000003E /* EventStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000042 /* EventStatusView.swift */; };
+		A4000000000000000000001A /* WeekCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001E /* WeekCalendarView.swift */; };
+		A4000000000000000000001B /* WeekCalendarViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000001F /* WeekCalendarViewTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,6 +85,7 @@
 
 /* Begin PBXFileReference section */
 		A30000000000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A30000000000000000000020 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A30000000000000000000002 /* MainMenu.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = MainMenu.xib; sourceTree = "<group>"; };
 		A30000000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A30000000000000000000004 /* Planner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Planner.entitlements; sourceTree = "<group>"; };
@@ -56,27 +94,63 @@
 		A30000000000000000000007 /* PlannerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlannerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A30000000000000000000008 /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
 		A30000000000000000000009 /* Project+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Project+CoreData.swift"; sourceTree = "<group>"; };
+		A30000000000000000000021 /* DayNote+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DayNote+CoreData.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000A /* TaskItem+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TaskItem+CoreData.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000B /* OutlineNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineNode.swift; sourceTree = "<group>"; };
 		A3000000000000000000000C /* Logger+Planner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Logger+Planner.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000D /* Planner.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = Planner.xcdatamodel; sourceTree = "<group>"; };
-		A30000000000000000000015 /* MainSplitViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewController.swift; sourceTree = "<group>"; };
-		A30000000000000000000016 /* OutlineViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewController.swift; sourceTree = "<group>"; };
-		A30000000000000000000017 /* CalendarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewController.swift; sourceTree = "<group>"; };
-		A30000000000000000000018 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
 		A3000000000000000000000F /* ModelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelController.swift; sourceTree = "<group>"; };
 		A30000000000000000000010 /* SelectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionModel.swift; sourceTree = "<group>"; };
 		A30000000000000000000011 /* PersistenceTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTestCase.swift; sourceTree = "<group>"; };
 		A30000000000000000000012 /* ModelConstraintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConstraintTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000013 /* DeadlineFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadlineFetchTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000024 /* NoteFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteFormattingTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000026 /* NoteListEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListEditingTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000014 /* Calendar+Month.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Calendar+Month.swift"; sourceTree = "<group>"; };
+		A30000000000000000000039 /* OutlookScripting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookScripting.swift; sourceTree = "<group>"; };
+		A3000000000000000000003A /* OutlookError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookError.swift; sourceTree = "<group>"; };
+		A3000000000000000000003B /* OutlookRecordDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecordDecoder.swift; sourceTree = "<group>"; };
+		A3000000000000000000003C /* OutlookEventSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookEventSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000002F /* ICalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICalendar.swift; sourceTree = "<group>"; };
+		A30000000000000000000030 /* OutlookRecurrenceRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrenceRule.swift; sourceTree = "<group>"; };
+		A30000000000000000000031 /* OutlookRecurrence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrence.swift; sourceTree = "<group>"; };
+		A30000000000000000000032 /* OutlookExceptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookExceptions.swift; sourceTree = "<group>"; };
+		A30000000000000000000033 /* OutlookAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookAgenda.swift; sourceTree = "<group>"; };
+		A30000000000000000000027 /* CalendarEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEvent.swift; sourceTree = "<group>"; };
+		A30000000000000000000028 /* EventWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventWindow.swift; sourceTree = "<group>"; };
+		A30000000000000000000029 /* CalendarEventSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000002A /* EventCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCoordinator.swift; sourceTree = "<group>"; };
+		A30000000000000000000034 /* OutlookFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookFixtures.swift; sourceTree = "<group>"; };
+		A30000000000000000000035 /* OutlookRecurrenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrenceTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000036 /* OutlookExceptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookExceptionTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000037 /* ICalendarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICalendarTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000040 /* EventLabelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLabelsTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000044 /* CalendarCellOverflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarCellOverflowTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000043 /* EventStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStatusTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000041 /* CalendarEventRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventRenderingTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000003D /* OutlookRecordDecoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecordDecoderTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000003E /* OutlookEventSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookEventSourceTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000038 /* OutlookAgendaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookAgendaTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000002B /* StubEventSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubEventSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000002C /* EventWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventWindowTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000002D /* EventChipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventChipTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000002E /* EventCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCoordinatorTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000003F /* EventLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLabels.swift; sourceTree = "<group>"; };
+		A30000000000000000000022 /* NoteFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteFormatting.swift; sourceTree = "<group>"; };
+		A30000000000000000000025 /* NoteListEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListEditing.swift; sourceTree = "<group>"; };
+		A30000000000000000000015 /* MainSplitViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000016 /* OutlineViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000017 /* CalendarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewController.swift; sourceTree = "<group>"; };
+		A30000000000000000000018 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
 		A30000000000000000000019 /* PlannerOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlannerOutlineView.swift; sourceTree = "<group>"; };
+		A30000000000000000000023 /* NoteTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteTextView.swift; sourceTree = "<group>"; };
 		A3000000000000000000001A /* OutlineViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001B /* MainSplitViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001C /* InspectorViewControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewControllerTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000001D /* TitleTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleTextField.swift; sourceTree = "<group>"; };
-		A3000000000000000000001E /* MonthCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthCalendarView.swift; sourceTree = "<group>"; };
-		A3000000000000000000001F /* MonthCalendarViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonthCalendarViewTests.swift; sourceTree = "<group>"; };
+		A30000000000000000000042 /* EventStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStatusView.swift; sourceTree = "<group>"; };
+		A3000000000000000000001E /* WeekCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekCalendarView.swift; sourceTree = "<group>"; };
+		A3000000000000000000001F /* WeekCalendarViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeekCalendarViewTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -128,6 +202,49 @@
 			path = Planner;
 			sourceTree = "<group>";
 		};
+		A20000000000000000000005 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000001 /* AppDelegate.swift */,
+				A30000000000000000000020 /* main.swift */,
+				A30000000000000000000002 /* MainMenu.xib */,
+				A30000000000000000000003 /* Assets.xcassets */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000006 /* PlannerTests */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000006 /* PlannerTests.swift */,
+				A30000000000000000000011 /* PersistenceTestCase.swift */,
+				A30000000000000000000012 /* ModelConstraintTests.swift */,
+				A30000000000000000000013 /* DeadlineFetchTests.swift */,
+				A30000000000000000000024 /* NoteFormattingTests.swift */,
+				A30000000000000000000026 /* NoteListEditingTests.swift */,
+				A3000000000000000000002B /* StubEventSource.swift */,
+				A3000000000000000000002C /* EventWindowTests.swift */,
+				A3000000000000000000002D /* EventChipTests.swift */,
+				A3000000000000000000002E /* EventCoordinatorTests.swift */,
+				A30000000000000000000034 /* OutlookFixtures.swift */,
+				A30000000000000000000035 /* OutlookRecurrenceTests.swift */,
+				A30000000000000000000036 /* OutlookExceptionTests.swift */,
+				A30000000000000000000037 /* ICalendarTests.swift */,
+				A30000000000000000000038 /* OutlookAgendaTests.swift */,
+				A3000000000000000000003D /* OutlookRecordDecoderTests.swift */,
+				A3000000000000000000003E /* OutlookEventSourceTests.swift */,
+				A30000000000000000000040 /* EventLabelsTests.swift */,
+				A30000000000000000000041 /* CalendarEventRenderingTests.swift */,
+				A30000000000000000000043 /* EventStatusTests.swift */,
+				A30000000000000000000044 /* CalendarCellOverflowTests.swift */,
+				A3000000000000000000001A /* OutlineViewControllerTests.swift */,
+				A3000000000000000000001B /* MainSplitViewControllerTests.swift */,
+				A3000000000000000000001C /* InspectorViewControllerTests.swift */,
+				A3000000000000000000001F /* WeekCalendarViewTests.swift */,
+			);
+			path = PlannerTests;
+			sourceTree = "<group>";
+		};
 		A20000000000000000000007 /* Model */ = {
 			isa = PBXGroup;
 			children = (
@@ -135,9 +252,11 @@
 				A30000000000000000000008 /* PersistenceController.swift */,
 				A3000000000000000000000B /* OutlineNode.swift */,
 				A30000000000000000000009 /* Project+CoreData.swift */,
+				A30000000000000000000021 /* DayNote+CoreData.swift */,
 				A3000000000000000000000A /* TaskItem+CoreData.swift */,
 				A3000000000000000000000F /* ModelController.swift */,
 				A30000000000000000000010 /* SelectionModel.swift */,
+				A2000000000000000000000B /* Events */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -147,6 +266,10 @@
 			children = (
 				A3000000000000000000000C /* Logger+Planner.swift */,
 				A30000000000000000000014 /* Calendar+Month.swift */,
+				A30000000000000000000022 /* NoteFormatting.swift */,
+				A30000000000000000000025 /* NoteListEditing.swift */,
+				A3000000000000000000003F /* EventLabels.swift */,
+				A2000000000000000000000C /* Outlook */,
 			);
 			path = Support;
 			sourceTree = "<group>";
@@ -162,39 +285,43 @@
 			path = Controllers;
 			sourceTree = "<group>";
 		};
+		A2000000000000000000000B /* Events */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000027 /* CalendarEvent.swift */,
+				A30000000000000000000028 /* EventWindow.swift */,
+				A30000000000000000000029 /* CalendarEventSource.swift */,
+				A3000000000000000000002A /* EventCoordinator.swift */,
+			);
+			path = Events;
+			sourceTree = "<group>";
+		};
+		A2000000000000000000000C /* Outlook */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000002F /* ICalendar.swift */,
+				A30000000000000000000030 /* OutlookRecurrenceRule.swift */,
+				A30000000000000000000031 /* OutlookRecurrence.swift */,
+				A30000000000000000000032 /* OutlookExceptions.swift */,
+				A30000000000000000000033 /* OutlookAgenda.swift */,
+				A30000000000000000000039 /* OutlookScripting.swift */,
+				A3000000000000000000003A /* OutlookError.swift */,
+				A3000000000000000000003B /* OutlookRecordDecoder.swift */,
+				A3000000000000000000003C /* OutlookEventSource.swift */,
+			);
+			path = Outlook;
+			sourceTree = "<group>";
+		};
 		A2000000000000000000000A /* Views */ = {
 			isa = PBXGroup;
 			children = (
 				A30000000000000000000019 /* PlannerOutlineView.swift */,
+				A30000000000000000000023 /* NoteTextView.swift */,
 				A3000000000000000000001D /* TitleTextField.swift */,
-				A3000000000000000000001E /* MonthCalendarView.swift */,
+				A3000000000000000000001E /* WeekCalendarView.swift */,
+				A30000000000000000000042 /* EventStatusView.swift */,
 			);
 			path = Views;
-			sourceTree = "<group>";
-		};
-		A20000000000000000000005 /* App */ = {
-			isa = PBXGroup;
-			children = (
-				A30000000000000000000001 /* AppDelegate.swift */,
-				A30000000000000000000002 /* MainMenu.xib */,
-				A30000000000000000000003 /* Assets.xcassets */,
-			);
-			path = App;
-			sourceTree = "<group>";
-		};
-		A20000000000000000000006 /* PlannerTests */ = {
-			isa = PBXGroup;
-			children = (
-				A30000000000000000000006 /* PlannerTests.swift */,
-				A30000000000000000000011 /* PersistenceTestCase.swift */,
-				A30000000000000000000012 /* ModelConstraintTests.swift */,
-				A30000000000000000000013 /* DeadlineFetchTests.swift */,
-				A3000000000000000000001A /* OutlineViewControllerTests.swift */,
-				A3000000000000000000001B /* MainSplitViewControllerTests.swift */,
-				A3000000000000000000001C /* InspectorViewControllerTests.swift */,
-				A3000000000000000000001F /* MonthCalendarViewTests.swift */,
-			);
-			path = PlannerTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -243,7 +370,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1600;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A10000000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
@@ -298,8 +425,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				A40000000000000000000001 /* AppDelegate.swift in Sources */,
+				A4000000000000000000001C /* main.swift in Sources */,
 				A40000000000000000000005 /* PersistenceController.swift in Sources */,
 				A40000000000000000000006 /* Project+CoreData.swift in Sources */,
+				A4000000000000000000001D /* DayNote+CoreData.swift in Sources */,
 				A40000000000000000000007 /* TaskItem+CoreData.swift in Sources */,
 				A40000000000000000000008 /* OutlineNode.swift in Sources */,
 				A40000000000000000000009 /* Logger+Planner.swift in Sources */,
@@ -311,9 +440,27 @@
 				A4000000000000000000000B /* ModelController.swift in Sources */,
 				A4000000000000000000000C /* SelectionModel.swift in Sources */,
 				A40000000000000000000010 /* Calendar+Month.swift in Sources */,
+				A4000000000000000000001E /* NoteFormatting.swift in Sources */,
+				A4000000000000000000003B /* EventLabels.swift in Sources */,
+				A4000000000000000000002B /* ICalendar.swift in Sources */,
+				A4000000000000000000002C /* OutlookRecurrenceRule.swift in Sources */,
+				A4000000000000000000002D /* OutlookRecurrence.swift in Sources */,
+				A4000000000000000000002E /* OutlookExceptions.swift in Sources */,
+				A4000000000000000000002F /* OutlookAgenda.swift in Sources */,
+				A40000000000000000000035 /* OutlookScripting.swift in Sources */,
+				A40000000000000000000036 /* OutlookError.swift in Sources */,
+				A40000000000000000000037 /* OutlookRecordDecoder.swift in Sources */,
+				A40000000000000000000038 /* OutlookEventSource.swift in Sources */,
+				A40000000000000000000023 /* CalendarEvent.swift in Sources */,
+				A40000000000000000000024 /* EventWindow.swift in Sources */,
+				A40000000000000000000025 /* CalendarEventSource.swift in Sources */,
+				A40000000000000000000026 /* EventCoordinator.swift in Sources */,
+				A40000000000000000000021 /* NoteListEditing.swift in Sources */,
 				A40000000000000000000015 /* PlannerOutlineView.swift in Sources */,
+				A4000000000000000000001F /* NoteTextView.swift in Sources */,
 				A40000000000000000000019 /* TitleTextField.swift in Sources */,
-				A4000000000000000000001A /* MonthCalendarView.swift in Sources */,
+				A4000000000000000000001A /* WeekCalendarView.swift in Sources */,
+				A4000000000000000000003E /* EventStatusView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,10 +472,27 @@
 				A4000000000000000000000D /* PersistenceTestCase.swift in Sources */,
 				A4000000000000000000000E /* ModelConstraintTests.swift in Sources */,
 				A4000000000000000000000F /* DeadlineFetchTests.swift in Sources */,
+				A40000000000000000000020 /* NoteFormattingTests.swift in Sources */,
+				A40000000000000000000022 /* NoteListEditingTests.swift in Sources */,
+				A40000000000000000000027 /* StubEventSource.swift in Sources */,
+				A40000000000000000000028 /* EventWindowTests.swift in Sources */,
+				A40000000000000000000029 /* EventChipTests.swift in Sources */,
+				A4000000000000000000002A /* EventCoordinatorTests.swift in Sources */,
+				A40000000000000000000030 /* OutlookFixtures.swift in Sources */,
+				A40000000000000000000031 /* OutlookRecurrenceTests.swift in Sources */,
+				A40000000000000000000032 /* OutlookExceptionTests.swift in Sources */,
+				A40000000000000000000033 /* ICalendarTests.swift in Sources */,
+				A40000000000000000000034 /* OutlookAgendaTests.swift in Sources */,
+				A40000000000000000000039 /* OutlookRecordDecoderTests.swift in Sources */,
+				A4000000000000000000003A /* OutlookEventSourceTests.swift in Sources */,
+				A4000000000000000000003C /* EventLabelsTests.swift in Sources */,
+				A4000000000000000000003D /* CalendarEventRenderingTests.swift in Sources */,
+				A4000000000000000000003F /* EventStatusTests.swift in Sources */,
+				A40000000000000000000040 /* CalendarCellOverflowTests.swift in Sources */,
 				A40000000000000000000016 /* OutlineViewControllerTests.swift in Sources */,
 				A40000000000000000000017 /* MainSplitViewControllerTests.swift in Sources */,
 				A40000000000000000000018 /* InspectorViewControllerTests.swift in Sources */,
-				A4000000000000000000001B /* MonthCalendarViewTests.swift in Sources */,
+				A4000000000000000000001B /* WeekCalendarViewTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -402,6 +566,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -459,6 +624,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -474,10 +640,11 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar to show events alongside your task deadlines. It never modifies your calendar.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -506,10 +673,11 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar to show events alongside your task deadlines. It never modifies your calendar.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;

@@ -5,6 +5,8 @@ final class TaskItem: NSManagedObject, OutlineNode {
     @NSManaged var uuid: UUID
     @NSManaged var title: String
     @NSManaged var note: String?
+    /// RTF payload; `note` is its plain-text shadow. Nil for plain notes.
+    @NSManaged var noteRTF: Data?
     @NSManaged var deadline: Date?
     @NSManaged var isCompleted: Bool
     @NSManaged var sortIndex: Int64

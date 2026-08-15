@@ -72,16 +72,16 @@
                                     <action selector="newTask:" target="-1" id="nTk-ac-tion"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="New Subtask" keyEquivalent="t" id="nSt-sk-sub">
-                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
-                                <connections>
-                                    <action selector="newSubtask:" target="-1" id="nSt-ac-tion"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Rename" id="Ren-se-lec">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="renameSelected:" target="-1" id="Ren-ac-tion"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Get Info" keyEquivalent="I" id="Inf-se-lec">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="showTaskInfo:" target="-1" id="Inf-ac-tion"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="m54-Is-iLE"/>
@@ -148,44 +148,6 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="uyl-h8-XO2"/>
-                            <menuItem title="Find" id="4EN-yA-p0u">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <menu key="submenu" title="Find" id="1b7-l0-nxx">
-                                    <items>
-                                        <menuItem title="Find…" tag="1" keyEquivalent="f" id="Xz5-n4-O0W">
-                                            <connections>
-                                                <action selector="performFindPanelAction:" target="-1" id="cD7-Qs-BN4"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Find and Replace…" tag="12" keyEquivalent="f" id="YEy-JH-Tfz">
-                                            <modifierMask key="keyEquivalentModifierMask" option="YES" command="YES"/>
-                                            <connections>
-                                                <action selector="performFindPanelAction:" target="-1" id="WD3-Gg-5AJ"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Find Next" tag="2" keyEquivalent="g" id="q09-fT-Sye">
-                                            <connections>
-                                                <action selector="performFindPanelAction:" target="-1" id="NDo-RZ-v9R"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Find Previous" tag="3" keyEquivalent="G" id="OwM-mh-QMV">
-                                            <connections>
-                                                <action selector="performFindPanelAction:" target="-1" id="HOh-sY-3ay"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Use Selection for Find" tag="7" keyEquivalent="e" id="buJ-ug-pKt">
-                                            <connections>
-                                                <action selector="performFindPanelAction:" target="-1" id="U76-nv-p5D"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Jump to Selection" keyEquivalent="j" id="S0p-oC-mLd">
-                                            <connections>
-                                                <action selector="centerSelectionInVisibleArea:" target="-1" id="IOG-6D-g5B"/>
-                                            </connections>
-                                        </menuItem>
-                                    </items>
-                                </menu>
-                            </menuItem>
                             <menuItem title="Spelling and Grammar" id="Dv1-io-Yv7">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <menu key="submenu" title="Spelling" id="3IN-sU-3Bg">
@@ -272,49 +234,53 @@
                                     </items>
                                 </menu>
                             </menuItem>
-                            <menuItem title="Transformations" id="2oI-Rn-ZJC">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <menu key="submenu" title="Transformations" id="c8a-y6-VQd">
-                                    <items>
-                                        <menuItem title="Make Upper Case" id="vmV-6d-7jI">
-                                            <modifierMask key="keyEquivalentModifierMask"/>
-                                            <connections>
-                                                <action selector="uppercaseWord:" target="-1" id="sPh-Tk-edu"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Make Lower Case" id="d9M-CD-aMd">
-                                            <modifierMask key="keyEquivalentModifierMask"/>
-                                            <connections>
-                                                <action selector="lowercaseWord:" target="-1" id="iUZ-b5-hil"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Capitalize" id="UEZ-Bs-lqG">
-                                            <modifierMask key="keyEquivalentModifierMask"/>
-                                            <connections>
-                                                <action selector="capitalizeWord:" target="-1" id="26H-TL-nsh"/>
-                                            </connections>
-                                        </menuItem>
-                                    </items>
-                                </menu>
+                        </items>
+                    </menu>
+                </menuItem>
+                <menuItem title="Format" id="Fmt-me-nu0">
+                    <modifierMask key="keyEquivalentModifierMask"/>
+                    <menu key="submenu" title="Format" id="Fmt-su-bmnu">
+                        <items>
+                            <menuItem title="Bold" keyEquivalent="b" id="Fmt-bo-ld0">
+                                <connections>
+                                    <action selector="toggleBold:" target="-1" id="Fmt-bo-act"/>
+                                </connections>
                             </menuItem>
-                            <menuItem title="Speech" id="xrE-MZ-jX0">
+                            <menuItem title="Italic" keyEquivalent="i" id="Fmt-it-al0">
+                                <connections>
+                                    <action selector="toggleItalic:" target="-1" id="Fmt-it-act"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Underline" keyEquivalent="u" id="Fmt-un-der">
+                                <connections>
+                                    <action selector="toggleUnderline:" target="-1" id="Fmt-un-act"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Fmt-se-p001"/>
+                            <menuItem title="Numbered List" keyEquivalent="7" id="Fmt-nu-mlst">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleNumberedList:" target="-1" id="Fmt-nu-mact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Bulleted List" keyEquivalent="8" id="Fmt-bu-llst">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleBulletList:" target="-1" id="Fmt-bu-llact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Fmt-se-p002"/>
+                            <menuItem title="Increase Indent" id="Fmt-in-dinc">
                                 <modifierMask key="keyEquivalentModifierMask"/>
-                                <menu key="submenu" title="Speech" id="3rS-ZA-NoH">
-                                    <items>
-                                        <menuItem title="Start Speaking" id="Ynk-f8-cLZ">
-                                            <modifierMask key="keyEquivalentModifierMask"/>
-                                            <connections>
-                                                <action selector="startSpeaking:" target="-1" id="654-Ng-kyl"/>
-                                            </connections>
-                                        </menuItem>
-                                        <menuItem title="Stop Speaking" id="Oyz-dy-DGm">
-                                            <modifierMask key="keyEquivalentModifierMask"/>
-                                            <connections>
-                                                <action selector="stopSpeaking:" target="-1" id="dX8-6p-jy9"/>
-                                            </connections>
-                                        </menuItem>
-                                    </items>
-                                </menu>
+                                <connections>
+                                    <action selector="increaseListIndent:" target="-1" id="Fmt-in-cact"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Decrease Indent" id="Fmt-in-ddec">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="decreaseListIndent:" target="-1" id="Fmt-de-cact"/>
+                                </connections>
                             </menuItem>
                         </items>
                     </menu>
@@ -323,6 +289,45 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="View" id="HyV-fh-RgO">
                         <items>
+                            <menuItem title="Today" keyEquivalent="T" id="Tdy-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="revealToday:" target="-1" id="Tdy-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Previous Week" keyEquivalent="[" id="Prv-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="goToPreviousWeek:" target="-1" id="Prv-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Next Week" keyEquivalent="]" id="Nxt-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="goToNextWeek:" target="-1" id="Nxt-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Vw0-sp-rtr"/>
+                            <menuItem title="Refresh Calendar Events" keyEquivalent="r" id="Rfr-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                <connections>
+                                    <action selector="refreshCalendarEvents:" target="-1" id="Rfr-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Vw1-sp-rtr"/>
+                            <menuItem title="Hide Sidebar" keyEquivalent="s" id="Sbr-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleSidebar:" target="-1" id="Sbr-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Show Inspector" keyEquivalent="i" id="Ins-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" option="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleInspector:" target="-1" id="Ins-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Vw2-sp-rtr"/>
                             <menuItem title="Enter Full Screen" keyEquivalent="f" id="4J7-dP-txa">
                                 <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                 <connections>

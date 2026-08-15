@@ -4,19 +4,38 @@ final class MainSplitViewController: NSSplitViewController {
     let persistence: PersistenceController
     let model: ModelController
     let selection: SelectionModel
+    let events: EventCoordinator
 
     private let outlineViewController: OutlineViewController
     private let calendarViewController: CalendarViewController
     private let inspectorViewController: InspectorViewController
+    private var sidebarSplitItem: NSSplitViewItem!
+    private var calendarSplitItem: NSSplitViewItem!
+    private var inspectorSplitItem: NSSplitViewItem!
+    private let calendarTitleField = NSTextField(labelWithString: "")
+    private let weekNavigationControl = NSSegmentedControl()
+    private let eventStatusView = EventStatusView()
+    /// Held so the item itself can be hidden. Hiding only the inner view still
+    /// leaves the toolbar drawing an empty pill where the slot is.
+    private var eventStatusToolbarItem: NSToolbarItem?
+    /// Items that act on the outline, hidden while the sidebar is collapsed.
+    private var sidebarToolbarItems: [NSToolbarItem] = []
+    private var sidebarCollapseObservation: NSKeyValueObservation?
+
+    private enum NavigationSegment: Int {
+        case previous, today, next
+    }
 
     init(
         persistence: PersistenceController,
         model: ModelController,
-        selection: SelectionModel
+        selection: SelectionModel,
+        events: EventCoordinator
     ) {
         self.persistence = persistence
         self.model = model
         self.selection = selection
+        self.events = events
         outlineViewController = OutlineViewController(
             persistence: persistence,
             model: model,
@@ -25,7 +44,8 @@ final class MainSplitViewController: NSSplitViewController {
         calendarViewController = CalendarViewController(
             persistence: persistence,
             model: model,
-            selection: selection
+            selection: selection,
+            events: events
         )
         inspectorViewController = InspectorViewController(
             persistence: persistence,
@@ -48,26 +68,85 @@ final class MainSplitViewController: NSSplitViewController {
         super.viewDidLoad()
 
         splitView.isVertical = true
-        splitView.autosaveName = "MainHorizontalSplit"
+        splitView.dividerStyle = .thin
+        // v1 and v2 keys stored pane widths from the old two-pane and popover layouts.
+        splitView.autosaveName = "MainHorizontalSplit.v3"
 
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: outlineViewController)
-        sidebarItem.minimumThickness = 200
-        sidebarItem.maximumThickness = NSSplitViewItem.unspecifiedDimension
-        sidebarItem.preferredThicknessFraction = 280.0 / 1040.0
-        sidebarItem.holdingPriority = .defaultLow
-        sidebarItem.canCollapse = false
+        // A real sidebar item supplies the source-list material, the inset row
+        // metrics, and the toolbar/sidebar coordination that hand-rolled
+        // thickness clamping used to approximate.
+        let outlineItem = NSSplitViewItem(sidebarWithViewController: outlineViewController)
+        outlineItem.minimumThickness = Self.sidebarMinimum
+        outlineItem.maximumThickness = Self.sidebarMinimum * 2
+        outlineItem.preferredThicknessFraction = 260.0 / 1100.0
+        // Higher holding priority = resists resizing. The sidebar keeps its width
+        // and the detail pane absorbs the slack, not the other way round.
+        outlineItem.holdingPriority = NSLayoutConstraint.Priority(260)
+        // Collapsible now that the toolbar carries a Hide Sidebar button, but not
+        // from a window resize: the outline is the only place to create projects,
+        // so it should only ever disappear because the user asked it to.
+        outlineItem.canCollapse = true
+        outlineItem.canCollapseFromWindowResize = false
+        outlineItem.isCollapsed = false
+        sidebarSplitItem = outlineItem
 
-        let rightItem = NSSplitViewItem(viewController: makeRightSplitViewController())
-        rightItem.holdingPriority = .defaultHigh
+        let calendarItem = NSSplitViewItem(viewController: calendarViewController)
+        calendarItem.minimumThickness = Self.detailMinimum
+        calendarItem.holdingPriority = NSLayoutConstraint.Priority(240)
+        calendarItem.canCollapse = false
+        calendarSplitItem = calendarItem
 
-        addSplitViewItem(sidebarItem)
-        addSplitViewItem(rightItem)
+        // Trailing inspector: a narrow column, not a full-width strip under the
+        // calendar. `inspectorWithViewController:` supplies the standard material,
+        // the trailing placement, and collapse behaviour.
+        let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorViewController)
+        inspectorItem.minimumThickness = Self.inspectorMinimum
+        inspectorItem.maximumThickness = Self.inspectorMaximum
+        inspectorItem.preferredThicknessFraction = 300.0 / 1100.0
+        inspectorItem.holdingPriority = NSLayoutConstraint.Priority(260)
+        inspectorItem.canCollapse = true
+        inspectorItem.canCollapseFromWindowResize = true
+        inspectorItem.isCollapsed = false
+        inspectorSplitItem = inspectorItem
+
+        addSplitViewItem(outlineItem)
+        addSplitViewItem(calendarItem)
+        addSplitViewItem(inspectorItem)
+
+        // KVO rather than only the toggle action: the divider can be dragged
+        // shut, and the autosave can restore a collapsed sidebar at launch.
+        sidebarCollapseObservation = outlineItem.observe(\.isCollapsed, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.updateSidebarToolbarItemVisibility()
+            }
+        }
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(plannerSelectionDidChange),
             name: .plannerSelectionDidChange,
             object: selection
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(eventsDidChange(_:)),
+            name: .plannerEventsDidChange,
+            object: events
+        )
+        // Undo and redo mutate the context in memory only; nothing saves on
+        // their behalf, and the outline reacts to did-save. Saving here is what
+        // makes ⌘Z of a create or delete appear anywhere — and survive a quit.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(undoManagerDidUndoOrRedo(_:)),
+            name: .NSUndoManagerDidUndoChange,
+            object: persistence.viewContext.undoManager
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(undoManagerDidUndoOrRedo(_:)),
+            name: .NSUndoManagerDidRedoChange,
+            object: persistence.viewContext.undoManager
         )
     }
 
@@ -76,38 +155,31 @@ final class MainSplitViewController: NSSplitViewController {
         installToolbarIfNeeded()
     }
 
+    // Holding priorities stay below NSLayoutConstraint.Priority(500): at
+    // .defaultHigh a pane outranks the window's own resizing priority, so its
+    // restored thickness becomes a hard window minimum that the split autosave
+    // then feeds back, growing the window on every launch.
+    private static let sidebarMinimum: CGFloat = 240
+    private static let detailMinimum: CGFloat = 420
+    private static let inspectorMinimum: CGFloat = 260
+    private static let inspectorMaximum: CGFloat = 380
+
     @discardableResult
     func flushInspectorNotes() -> Bool {
         inspectorViewController.flushPendingNote()
     }
 
-    private func makeRightSplitViewController() -> NSSplitViewController {
-        let rightSplit = NSSplitViewController()
-        rightSplit.splitView.isVertical = false
-        rightSplit.splitView.autosaveName = "RightVerticalSplit"
-
-        let calendarItem = NSSplitViewItem(viewController: calendarViewController)
-        calendarItem.holdingPriority = .defaultHigh
-
-        let inspectorItem = NSSplitViewItem(viewController: inspectorViewController)
-        inspectorItem.minimumThickness = 120
-        inspectorItem.preferredThicknessFraction = 168.0 / 660.0
-        inspectorItem.holdingPriority = .defaultLow
-
-        rightSplit.addSplitViewItem(calendarItem)
-        rightSplit.addSplitViewItem(inspectorItem)
-        return rightSplit
-    }
-
     private func installToolbarIfNeeded() {
         guard let window = view.window, window.toolbar == nil else { return }
 
-        let toolbar = NSToolbar(identifier: "MainToolbar")
+        let toolbar = NSToolbar(identifier: "MainToolbar.v6")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
-        window.toolbarStyle = .unifiedCompact
+        window.toolbarStyle = .unified
+        updateCalendarChrome()
+        updateSidebarToolbarItemVisibility()
     }
 
     // MARK: - Commands
@@ -123,26 +195,9 @@ final class MainSplitViewController: NSSplitViewController {
 
     @objc func newTask(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
+        guard let node = selectedOutlineNode else { return }
         do {
-            let created: TaskItem
-            if let project = selectedOutlineNode as? Project {
-                created = try model.createTask(in: project)
-            } else if let task = selectedOutlineNode as? TaskItem {
-                created = try model.createSibling(of: task)
-            } else {
-                return
-            }
-            selectAndBeginEditing(created)
-        } catch {
-            // saveFailed already presented; do not retarget selection.
-        }
-    }
-
-    @objc func newSubtask(_ sender: Any?) {
-        guard !isFirstResponderTextInput else { return }
-        guard let task = selectedOutlineNode as? TaskItem else { return }
-        do {
-            let created = try model.createSubtask(under: task)
+            let created = try model.createTask(under: node)
             selectAndBeginEditing(created)
         } catch {
             // saveFailed already presented; do not retarget selection.
@@ -155,6 +210,23 @@ final class MainSplitViewController: NSSplitViewController {
         outlineViewController.beginEditingTitle(of: node)
     }
 
+    @objc func showTaskInfo(_ sender: Any?) {
+        guard !isFirstResponderTextInput else { return }
+        revealInspector()
+    }
+
+    /// AppKit's own inspector toggle; overridden only to revalidate the toolbar.
+    /// Unlike Get Info this needs no selection, so the pane can always be reclaimed.
+    override func toggleInspector(_ sender: Any?) {
+        super.toggleInspector(sender)
+        view.window?.toolbar?.validateVisibleItems()
+    }
+
+    override func toggleSidebar(_ sender: Any?) {
+        super.toggleSidebar(sender)
+        view.window?.toolbar?.validateVisibleItems()
+    }
+
     @objc func deleteSelected(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
         guard let node = selectedOutlineNode else { return }
@@ -165,8 +237,74 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     @objc func revealToday(_ sender: Any?) {
-        selection.setVisibleMonth(Date())
+        selection.setVisibleWeekStart(Date())
     }
+
+    @objc func goToPreviousWeek(_ sender: Any?) {
+        shiftVisibleWeeks(by: -1)
+    }
+
+    @objc func goToNextWeek(_ sender: Any?) {
+        shiftVisibleWeeks(by: 1)
+    }
+
+    private func shiftVisibleWeeks(by weeks: Int) {
+        let target = Calendar.current.date(byAdding: .day, value: weeks * 7, to: selection.visibleWeekStart)!
+        selection.setVisibleWeekStart(target)
+    }
+
+    /// The visible span depends on how many week columns fit, so the title has to
+    /// be refreshed when the calendar re-flows, not only when the week changes.
+    @objc func refreshCalendarTitle() {
+        updateCalendarChrome()
+    }
+
+    /// Re-reads Outlook. The window is recomputed from today, so this doubles
+    /// as the manual fix for a machine that slept through midnight.
+    @objc func refreshCalendarEvents(_ sender: Any?) {
+        events.refresh(userInitiated: true)
+    }
+
+    @objc private func eventsDidChange(_ notification: Notification) {
+        updateEventStatus()
+    }
+
+    @objc private func undoManagerDidUndoOrRedo(_ notification: Notification) {
+        // No-op when the context is clean (e.g. undoing rename keystrokes in
+        // the title field editor, which shares this manager).
+        persistence.saveViewContext(presentingWindow: view.window)
+    }
+
+    /// Only loading and failure have anything to say; the rest of the time the
+    /// slot goes away entirely rather than sitting there empty.
+    private var isEventStatusVisible: Bool {
+        switch events.state {
+        case .loading, .failed: return true
+        case .idle, .loaded: return false
+        }
+    }
+
+    private func updateEventStatus() {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        let window = events.window
+        let lastDay = Calendar.current.date(byAdding: .day, value: -1, to: window.upperBound)
+            ?? window.upperBound
+        eventStatusToolbarItem?.isHidden = !isEventStatusVisible
+        eventStatusView.apply(
+            events.state,
+            settingsURL: events.failureSettingsURL,
+            detail: """
+            \(events.sourceDisplayName)
+            Events shown: \(formatter.string(from: window.lowerBound)) – \(formatter.string(from: lastDay))
+            """
+        )
+    }
+
+    var test_eventStatusView: EventStatusView { eventStatusView }
+    var test_isEventStatusVisible: Bool { isEventStatusVisible }
+    func test_updateEventStatus() { updateEventStatus() }
 
     /// Tests assign a responder so validation/actions see a text input without hosting the split in a window.
     var firstResponderForValidation: NSResponder?
@@ -183,7 +321,7 @@ final class MainSplitViewController: NSSplitViewController {
             return "Delete “\(node.title)” and all of its tasks?"
         }
         if let task = node as? TaskItem, !task.subtasks.isEmpty {
-            return "Delete “\(node.title)” and all of its subtasks?"
+            return "Delete “\(node.title)” and all of its tasks?"
         }
         return "Delete “\(node.title)”?"
     }
@@ -208,6 +346,11 @@ final class MainSplitViewController: NSSplitViewController {
     private var selectedOutlineNode: OutlineNode? {
         guard let uuid = selection.selectedNodeUUID else { return nil }
         return try? model.node(uuid: uuid)
+    }
+
+    /// Tasks and days both own a note; projects do not.
+    private var hasNoteEditableSelection: Bool {
+        selection.selectedDay != nil || selectedOutlineNode is TaskItem
     }
 
     private var isFirstResponderTextInput: Bool {
@@ -263,19 +406,109 @@ final class MainSplitViewController: NSSplitViewController {
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         view.window?.toolbar?.validateVisibleItems()
+        let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
+        if fields.contains(SelectionField.visibleWeek.rawValue) {
+            updateCalendarChrome()
+        }
+    }
+
+    /// Get Info targets the selection: it shows the inspector if hidden and puts
+    /// the caret in the note. The inspector rebinds itself from `SelectionModel`.
+    /// Both a task and a calendar day have a note, so both qualify.
+    func revealInspector() {
+        guard hasNoteEditableSelection, let inspectorSplitItem else { return }
+        if inspectorSplitItem.isCollapsed {
+            inspectorSplitItem.animator().isCollapsed = false
+        }
+        inspectorViewController.focusNote()
+        view.window?.toolbar?.validateVisibleItems()
+    }
+
+    var isInspectorVisible: Bool {
+        inspectorSplitItem.map { !$0.isCollapsed } ?? false
+    }
+
+    var isSidebarVisible: Bool {
+        sidebarSplitItem.map { !$0.isCollapsed } ?? false
+    }
+
+    /// New Project / New Task act on the outline, so they go away with it. The
+    /// sidebar toggle itself stays put — it is the way back.
+    private func updateSidebarToolbarItemVisibility() {
+        let collapsed = !isSidebarVisible
+        for item in sidebarToolbarItems where item.isHidden != collapsed {
+            item.isHidden = collapsed
+        }
+        updateLeadingSpace(collapsed: collapsed)
+    }
+
+    /// The leading flexible space is what pushes the sidebar group against the
+    /// divider. With the sidebar shut there is no divider to hug, so drop the
+    /// space and let the toggle sit beside the window buttons, as Preview does.
+    private func updateLeadingSpace(collapsed: Bool) {
+        guard let toolbar = view.window?.toolbar else { return }
+        let hasLeadingSpace = toolbar.items.first?.itemIdentifier == .flexibleSpace
+        if collapsed, hasLeadingSpace {
+            toolbar.removeItem(at: 0)
+        } else if !collapsed, !hasLeadingSpace {
+            toolbar.insertItem(withItemIdentifier: .flexibleSpace, at: 0)
+        }
+    }
+
+    /// Span bold, year lighter — the "August 2026" treatment, in the toolbar.
+    private func updateCalendarChrome() {
+        let weekCount = calendarViewController.weekView.visibleWeekCount
+        let parts = Calendar.current.weekRangeComponents(
+            from: selection.visibleWeekStart,
+            count: weekCount
+        )
+        let title = NSMutableAttributedString(
+            string: parts.span,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 16, weight: .bold),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        title.append(NSAttributedString(
+            string: " \(parts.year)",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 16, weight: .regular),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        ))
+        calendarTitleField.attributedStringValue = title
+        view.window?.title = Calendar.current.weekRangeString(
+            from: selection.visibleWeekStart,
+            count: weekCount
+        )
+    }
+
+    @objc private func weekNavigationClicked(_ sender: NSSegmentedControl) {
+        switch NavigationSegment(rawValue: sender.selectedSegment) {
+        case .previous: goToPreviousWeek(sender)
+        case .today: revealToday(sender)
+        case .next: goToNextWeek(sender)
+        case nil: break
+        }
     }
 
     private func isCommandEnabled(for action: Selector?) -> Bool {
         switch action {
-        case #selector(newProject(_:)), #selector(revealToday(_:)):
+        case #selector(newProject(_:)), #selector(revealToday(_:)),
+             #selector(goToPreviousWeek(_:)), #selector(goToNextWeek(_:)),
+             #selector(toggleInspector(_:)), #selector(toggleSidebar(_:)):
             return true
+        case #selector(refreshCalendarEvents(_:)):
+            // Refreshing while one is in flight would just cancel and restart
+            // it, which looks like the command did nothing.
+            return !isFirstResponderTextInput && events.state != .loading
         case #selector(newTask(_:)):
             return !isFirstResponderTextInput
                 && (selectedOutlineNode is Project || selectedOutlineNode is TaskItem)
-        case #selector(newSubtask(_:)):
-            return !isFirstResponderTextInput && selectedOutlineNode is TaskItem
         case #selector(renameSelected(_:)), #selector(deleteSelected(_:)):
             return !isFirstResponderTextInput && selectedOutlineNode != nil
+        case #selector(showTaskInfo(_:)):
+            return !isFirstResponderTextInput && hasNoteEditableSelection
         default:
             return false
         }
@@ -295,13 +528,31 @@ extension MainSplitViewController: NSMenuItemValidation, NSToolbarItemValidation
 extension NSToolbarItem.Identifier {
     static let addProject = NSToolbarItem.Identifier("AddProject")
     static let addTask = NSToolbarItem.Identifier("AddTask")
-    static let addSubtask = NSToolbarItem.Identifier("AddSubtask")
+    static let paneSeparator = NSToolbarItem.Identifier("PaneSeparator")
+    static let inspectorSeparator = NSToolbarItem.Identifier("InspectorSeparator")
+    static let calendarTitle = NSToolbarItem.Identifier("CalendarTitle")
+    static let weekNavigation = NSToolbarItem.Identifier("WeekNavigation")
     static let today = NSToolbarItem.Identifier("Today")
+    static let eventStatus = NSToolbarItem.Identifier("EventStatus")
+    static let getInfo = NSToolbarItem.Identifier("GetInfo")
 }
 
 extension MainSplitViewController: NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.addProject, .addTask, .addSubtask, .flexibleSpace, .today]
+        // Tracking separators pin to both split dividers. The leading flexible
+        // space pushes the sidebar's own group up against the first divider, so
+        // it hugs the splitter the way the inspector toggle hugs the second one.
+        // Everything between the separators sits over the calendar pane: title
+        // hard left, navigation hard right.
+        [
+            // AppKit supplies `.toggleSidebar` itself; the delegate returns nil
+            // for it and the system item renders as its own pill.
+            .flexibleSpace, .addProject, .addTask, .toggleSidebar,
+            .paneSeparator,
+            .calendarTitle, .eventStatus, .flexibleSpace, .weekNavigation,
+            .inspectorSeparator,
+            .getInfo,
+        ]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -327,22 +578,33 @@ extension MainSplitViewController: NSToolbarDelegate {
             item.label = "Add Task"
             item.paletteLabel = "Add Task"
             item.toolTip = "Add Task"
-            item.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: "Add Task")
+            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add Task")
             item.action = #selector(newTask(_:))
-        case .addSubtask:
+        case .paneSeparator:
+            return NSTrackingSeparatorToolbarItem(
+                identifier: itemIdentifier,
+                splitView: splitView,
+                dividerIndex: 0
+            )
+        case .inspectorSeparator:
+            return NSTrackingSeparatorToolbarItem(
+                identifier: itemIdentifier,
+                splitView: splitView,
+                dividerIndex: 1
+            )
+        case .calendarTitle:
+            return makeCalendarTitleItem()
+        case .weekNavigation:
+            return makeWeekNavigationItem()
+        case .eventStatus:
+            return makeEventStatusItem()
+        case .getInfo:
             item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Add Subtask"
-            item.paletteLabel = "Add Subtask"
-            item.toolTip = "Add Subtask"
-            item.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: "Add Subtask")
-            item.action = #selector(newSubtask(_:))
-        case .today:
-            item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Today"
-            item.paletteLabel = "Today"
-            item.toolTip = "Today"
-            item.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: "Today")
-            item.action = #selector(revealToday(_:))
+            item.label = "Inspector"
+            item.paletteLabel = "Inspector"
+            item.toolTip = "Show or hide the inspector"
+            item.image = NSImage(systemSymbolName: "sidebar.trailing", accessibilityDescription: "Inspector")
+            item.action = #selector(toggleInspector(_:))
         default:
             return nil
         }
@@ -350,6 +612,78 @@ extension MainSplitViewController: NSToolbarDelegate {
         item.target = self
         item.isBordered = true
         item.autovalidates = true
+
+        if itemIdentifier == .addProject || itemIdentifier == .addTask {
+            sidebarToolbarItems.removeAll { $0.itemIdentifier == itemIdentifier }
+            sidebarToolbarItems.append(item)
+            item.isHidden = !isSidebarVisible
+        }
+        return item
+    }
+
+    private func makeCalendarTitleItem() -> NSToolbarItem {
+        calendarTitleField.lineBreakMode = .byTruncatingTail
+        calendarTitleField.refusesFirstResponder = true
+        calendarTitleField.setContentHuggingPriority(.required, for: .horizontal)
+        calendarTitleField.removeFromSuperview()
+        updateCalendarChrome()
+
+        let item = NSToolbarItem(itemIdentifier: .calendarTitle)
+        item.view = calendarTitleField
+        item.label = "Dates"
+        item.paletteLabel = "Dates"
+        item.visibilityPriority = .low   // the first thing to drop when cramped
+        return item
+    }
+
+    /// Sits immediately after the range label, inside the calendar pane's
+    /// tracked span, so the feed's state reads as belonging to the calendar
+    /// rather than to the window.
+    private func makeEventStatusItem() -> NSToolbarItem {
+        eventStatusView.onRetry = { [weak self] in self?.events.refresh(userInitiated: true) }
+        eventStatusView.onOpenAutomationSettings = { [weak self] in
+            guard let url = self?.events.failureSettingsURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        eventStatusView.translatesAutoresizingMaskIntoConstraints = false
+        eventStatusView.setContentHuggingPriority(.required, for: .horizontal)
+
+        let item = NSToolbarItem(itemIdentifier: .eventStatus)
+        item.label = "Calendar Events"
+        item.paletteLabel = "Calendar Events"
+        item.view = eventStatusView
+        // Not a command: it is a status light that occasionally becomes a
+        // button, so it must never be dimmed by toolbar validation.
+        item.autovalidates = false
+        eventStatusToolbarItem = item
+        updateEventStatus()
+        return item
+    }
+
+    private func makeWeekNavigationItem() -> NSToolbarItem {
+        weekNavigationControl.segmentStyle = .rounded
+        weekNavigationControl.trackingMode = .momentary
+        weekNavigationControl.segmentCount = 3
+        weekNavigationControl.setImage(
+            NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Previous week"),
+            forSegment: NavigationSegment.previous.rawValue
+        )
+        weekNavigationControl.setLabel("Today", forSegment: NavigationSegment.today.rawValue)
+        weekNavigationControl.setImage(
+            NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Next week"),
+            forSegment: NavigationSegment.next.rawValue
+        )
+        weekNavigationControl.setWidth(30, forSegment: NavigationSegment.previous.rawValue)
+        weekNavigationControl.setWidth(30, forSegment: NavigationSegment.next.rawValue)
+        weekNavigationControl.target = self
+        weekNavigationControl.action = #selector(weekNavigationClicked(_:))
+        weekNavigationControl.removeFromSuperview()
+
+        let item = NSToolbarItem(itemIdentifier: .weekNavigation)
+        item.view = weekNavigationControl
+        item.label = "Week"
+        item.paletteLabel = "Week"
+        item.toolTip = "Previous week, this week, next week"
         return item
     }
 }

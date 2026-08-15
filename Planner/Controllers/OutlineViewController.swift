@@ -53,7 +53,7 @@ final class OutlineViewController: NSViewController {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        emptyStateLabel.font = .preferredFont(forTextStyle: .callout)
+        emptyStateLabel.font = .systemFont(ofSize: 13, weight: .regular)
         emptyStateLabel.textColor = .secondaryLabelColor
         emptyStateLabel.alignment = .center
         emptyStateLabel.maximumNumberOfLines = 0
@@ -61,20 +61,31 @@ final class OutlineViewController: NSViewController {
         emptyStateLabel.refusesFirstResponder = true
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let container = NSView()
-        container.addSubview(scrollView)
-        container.addSubview(emptyStateLabel)
-        view = container
+        let headerLabel = NSTextField(labelWithString: "Projects")
+        headerLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        headerLabel.textColor = .secondaryLabelColor
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        // The sidebar split item supplies the vibrant material; a plain host view
+        // lets it through instead of stacking a second effect view on top of it.
+        let root = NSView()
+        root.addSubview(headerLabel)
+        root.addSubview(scrollView)
+        root.addSubview(emptyStateLabel)
+        view = root
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            emptyStateLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            emptyStateLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16),
-            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
+            headerLabel.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 4),
+            headerLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
+            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
+            scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 3),
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            emptyStateLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            emptyStateLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 12),
+            emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
+            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -16),
         ])
     }
 
@@ -88,11 +99,16 @@ final class OutlineViewController: NSViewController {
     private func configureOutlineView() {
         outlineView.dataSource = self
         outlineView.delegate = self
+        // .sourceList gives the modern inset, rounded, accent-tinted row highlight.
+        // Setting `style` is the whole fix; `selectionHighlightStyle = .sourceList`
+        // is deprecated since macOS 12 and redundant once `style` is set.
         outlineView.style = .sourceList
-        outlineView.rowHeight = 22
+        outlineView.rowSizeStyle = .custom
+        outlineView.rowHeight = 21
+        outlineView.intercellSpacing = NSSize(width: 17, height: 2)
         outlineView.headerView = nil
         outlineView.usesAlternatingRowBackgroundColors = false
-        outlineView.indentationPerLevel = 16
+        outlineView.indentationPerLevel = 13
         outlineView.allowsMultipleSelection = false
         outlineView.allowsEmptySelection = true
         outlineView.floatsGroupRows = false
@@ -285,7 +301,7 @@ final class OutlineViewController: NSViewController {
 
     private func reloadDisplayIfNeeded(_ object: NSManagedObject) {
         let keys = Set(object.changedValues().keys)
-        guard keys.contains("title") || keys.contains("isCompleted") else { return }
+        guard keys.contains("title") || keys.contains("isCompleted") || keys.contains("deadline") else { return }
         guard outlineView.currentEditor() == nil else { return }
         if object is Project || object is TaskItem {
             outlineView.reloadItem(object)
@@ -403,6 +419,11 @@ final class OutlineViewController: NSViewController {
         let row = outlineView.clickedRow
         guard row >= 0 else { return }
         let item = outlineView.item(atRow: row)
+        if let task = item as? TaskItem, task.subtasks.isEmpty {
+            selection.selectNode(uuid: task.uuid)
+            NSApp.sendAction(#selector(MainSplitViewController.showTaskInfo(_:)), to: nil, from: self)
+            return
+        }
         if outlineView.isItemExpanded(item) {
             outlineView.collapseItem(item)
         } else {
@@ -553,9 +574,15 @@ extension OutlineViewController: NSOutlineViewDelegate {
             if let task = node as? TaskItem {
                 titleCell.completeButton.isHidden = false
                 titleCell.completeButton.state = task.isCompleted ? .on : .off
+                titleCell.completeButton.contentTintColor = task.isCompleted ? .controlAccentColor : .tertiaryLabelColor
+                titleCell.showsProjectIcon = false
+                titleCell.setDeadline(task.isCompleted ? nil : task.deadline)
             } else {
                 titleCell.completeButton.isHidden = true
                 titleCell.completeButton.state = .off
+                titleCell.completeButton.contentTintColor = .tertiaryLabelColor
+                titleCell.showsProjectIcon = true
+                titleCell.setDeadline(nil)
             }
             titleCell.isUpdatingCompleteControl = false
             isUpdatingUI = false
@@ -597,13 +624,36 @@ extension OutlineViewController: NSOutlineViewDelegate {
         cell.identifier = identifier
 
         let completeButton = NSButton()
-        completeButton.setButtonType(.switch)
+        completeButton.setButtonType(.toggle)
+        completeButton.isBordered = false
         completeButton.title = ""
         completeButton.imagePosition = .imageOnly
-        completeButton.controlSize = .small
+        completeButton.imageScaling = .scaleProportionallyDown
+        let symbol = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        completeButton.image = NSImage(systemSymbolName: "circle", accessibilityDescription: "Mark complete")?
+            .withSymbolConfiguration(symbol)
+        completeButton.alternateImage = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Completed")?
+            .withSymbolConfiguration(symbol)
+        completeButton.contentTintColor = .tertiaryLabelColor
         completeButton.target = self
         completeButton.action = #selector(toggleCompleted(_:))
         completeButton.setContentHuggingPriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            completeButton.widthAnchor.constraint(equalToConstant: 13),
+            completeButton.heightAnchor.constraint(equalToConstant: 13),
+        ])
+
+        let projectIcon = NSImageView()
+        projectIcon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular))
+        projectIcon.contentTintColor = .controlAccentColor
+        projectIcon.imageScaling = .scaleProportionallyDown
+        projectIcon.setContentHuggingPriority(.required, for: .horizontal)
+        projectIcon.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            projectIcon.widthAnchor.constraint(equalToConstant: 13),
+            projectIcon.heightAnchor.constraint(equalToConstant: 13),
+        ])
 
         let field = TitleTextField()
         field.isEditable = true
@@ -614,22 +664,37 @@ extension OutlineViewController: NSOutlineViewDelegate {
         field.backgroundColor = .clear
         field.lineBreakMode = .byTruncatingTail
         field.cell?.truncatesLastVisibleLine = true
+        field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.cell?.sendsActionOnEndEditing = true
         field.allowsFirstResponder = false
         field.delegate = self
 
-        let stack = NSStackView(views: [completeButton, field])
+        // Trailing due date: the outline used to give no hint that a task had a
+        // deadline at all, so the two panes never referred to each other.
+        let deadlineLabel = NSTextField(labelWithString: "")
+        deadlineLabel.font = .systemFont(ofSize: 11)
+        deadlineLabel.textColor = .secondaryLabelColor
+        deadlineLabel.alignment = .right
+        deadlineLabel.lineBreakMode = .byClipping
+        deadlineLabel.refusesFirstResponder = true
+        deadlineLabel.isHidden = true
+        deadlineLabel.setContentHuggingPriority(.required, for: .horizontal)
+        deadlineLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let stack = NSStackView(views: [completeButton, projectIcon, field, deadlineLabel])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 4
-        stack.detachesHiddenViews = false
+        stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(stack)
         cell.textField = field
         cell.completeButton = completeButton
+        cell.projectIconView = projectIcon
+        cell.deadlineLabel = deadlineLabel
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
             stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
@@ -639,9 +704,45 @@ extension OutlineViewController: NSOutlineViewDelegate {
 
 private final class TitleCellView: NSTableCellView {
     var completeButton: NSButton!
+    var projectIconView: NSImageView!
+    var deadlineLabel: NSTextField!
     var isUpdatingCompleteControl = false
     private var titleText = ""
     private var isCompleted = false
+    private var isProject = false
+    private var deadline: Date?
+
+    func setDeadline(_ deadline: Date?) {
+        self.deadline = deadline
+        refreshDeadline()
+    }
+
+    private func refreshDeadline() {
+        guard let deadline else {
+            deadlineLabel.isHidden = true
+            return
+        }
+        let calendar = Calendar.current
+        deadlineLabel.stringValue = calendar.relativeDeadlineLabel(for: deadline)
+            ?? calendar.shortDeadlineString(for: deadline)
+        // On an emphasized row the accent fill is behind the text, so red would
+        // be unreadable; fall back to the selected-row text color.
+        if backgroundStyle == .emphasized {
+            deadlineLabel.textColor = .alternateSelectedControlTextColor
+        } else {
+            deadlineLabel.textColor = calendar.isOverdue(deadline) ? .systemRed : .secondaryLabelColor
+        }
+        deadlineLabel.isHidden = false
+    }
+
+    var showsProjectIcon: Bool {
+        get { isProject }
+        set {
+            isProject = newValue
+            projectIconView.isHidden = !newValue
+            refreshTitle()
+        }
+    }
 
     func setTitle(_ title: String, completed: Bool) {
         titleText = title
@@ -650,13 +751,18 @@ private final class TitleCellView: NSTableCellView {
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {
-        didSet { refreshTitle() }
+        didSet {
+            refreshTitle()
+            refreshDeadline()
+        }
     }
 
     private func refreshTitle() {
         guard let field = textField, field.currentEditor() == nil else { return }
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         if isCompleted {
             var attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue,
             ]
             if backgroundStyle != .emphasized {
@@ -664,6 +770,7 @@ private final class TitleCellView: NSTableCellView {
             }
             field.attributedStringValue = NSAttributedString(string: titleText, attributes: attributes)
         } else {
+            field.font = font
             field.stringValue = titleText
         }
     }

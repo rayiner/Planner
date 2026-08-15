@@ -7,7 +7,7 @@ final class InspectorViewControllerTests: PersistenceTestCase {
     func testEmptySelectionShowsPlaceholder() {
         let inspector = makeInspector()
 
-        XCTAssertEqual(inspector.test_title, "Select a task")
+        XCTAssertEqual(inspector.test_title, "Select a task to edit its note")
         XCTAssertFalse(inspector.test_titleEnabled)
         XCTAssertTrue(inspector.test_completedHidden)
         XCTAssertTrue(inspector.test_deadlineRowHidden)
@@ -39,6 +39,74 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(inspector.test_captionHidden)
     }
 
+    func testDaySelectionShowsANoteWithNoDueDateOrCompletion() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let day = Calendar.current.startOfDay(for: Date())
+        try model.setDayNote("groceries", on: day)
+
+        selection.selectDay(day)
+
+        XCTAssertTrue(inspector.test_titleEnabled)
+        XCTAssertFalse(inspector.test_notesHidden)
+        XCTAssertTrue(inspector.test_notesEditable)
+        XCTAssertEqual(inspector.test_notes, "groceries")
+        // A day has a note and nothing else.
+        XCTAssertTrue(inspector.test_completedHidden)
+        XCTAssertTrue(inspector.test_deadlineRowHidden)
+    }
+
+    func testDayWithNoNoteYetShowsAnEmptyEditableBuffer() {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let day = Calendar.current.startOfDay(for: Date())
+
+        selection.selectDay(day)
+
+        XCTAssertEqual(inspector.test_notes, "")
+        XCTAssertTrue(inspector.test_notesEditable)
+        XCTAssertNil(model.dayNote(for: day), "binding alone must not create a row")
+    }
+
+    func testTypingADayNoteCreatesItAndSwitchingAwayFlushes() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        let day = Calendar.current.startOfDay(for: Date())
+
+        selection.selectDay(day)
+        inspector.test_setNotes("call the plumber")
+        XCTAssertNil(model.dayNote(for: day), "debounced, not written yet")
+
+        // Selecting a task flushes the day note before rebinding.
+        selection.selectNode(uuid: task.uuid)
+
+        XCTAssertEqual(model.dayNote(for: day)?.note, "call the plumber")
+        XCTAssertEqual(inspector.test_notes, "")
+    }
+
+    func testDayNotesAreKeptSeparateFromTaskNotes() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        try model.setNote(task, "task note")
+        let day = Calendar.current.startOfDay(for: Date())
+        try model.setDayNote("day note", on: day)
+
+        selection.selectNode(uuid: task.uuid)
+        XCTAssertEqual(inspector.test_notes, "task note")
+
+        selection.selectDay(day)
+        XCTAssertEqual(inspector.test_notes, "day note")
+
+        selection.selectNode(uuid: task.uuid)
+        XCTAssertEqual(inspector.test_notes, "task note")
+        XCTAssertEqual(task.note, "task note", "editing one never rewrites the other")
+        XCTAssertEqual(model.dayNote(for: day)?.note, "day note")
+    }
+
     func testProjectSelectionHidesTaskFieldsAndShowsCaption() throws {
         let selection = SelectionModel()
         let inspector = makeInspector(selection: selection)
@@ -67,8 +135,8 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         selection.selectNode(uuid: task.uuid)
 
         inspector.test_setNotes("draft")
-        let later = Calendar.current.date(byAdding: .month, value: 1, to: selection.visibleMonth)!
-        selection.setVisibleMonth(later)
+        let later = Calendar.current.date(byAdding: .day, value: 7, to: selection.visibleWeekStart)!
+        selection.setVisibleWeekStart(later)
 
         XCTAssertNil(task.note)
         XCTAssertEqual(inspector.test_notes, "draft")
@@ -217,6 +285,26 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         XCTAssertFalse(persistence.viewContext.hasChanges)
     }
 
+    /// A failed save used to be silent — the buffer stayed dirty and the user
+    /// had no idea their note wasn't persisting.
+    func testFailedNoteSaveShowsTheErrorUntilASaveSucceeds() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        inspector.test_setNotes("unsaved")
+        XCTAssertTrue(inspector.test_noteSaveErrorHidden)
+
+        persistence.failNextSave = true
+        XCTAssertFalse(inspector.flushPendingNote())
+        XCTAssertFalse(inspector.test_noteSaveErrorHidden)
+
+        XCTAssertTrue(inspector.flushPendingNote())
+        XCTAssertTrue(inspector.test_noteSaveErrorHidden)
+        XCTAssertEqual(task.note, "unsaved")
+    }
+
     func testFailedFlushOnNodeChangeKeepsBufferAndRevertsSelection() throws {
         let selection = SelectionModel()
         let inspector = makeInspector(selection: selection)
@@ -288,6 +376,45 @@ final class InspectorViewControllerTests: PersistenceTestCase {
     }
 
     private func makeInspector(selection: SelectionModel = SelectionModel()) -> InspectorViewController {
+        let inspector = InspectorViewController(
+            persistence: persistence,
+            model: model,
+            selection: selection
+        )
+        inspector.loadViewIfNeeded()
+        return inspector
+    }
+}
+
+@MainActor
+final class InspectorNotesLayoutTests: PersistenceTestCase {
+    /// A hand-built NSTextView gets a finite default container height, which
+    /// silently stops laying out text past it — long notes looked truncated.
+    func testNotesContainerHasNoHeightLimit() {
+        let inspector = makeLayoutInspector()
+        XCTAssertEqual(inspector.test_notesContainerHeight, .greatestFiniteMagnitude)
+    }
+
+    func testNotesTakeTheAvailableHeightWhenShownAndYieldItWhenHidden() throws {
+        let selection = SelectionModel()
+        let inspector = makeLayoutInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+
+        selection.selectNode(uuid: task.uuid)
+        XCTAssertFalse(inspector.test_notesHidden)
+        XCTAssertTrue(
+            inspector.test_bottomSpacerHidden,
+            "with a note showing, the field takes the slack rather than a spacer"
+        )
+
+        // A project has no note; the spacer keeps its title at the top.
+        selection.selectNode(uuid: project.uuid)
+        XCTAssertTrue(inspector.test_notesHidden)
+        XCTAssertFalse(inspector.test_bottomSpacerHidden)
+    }
+
+    private func makeLayoutInspector(selection: SelectionModel = SelectionModel()) -> InspectorViewController {
         let inspector = InspectorViewController(
             persistence: persistence,
             model: model,
