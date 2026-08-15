@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Date** | 2026-08-15 |
-| **Status** | Draft — gated on the M0 spike |
+| **Status** | M0 done (2026-08-15, go); M1–M10 implemented |
 | **Parent spec** | `DESIGN.md` (v1 task planner; this plan extends it) |
 | **Mockup** | https://claude.ai/code/artifact/7654bca0-cb4d-4298-8014-19a96be2cf1c |
 
@@ -35,11 +35,12 @@ The feature is deliberately shaped like the calendar-events feature, so most har
 
 | Decision | Choice | Rationale |
 | --- | --- | --- |
-| Mail source | Outlook over ScriptingBridge, read-only | Same bridge, same TCC grant (`com.apple.security.automation.apple-events` + usage string already shipped). No new entitlements. |
+| Mail source | Outlook over Apple events, read-only — but **`NSAppleScript`, not ScriptingBridge** | Same TCC grant (`com.apple.security.automation.apple-events` + usage string already shipped), no new entitlements. The mechanism differs from the calendar's because the fetch primitive is an AppleScript **range specifier** (`messages 1 thru N`), which ScriptingBridge cannot express — see the M0 findings. |
 | Transient window storage | **Not Core Data.** In-memory `Sendable` values, exactly like events | Same reasoning as §8.6 of DESIGN.md: the store is CloudKit-bound with one writer; mirroring a foreign feed into it creates a reconcile problem. Recent Mail being absent for ~2s after launch is acceptable. |
 | Saved mail storage | Core Data: `MailFolder` + `SavedMessage`, written only by `ModelController` | Saving is an explicit user choice of *Planner data*, not a mirror — it must survive Outlook cleanup and (later) sync. All CloudKit rules from DESIGN.md §3 apply: no uniqueness constraints, unordered relationships, optional relationships, UUIDs assigned at the create site, no `awakeFromInsert`/`willSave`. |
 | Saving copies, never moves | The Outlook original is untouched (not moved, flagged, or marked read) | Read-only is structural. Also makes save idempotent and crash-safe. |
-| Fetch strategy | **Envelope bulk, body lazy.** The window fetch reads envelope keys only; the full body is fetched per message on selection (then cached in-memory for the session) and at save time | The events spike showed `properties` bulk is what makes Apple events viable, but message bodies would bloat the bulk payload by orders of magnitude. Selected-keys bulk cost is an M0 spike question. |
+| Fetch strategy | **Binary-search the window edge, then range-read five envelope fields; headers *and* body lazy per message.** No `whose`, no `properties` | Settled by M0 against a 34,881-message Inbox. `whose` costs 23s a call and full-collection bulk 13.7s a property, but the collection is ordered newest-first and strictly monotonic, so ~15 indexed probes (~0.5s) find the edge and `messages 1 thru N` reads each field in one event. `properties` of a *single* message is 2.4 MB (it drags `content`, `plainTextContent` and `source`), so it is out entirely. Headers moved out of the sweep too: they cost +35% there but ~100ms per message by id, and nothing in Recent Mail needs them. |
+| Envelope contents | id, subject, time received, is read, sender. **No `hasAttachments` in Recent Mail** | The paperclip would have to come from `X-MS-Has-Attach` in the headers, and headers are no longer swept. Saved messages keep the flag, because saving fetches headers anyway. |
 | Threading | Computed at display time from stored headers (`In-Reply-To` / `References`, falling back to normalized subject + participants); **no Thread entity** | Threading is a *view* of a folder, not data. Storing thread membership would need repair on every move/remove. Pure function → trivially testable. |
 | Window length | Rolling, default 3 days, adjustable 1–7 via toolbar popup, persisted in `UserDefaults` (`mail.windowDays`) | Small enough to sweep in one sitting; the point is triage, not archive. |
 | Mode switching | `PlannerMode` (`.tasks` / `.mail`) on `SelectionModel` with a new `SelectionField.mode`. The sidebar split item persists and swaps its content VC; the **two trailing split items are removed and reinserted per mode**, each pair carrying its own min/max thicknesses, holding priorities, and item style | "One more field on the selection model." Every existing observer already inspects `changedFields`, so adding fields is safe by contract. The trailing items must be per-mode objects because their constraints are mode chrome: the tasks inspector is capped at 380, the mail reader must not be. Tracking separators bind to the split view + divider index, not the items, so they survive the swap. |
@@ -70,16 +71,22 @@ Compose/reply/forward/edit; writing *anything* to Outlook (read flags, moves, de
 
 Incremental, each PR reviewable and mergeable on its own, matching the DESIGN.md conventions. The app builds and behaves identically in Tasks mode after every PR. M1–M3 are pure model/logic PRs with no Outlook and no UI; M7 is the only risky PR, and it is gated by M0.
 
-### PR M0 — Spike: Outlook Mail Suite over ScriptingBridge *(no merge; findings only)*
+### PR M0 — Spike: Outlook Mail Suite *(done 2026-08-15; findings only, no merge)*
 
-- **Depends on:** none. **Gates:** M7 (and the feature as a whole).
-- Validate against the live Outlook (16.103.x, legacy AppleScript-capable build) exactly as the 2026-08-14 calendar spike did:
-  1. Enumerate the Inbox of the first Exchange account; `whose`-filter messages on `timeReceived` for a 3-day range.
-  2. Measure bulk envelope reads. Does `arrayByApplyingSelector` support a *selected-keys* record, or does `properties` drag the full `content` along? If bulk-with-bodies is the only option, measure it for a realistic 3-day window (~40 messages) — the fallback is per-message envelope KVC, which the calendar spike showed costs ~0.4s per read and may force a different fetch shape.
-  3. Confirm available keys: Message-ID (or `headers` to parse it from), `In-Reply-To`/`References` via `headers`, sender record shape, `isRead`, `hasAttachment`/attachment names, and a stable `id` for later body fetch.
-  4. Fetch one message's `content`/`plainTextContent` by id; measure.
-  5. Confirm "reveal in Outlook" (`open` on the message object, or the `ms-outlook:` URL scheme).
-- **Deliverable:** findings appended to the project memory + this plan updated (especially the fetch strategy and threading-header rows). Known risk to check first: the "new Outlook" WebView2 builds gutted AppleScript support — confirm the installed build keeps the classic Mail Suite.
+- **Depends on:** none. **Gates:** M7 (and the feature as a whole). **Verdict: go**, with a reshaped fetch.
+- Measured against Outlook 16.103.2, first Exchange account, an Inbox holding **34,881 messages**:
+  1. The classic **Mail Suite is intact** — the "new Outlook" AppleScript regression does not apply to this build.
+  2. **`whose` is unusable.** `messages whose timeReceived >= start` costs **23s** every call (it is a full scan; the match count is irrelevant, and nothing caches). Bulk `arrayByApplyingSelector` over the whole collection is no better: one property for 34,881 messages is **13.7s**.
+  3. **Messages arrive newest-first and strictly monotonic** (0 inversions over the newest 400), and a single indexed read costs ~32ms. So ~15 binary-search probes (~0.5s) find the window's edge index, and that replaces the `whose` clause entirely.
+  4. **The fetch primitive is the range specifier** `messages 1 thru N of inb`. ScriptingBridge cannot build one, so the source is **`NSAppleScript`**. Its parallel property arrays come back **index-aligned with equal counts** — the nil-dropping hazard that forced one-`properties`-dict-per-object on the calendar side does not exist here (counts are still checked).
+  5. **Cost is linear, ~12ms per message per property.** Five envelope fields over a 3-day window (164 messages here) = **~10s**; adding `headers` to the sweep makes it ~13.5s, which is why headers moved out of it.
+  6. **`properties` of one message is ~2.4 MB** — it carries `content`, `plainTextContent` *and* `source`. The calendar's bulk-`properties` trick is inapplicable.
+  7. **Per-id reads are nearly free**: `plain text content of message id N` ~10ms, `headers of message id N` ~100ms. Bodies and headers are therefore both lazy.
+  8. `headers` carries `Message-ID`, `In-Reply-To`, `References`, `X-MS-Has-Attach`; it is **folded** (continuations begin with space/tab) and CR-terminated, so it must be unfolded before parsing.
+  9. `sender` is an AE record keyed `pnam` (display name) / `radd` (address).
+  10. `open message id N` reveals the message in Outlook (~1.1s). Opening an **unread** message marks it read — a write — so reveal stays strictly user-initiated.
+  11. Failures arrive as an `NSAppleScript` error dictionary keyed `NSAppleScriptErrorNumber`, which maps cleanly onto the existing `OutlookError` cases.
+- **Deliverable:** the findings above, plus the project memory note, plus the fetch-strategy and mail-source rows of this plan rewritten around them.
 
 ### PR M1 — Mail value model, window, and coordinator
 
@@ -118,11 +125,11 @@ Incremental, each PR reviewable and mergeable on its own, matching the DESIGN.md
 - **Depends on:** M1, M4, M5. Ships against `NullMailSource` / stub in tests.
 - Flat chronological `NSOutlineView`: sticky date-group headers (Today/Yesterday/weekday), rows with sender/time/subject/snippet, unread dot from `isRead`, relative times, tabular numerals. Selection writes `.message`; reader shows envelope immediately and fetches the body lazily through the coordinator (spinner in the body area, keep-stale on failure). Expiry banner computes "leaves the window <date>" from `receivedAt + windowDays`. Empty states: "No mail in the last N days." and, with `NullMailSource`, "Planner shows recent Outlook mail here." Action bar buttons render but Save/New Task stay disabled until M8/M9.
 
-### PR M7 — OutlookMailSource (ScriptingBridge)
+### PR M7 — OutlookMailSource (NSAppleScript)
 
-- **Files:** `Planner/Support/Outlook/OutlookScripting.swift` (Mail Suite vocabulary), `OutlookMailSource.swift`, `OutlookError.swift` (message-shaped failures)
+- **Files:** `Planner/Support/Outlook/OutlookMailScripting.swift` (the AppleScript vocabulary, in one place), `OutlookMailSource.swift`, `MailHeaders.swift`, `OutlookError.swift` (message-shaped failures)
 - **Depends on:** M0 (go decision + fetch shape), M1. **Highest-risk PR.**
-- Same discipline as `OutlookEventSource`: serial queue, dynamic dispatch by selector, `whose` range filter on `timeReceived`, bulk envelope decode via `OutlookRecordDecoder`, per-id body fetch, TCC preflight and never-launch guard shared with events, errors mapped through `ExternallyResolvableError` so the consent-refusal Settings link works unchanged. **No entitlement or Info.plist changes** — the existing apple-events grant covers Outlook as a whole; verify the existing usage string still reads honestly and amend it if it says "calendar" only (that string edit is this PR's entire plist diff). Wire into `AppDelegate` injection behind the same pattern as events.
+- Same discipline as `OutlookEventSource` — serial queue, TCC preflight and never-launch guard shared with events, errors mapped through `ExternallyResolvableError` so the consent-refusal Settings link works unchanged — but a different mechanism, per M0: `NSAppleScript`, a binary search for the window edge, five range reads for the envelope, and per-id lazy header/body reads. A hard cap on messages per sweep keeps a firehose inbox from stalling the fetch. **No entitlement changes**; the only plist diff is widening the apple-events usage string from "calendar" to calendar *and* mail. Wire into `AppDelegate` injection behind the same pattern as events.
 
 ### PR M8 — Saving: folders get mail
 
@@ -148,10 +155,10 @@ Incremental, each PR reviewable and mergeable on its own, matching the DESIGN.md
 
 | Risk | Mitigation |
 | --- | --- |
-| "New Outlook" builds removed most AppleScript Mail-Suite support | M0 checks the installed build first; if the Mail Suite is gone, the feature is blocked and the plan stops at M0 (documented, not worked around). |
-| Bulk `properties` on messages drags full bodies (huge Apple-event payloads) | Envelope-lazy design; M0 measures selected-keys bulk vs. per-message KVC and the fetch shape in M1/M7 follows the numbers. |
-| Threading headers unavailable or expensive via `headers` | The engine's subject+participants fallback is designed in from the start; headers only improve precision. |
-| A 7-day window on a heavy inbox (hundreds of messages) | Window capped at 7 days; list virtualized by AppKit; count shown in the title so the user sees what they asked for. |
+| ~~"New Outlook" builds removed most AppleScript Mail-Suite support~~ | **Retired by M0**: the installed build keeps the classic Mail Suite. |
+| ~~Bulk `properties` on messages drags full bodies~~ | **Confirmed by M0** (2.4 MB for one message) and designed out: `properties` is never called on a message. |
+| Threading headers unavailable or expensive via `headers` | Present and cheap per id (~100ms), so threading uses them — but the engine's subject+participants fallback is still designed in, since headers are only read for *saved* messages. |
+| A 7-day window on a heavy inbox (hundreds of messages) | The real cost, per M0: ~60ms per message, so 7 days on a busy inbox is tens of seconds. Mitigated by a hard per-sweep message cap, the coordinator's async + 30s backstop, keep-stale-on-failure, and a count in the title so the user sees what they asked for. |
 | Mode switch destabilizes existing observers | The `changedFields` contract already requires observers to no-op on unfamiliar fields; M4 adds a regression test that a mode flip posts only `.mode`. |
 | Store migration | One model version for the whole feature (M2), additive-only, migration test included. |
 
