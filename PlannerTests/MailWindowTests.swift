@@ -9,8 +9,8 @@ final class MailWindowTests: XCTestCase {
         return calendar
     }
 
-    /// 2026-08-15 15:06:40 UTC — mid-afternoon, so a window that failed to snap
-    /// to day boundaries would show it.
+    /// 2026-08-07 06:53:20 in New York — mid-morning, so a window that failed
+    /// to snap to day boundaries would show it.
     private let anchor = Date(timeIntervalSince1970: 1_786_100_000)
 
     private func day(_ offset: Int) -> Date {

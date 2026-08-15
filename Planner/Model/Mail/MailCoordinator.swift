@@ -118,6 +118,10 @@ final class MailCoordinator {
 
     /// What the feed is, for the status tooltip.
     var sourceDisplayName: String { source.displayName }
+    /// Which feed it is. The list's empty state depends on it: "no mail in the
+    /// last three days" and "Planner shows Outlook mail here" are different
+    /// facts, and only one of them is worth acting on.
+    var sourceID: String { source.sourceID }
 
     var isLoading: Bool { state == .loading }
 

@@ -91,6 +91,7 @@
 		A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000012 /* ModeSwitchTests.swift */; };
 		A4000000000000000000000013 /* MailboxOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000013 /* MailboxOutlineView.swift */; };
 		A4000000000000000000000014 /* MailboxListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000014 /* MailboxListTests.swift */; };
+		A4000000000000000000000015 /* MailListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000015 /* MailListTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -192,6 +193,7 @@
 		A3000000000000000000000012 /* ModeSwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeSwitchTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000013 /* MailboxOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxOutlineView.swift; sourceTree = "<group>"; };
 		A3000000000000000000000014 /* MailboxListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxListTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000000015 /* MailListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -257,6 +259,7 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				A3000000000000000000000015 /* MailListTests.swift */,
 				A3000000000000000000000014 /* MailboxListTests.swift */,
 				A3000000000000000000000012 /* ModeSwitchTests.swift */,
 				A300000000000000000000000C /* MailStoreTests.swift */,
@@ -550,6 +553,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000015 /* MailListTests.swift in Sources */,
 				A4000000000000000000000014 /* MailboxListTests.swift in Sources */,
 				A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */,
 				A400000000000000000000000C /* MailStoreTests.swift in Sources */,
