@@ -151,6 +151,32 @@ Incremental, each PR reviewable and mergeable on its own, matching the DESIGN.md
 
 **Suggested order:** M0 first (it can kill or reshape the feature); M1+M2 in parallel; then M3/M4; M5→M6; M7 whenever after M0/M1; M8→M9; M10 last. Everything except M7 and M10 is buildable and testable with no Outlook on the machine.
 
+---
+
+## What shipped, where it differs
+
+Every PR landed. The differences from the plan above are all decisions the code
+forced, and each is recorded in the commit that made it.
+
+| Planned | Shipped | Why |
+| --- | --- | --- |
+| M2 and M3 as separate PRs | One commit | `ModelController.createTask(from:)` titles the task with `MailThreading.normalizedSubject`, so the store change cannot build without the engine. |
+| Divider 1 stored as a *position* (`mail.divider1`) | Stored as the **middle pane's width** (`mail.middlePaneWidth`, `tasks.middlePaneWidth`) | A position is measured from the window's leading edge, so it silently encodes the sidebar's width too, and restoring one after the sidebar moved puts the trailing panes in the wrong place. |
+| Both modes' toolbar items present, shown/hidden by mode | The toolbar carries **only the current mode's items** and is rebuilt on the switch | A hidden item still counts toward the toolbar's width, and everything before the first tracking separator has to fit inside the sidebar's own width — carrying the other mode's items pushed Add Task into the overflow menu. |
+| Sidebar slot as a segmented control | Unchanged, but the **explicit segment width matters**, and `NSMenuToolbarItem` is not an option | Without a set width the control measures as zero and the toolbar drops it into the overflow; `NSMenuToolbarItem` renders as a ~90pt pill, which does not fit the sidebar's budget. |
+| Recent Mail rows matched to saved copies by Message-ID | Matched by **Outlook's record id** (`ModelController.foldersByOutlookID`) | Headers are lazy, so an envelope does not know its own Message-ID. Record ids are stable for far longer than a three-day window. `folderContaining(messageID:)` was never needed and does not exist. |
+| List rows carry a preview snippet | **No snippet** | M0 put the body behind a per-message fetch, so a snippet per row means a round trip per visible row. |
+| Hover Save button on list rows | **Row context menu only** | The context menu is the affordance that is also reachable by keyboard; the hover button is polish that can follow. |
+| `EventStatusView` "reused" for mail | Reused via a shared `FeedStatus` both coordinators reduce to | Its `apply` took `EventCoordinator.State`; the reduction is what lets one control serve both without either coordinator learning about the other. |
+| Save/Move choose a folder however each entry point likes | One rule: an **untagged invocation asks**, and the tagged menu item carries the answer back to the same command | That is what makes Save to Folder behave identically from the reader's pop-up, a row's context menu, and the menu bar. |
+| `MailCoordinator` fetches a body per caller | One shared fetch per message | The reader asks on selection and Save asks a click later; two Apple events for one message is wasteful, and whichever reply arrived second found its caller gone. |
+| New Task from Message on ⇧⌘T | No shortcut | ⇧⌘T is already Today. `MailStatusTests` now asserts no two menu items share one. |
+
+Verified against live Outlook, not only against the stubs: a 164-message sweep
+of the real 34,881-message Inbox, a real message read with its body and
+attachment names, and a real message saved into a folder created from the
+sidebar — with the Recent Mail row dimming and the folder count following.
+
 ## Risks
 
 | Risk | Mitigation |
@@ -164,7 +190,8 @@ Incremental, each PR reviewable and mergeable on its own, matching the DESIGN.md
 
 ## Open questions
 
-1. **Q1 — Save prompt vs. default folder:** should saving from the hover button with no folder chosen drop into a "last used" folder (fast) or always show the folder menu (deliberate)? Mock shows the menu; start there.
-2. **Q2 — Where New Task's task lands** when nothing is selected in the outline (M9 currently: first project, else create). Cheap to change later.
+1. **Q1 — Save prompt vs. default folder:** should saving with no folder chosen drop into a "last used" folder (fast) or always show the folder menu (deliberate)? Mock shows the menu, and that is what shipped — every entry point asks. Still worth revisiting once there is a habitual folder.
+2. **Q2 — Where New Task's task lands** when nothing is selected in the outline (M9 shipped: first project, else create). Cheap to change later.
 3. **Q3 — Attachment contents:** metadata-only until real use proves painful; if it does, side-car files under Application Support keyed by SavedMessage UUID, never Core Data binaries.
-4. **Q4 — Should Recent Mail hide already-saved messages** instead of dimming them? Mock dims; dimming preserves the timeline sweep.
+4. **Q4 — Should Recent Mail hide already-saved messages** instead of dimming them? Mock dims, and that is what shipped: dimming preserves the timeline sweep, and a hole in the list loses your place.
+5. **Q5 (new) — Is a ten-second sweep acceptable?** M0 measured ~60ms per message, so the default three-day window costs ~10s on a busy inbox and seven days costs three times that. It is asynchronous, capped, and shows a spinner, but if it grates the answer is probably a shorter default window rather than a faster fetch — the cost is per message and there is no cheaper shape.
