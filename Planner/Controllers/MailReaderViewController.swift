@@ -37,6 +37,8 @@ final class MailReaderViewController: NSViewController {
     private let emptyStateLabel = NSTextField(labelWithString: MailLabels.noMessageSelected)
 
     private let saveButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let moveButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let removeButton = NSButton()
     private let newTaskButton = NSButton()
     private let openInOutlookButton = NSButton()
     private let actionBar = NSStackView()
@@ -44,7 +46,13 @@ final class MailReaderViewController: NSViewController {
     /// What the reader is currently showing, so a late body can be matched
     /// against it rather than painted over whatever is on screen now.
     private var displayedMessageID: Int64?
+    private var displayedSavedUUID: UUID?
     private var isBodyLoading = false
+
+    /// Which conversation the open message sits in, for the "message k of n"
+    /// line. Supplied by the list, which is where threading is computed —
+    /// the reader has no business threading a folder a second time.
+    var conversationProvider: ((UUID) -> [SavedMessage])?
 
     init(
         persistence: PersistenceController,
@@ -191,22 +199,35 @@ final class MailReaderViewController: NSViewController {
         saveButton.target = self
         saveButton.action = #selector(saveButtonClicked(_:))
 
+        moveButton.bezelStyle = .rounded
+        moveButton.title = "Move to Folder"
+        moveButton.target = self
+        moveButton.action = #selector(moveButtonClicked(_:))
+
+        removeButton.bezelStyle = .rounded
+        removeButton.title = "Remove"
+        removeButton.target = nil   // routed through the responder chain
+        removeButton.action = #selector(MainSplitViewController.removeSavedMessage(_:))
+
         newTaskButton.bezelStyle = .rounded
         newTaskButton.title = "New Task"
-        newTaskButton.target = self
-        newTaskButton.action = #selector(newTaskFromMessage(_:))
+        newTaskButton.target = nil
+        newTaskButton.action = #selector(MainSplitViewController.newTaskFromMessage(_:))
 
         openInOutlookButton.bezelStyle = .rounded
         openInOutlookButton.title = "Open in Outlook"
-        openInOutlookButton.target = self
-        openInOutlookButton.action = #selector(openInOutlook(_:))
+        openInOutlookButton.target = nil
+        openInOutlookButton.action = #selector(MainSplitViewController.openMessageInOutlook(_:))
 
         actionBar.orientation = .horizontal
         actionBar.alignment = .centerY
         actionBar.spacing = 8
         actionBar.detachesHiddenViews = true
         actionBar.translatesAutoresizingMaskIntoConstraints = false
-        for button in [saveButton, newTaskButton, openInOutlookButton] {
+        for button in [saveButton, moveButton] {
+            actionBar.addArrangedSubview(button)
+        }
+        for button in [removeButton, newTaskButton, openInOutlookButton] {
             actionBar.addArrangedSubview(button)
         }
         root.addSubview(actionBar)
@@ -268,15 +289,29 @@ final class MailReaderViewController: NSViewController {
     // MARK: - Binding
 
     func rebind() {
-        guard case let .recent(id)? = selection.message, let message = mail.message(id: id) else {
+        switch selection.message {
+        case let .recent(id)?:
+            guard let message = mail.message(id: id) else { return showEmptyState() }
+            bindRecent(message, id: id)
+        case let .saved(uuid)?:
+            guard let message = model.savedMessage(uuid: uuid) else { return showEmptyState() }
+            bindSaved(message)
+        case nil:
             showEmptyState()
-            return
         }
-        displayedMessageID = id
+    }
+
+    private func beginBinding() {
         emptyStateLabel.isHidden = true
         headerStack.isHidden = false
         bodyScrollView.isHidden = false
         actionBar.isHidden = false
+    }
+
+    private func bindRecent(_ message: MailMessage, id: Int64) {
+        displayedMessageID = id
+        displayedSavedUUID = nil
+        beginBinding()
 
         subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
         senderField.stringValue = MailLabels.senderLine(
@@ -295,8 +330,64 @@ final class MailReaderViewController: NSViewController {
         updateActionBar()
     }
 
+    /// A saved message needs no fetch: the copy in the store *is* the message,
+    /// which is the whole reason saving is a copy rather than a bookmark.
+    private func bindSaved(_ message: SavedMessage) {
+        displayedSavedUUID = message.uuid
+        // Outlook's id is kept only as a best-effort handle for Open in
+        // Outlook, and is expected to go stale.
+        displayedMessageID = message.outlookID == 0 ? nil : message.outlookID
+        beginBinding()
+
+        subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
+        senderField.stringValue = MailLabels.senderLine(
+            name: message.senderName,
+            address: message.senderAddress
+        )
+        dateField.stringValue = MailLabels.readerTimestamp(for: message.receivedAt, calendar: calendar)
+
+        if let line = MailLabels.recipientsLine(message.recipients) {
+            recipientsField.stringValue = line
+            recipientsField.isHidden = false
+        } else {
+            recipientsField.isHidden = true
+        }
+        if let line = MailLabels.attachmentsLine(names: message.attachmentNameList) {
+            attachmentsField.stringValue = "📎 \(line)"
+            attachmentsField.isHidden = false
+        } else {
+            attachmentsField.isHidden = true
+        }
+
+        // Saved mail does not expire; that is what saving it was for.
+        expiryBanner.isHidden = true
+        updateConversationPosition(for: message)
+
+        setBodyLoading(false)
+        bodyStatusField.isHidden = true
+        bodyView.string = message.body ?? ""
+        bodyView.scroll(.zero)
+        updateActionBar()
+    }
+
+    private func updateConversationPosition(for message: SavedMessage) {
+        let conversation = conversationProvider?(message.uuid) ?? []
+        guard conversation.count > 1,
+              let index = conversation.firstIndex(where: { $0.uuid == message.uuid })
+        else {
+            conversationField.isHidden = true
+            return
+        }
+        conversationField.stringValue = MailLabels.conversationPosition(
+            index: index,
+            of: conversation.count
+        )
+        conversationField.isHidden = false
+    }
+
     private func showEmptyState() {
         displayedMessageID = nil
+        displayedSavedUUID = nil
         emptyStateLabel.isHidden = false
         headerStack.isHidden = true
         bodyScrollView.isHidden = true
@@ -378,43 +469,75 @@ final class MailReaderViewController: NSViewController {
         if loading { bodySpinner.startAnimation(nil) } else { bodySpinner.stopAnimation(nil) }
     }
 
+    /// The bar says what the *open* message can have done to it, which is a
+    /// different set for a message passing through Recent Mail than for one the
+    /// user has already decided to keep.
     private func updateActionBar() {
-        // Saving and task-creation land in later PRs; the buttons are drawn now
-        // so the pane's proportions are settled, and disabled so they cannot
-        // lie about what they do.
-        saveButton.isEnabled = false
+        let isSaved = displayedSavedUUID != nil
+        saveButton.isHidden = isSaved
+        moveButton.isHidden = !isSaved
+        removeButton.isHidden = !isSaved
+
+        rebuildSaveMenu()
+        rebuildMoveMenu()
+        // New Task lands in the next PR; drawn now so the bar's proportions are
+        // settled, disabled so it cannot lie about what it does.
         newTaskButton.isEnabled = false
         openInOutlookButton.isEnabled = displayedMessageID != nil
     }
 
+    /// The folder menu, rebuilt on every bind: folders are created, renamed and
+    /// deleted from the sidebar while the reader is open.
+    private func rebuildSaveMenu() {
+        guard !saveButton.isHidden else { return }
+        let menu = NSMenu()
+        // A pull-down takes its title from item zero, which is never chosen.
+        menu.addItem(withTitle: "Save to Folder", action: nil, keyEquivalent: "")
+        appendFolders(to: menu, action: #selector(MainSplitViewController.saveMessageToFolder(_:)))
+        saveButton.menu = menu
+        saveButton.isEnabled = displayedMessageID != nil
+    }
+
+    private func rebuildMoveMenu() {
+        guard !moveButton.isHidden else { return }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Move to Folder", action: nil, keyEquivalent: "")
+        let current = displayedSavedUUID.flatMap { model.savedMessage(uuid: $0)?.folder }
+        appendFolders(
+            to: menu,
+            action: #selector(MainSplitViewController.moveMessageToFolder(_:)),
+            excluding: current
+        )
+        moveButton.menu = menu
+        // Nowhere to move it to is not an error; the button simply has nothing
+        // to offer.
+        moveButton.isEnabled = menu.items.count > 1
+    }
+
+    private func appendFolders(
+        to menu: NSMenu,
+        action: Selector,
+        excluding: MailFolder? = nil
+    ) {
+        for folder in model.mailFolders() where folder.objectID != excluding?.objectID {
+            let item = NSMenuItem(title: folder.name, action: action, keyEquivalent: "")
+            item.representedObject = folder
+            menu.addItem(item)
+        }
+        if menu.items.count > 1 { menu.addItem(.separator()) }
+        // Filing into a folder that does not exist yet is the common case the
+        // first few times, so it lives in the same menu rather than behind a
+        // trip to the sidebar.
+        menu.addItem(withTitle: "New Folder…", action: action, keyEquivalent: "")
+    }
+
     // MARK: - Actions
 
+    /// The pop-up's own action fires alongside the chosen item's; the item is
+    /// what carries the folder, so this one does nothing.
     @objc private func saveButtonClicked(_ sender: Any?) {}
-    @objc private func newTaskFromMessage(_ sender: Any?) {}
+    @objc private func moveButtonClicked(_ sender: Any?) {}
 
-    @objc private func openInOutlook(_ sender: Any?) {
-        guard let id = displayedMessageID else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await mail.reveal(messageID: id)
-            } catch {
-                presentReadOnly(error)
-            }
-        }
-    }
-
-    private func presentReadOnly(_ error: Error) {
-        let alert = NSAlert()
-        alert.messageText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        alert.informativeText = (error as? LocalizedError)?.recoverySuggestion ?? ""
-        alert.alertStyle = .warning
-        if let window = view.window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
-    }
 }
 
 extension MailReaderViewController {
@@ -429,4 +552,13 @@ extension MailReaderViewController {
     var test_recipients: String? { recipientsField.isHidden ? nil : recipientsField.stringValue }
     var test_attachments: String? { attachmentsField.isHidden ? nil : attachmentsField.stringValue }
     var test_displayedMessageID: Int64? { displayedMessageID }
+    var test_conversationPosition: String? {
+        conversationField.isHidden ? nil : conversationField.stringValue
+    }
+    var test_actionTitles: [String] {
+        actionBar.arrangedSubviews
+            .compactMap { $0 as? NSControl }
+            .filter { !$0.isHidden }
+            .map { ($0 as? NSButton)?.title ?? ($0 as? NSPopUpButton)?.title ?? "" }
+    }
 }

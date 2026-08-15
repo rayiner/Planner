@@ -209,8 +209,9 @@ final class MailListTests: PersistenceTestCase {
     func testAnAlreadySavedMessageCarriesItsFolderName() async throws {
         let folder = try model.createMailFolder(name: "Celerity")
         let envelope = message(id: 5, dayOffset: 0)
-        // Saved with no headers, which is what Recent Mail can match on.
-        try model.saveMessage(envelope, detail: nil, into: folder)
+        // Saved *with* headers, as a real save is: the row still has to match
+        // it, which is why the match is on Outlook's record id.
+        try model.saveMessage(envelope, detail: .fixture(id: 5, messageID: "<five@x>"), into: folder)
 
         await load([envelope])
         XCTAssertEqual(list.test_rows.first?.savedFolderName, "Celerity")

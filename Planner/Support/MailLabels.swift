@@ -148,6 +148,20 @@ enum MailLabels {
         "Message \(index + 1) of \(count) in this conversation"
     }
 
+    /// The people on a conversation, deduplicated and in order of appearance.
+    ///
+    /// Truncated after three: the row has one line for this, and a thread of
+    /// twelve would otherwise show twelve names and no subject.
+    static func threadParticipants(_ names: [String]) -> String {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for name in names where !name.isEmpty {
+            if seen.insert(name).inserted { ordered.append(name) }
+        }
+        guard ordered.count > 3 else { return ordered.joined(separator: ", ") }
+        return ordered.prefix(3).joined(separator: ", ") + " and \(ordered.count - 3) more"
+    }
+
     // MARK: - Empty states
 
     /// What an empty list means depends entirely on why it is empty, and the

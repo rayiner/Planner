@@ -65,7 +65,14 @@ final class MailCoordinator {
     /// stable. Discarded on quit, like everything else about Recent Mail.
     private var detailCache: [Int64: MailMessageDetail] = [:]
     private var detailStates: [Int64: DetailState] = [:]
-    private var detailTasks: [Int64: Task<Void, Never>] = [:]
+    /// One fetch per message, however many callers want it.
+    ///
+    /// Opening a message and saving it are two different code paths that want
+    /// the same body at almost the same moment — the reader asks on selection,
+    /// and Save asks again a click later. Two Apple events for one message is
+    /// wasteful; worse, whichever reply arrives second finds its caller already
+    /// gone. Sharing the task makes the second caller wait for the first.
+    private var detailTasks: [Int64: Task<MailMessageDetail, Error>] = [:]
 
     private var loadTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -225,55 +232,68 @@ final class MailCoordinator {
     /// Fetches the body for a save or a task-creation, returning it directly
     /// rather than through the cache-and-notify path the reader uses. The
     /// caller is a command that can put the failure in an alert, so this one
-    /// throws instead of recording a state.
+    /// throws instead of only recording a state.
     func loadDetail(for id: Int64) async throws -> MailMessageDetail {
         if let cached = detailCache[id] { return cached }
-        let source = source
-        let seconds = detailTimeoutSeconds
-        let detail = try await withMailTimeout(seconds: seconds) {
-            try await source.detail(forMessageID: id)
+        let task = sharedDetailTask(for: id)
+        do {
+            let detail = try await task.value
+            applyDetail(detail, id: id)
+            return detail
+        } catch {
+            failDetail(error, id: id)
+            throw error
         }
-        detailCache[id] = detail
-        detailStates[id] = .loaded(detail)
-        postDetailChange(id: id)
-        return detail
     }
 
     func reveal(messageID id: Int64) async throws {
         try await source.reveal(messageID: id)
     }
 
-    private func beginLoadingDetail(id: Int64) {
-        detailTasks[id]?.cancel()
-        detailStates[id] = .loading
+    private func sharedDetailTask(for id: Int64) -> Task<MailMessageDetail, Error> {
+        if let existing = detailTasks[id] { return existing }
         let source = source
         let seconds = detailTimeoutSeconds
-        detailTasks[id] = Task { [weak self] in
+        let task = Task<MailMessageDetail, Error> {
+            try await withMailTimeout(seconds: seconds) {
+                try await source.detail(forMessageID: id)
+            }
+        }
+        detailTasks[id] = task
+        return task
+    }
+
+    private func beginLoadingDetail(id: Int64) {
+        detailStates[id] = .loading
+        let task = sharedDetailTask(for: id)
+        Task { [weak self] in
             do {
-                let detail = try await withMailTimeout(seconds: seconds) {
-                    try await source.detail(forMessageID: id)
-                }
-                guard !Task.isCancelled else { return }
+                let detail = try await task.value
                 self?.applyDetail(detail, id: id)
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
                 self?.failDetail(error, id: id)
             }
         }
     }
 
+    /// Idempotent: both the reader's observer and a direct `loadDetail` caller
+    /// land here for the same reply.
     private func applyDetail(_ detail: MailMessageDetail, id: Int64) {
         detailTasks[id] = nil
+        guard detailCache[id] != detail || detailStates[id] != .loaded(detail) else { return }
         detailCache[id] = detail
         detailStates[id] = .loaded(detail)
         postDetailChange(id: id)
     }
 
     private func failDetail(_ error: Error, id: Int64) {
+        // Cleared so the next ask starts a fresh fetch rather than awaiting a
+        // task that has already failed.
         detailTasks[id] = nil
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        guard detailStates[id] != .failed(message) else { return }
         PlannerLog.mail.error("Message body failed: \(message, privacy: .public)")
         detailStates[id] = .failed(message)
         postDetailChange(id: id)

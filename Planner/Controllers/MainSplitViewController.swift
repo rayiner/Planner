@@ -94,6 +94,12 @@ final class MainSplitViewController: NSSplitViewController {
             mail: mail
         )
         super.init(nibName: nil, bundle: nil)
+        // The list is where a folder is threaded; the reader asks it rather
+        // than threading the same folder a second time and risking a different
+        // answer.
+        mailReaderViewController.conversationProvider = { [weak self] uuid in
+            self?.mailListViewController.conversation(containing: uuid) ?? []
+        }
     }
 
     @available(*, unavailable)
@@ -454,6 +460,151 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
+    // MARK: - Saving mail
+
+    /// Copies the open Recent Mail message into a folder.
+    ///
+    /// The body is fetched **first**: a saved message with no body is worse
+    /// than no saved message, because it looks like it worked. A failed fetch
+    /// therefore saves nothing and says so.
+    @objc func saveMessageToFolder(_ sender: Any?) {
+        guard case let .recent(id)? = selection.message, let envelope = mail.message(id: id) else {
+            return
+        }
+        let folder = (sender as? NSMenuItem)?.representedObject as? MailFolder
+        Task { [weak self] in await self?.save(envelope, into: folder) }
+    }
+
+    private func save(_ envelope: MailMessage, into folder: MailFolder?) async {
+        var target = folder
+        var created = false
+        if target == nil {
+            guard let new = try? model.createMailFolder() else { return }
+            target = new
+            created = true
+        }
+        guard let target else { return }
+
+        do {
+            let detail = try await mail.loadDetail(for: envelope.id)
+            let saved = try model.saveMessage(envelope, detail: detail, into: target)
+            if created {
+                // A folder made on the way to saving still needs a name, and
+                // the message it was made for is the best reminder of why.
+                selection.selectMailbox(.folder(target.uuid))
+                mailboxListViewController.beginEditingName(of: target)
+            }
+            PlannerLog.mail.info("Saved message \(saved.outlookID, privacy: .public)")
+        } catch {
+            // Nothing was written, including the folder if this call made one.
+            if created { try? model.deleteMailFolder(target) }
+            present(error)
+        }
+    }
+
+    /// Brings the original up in Outlook. Always explicit: opening an unread
+    /// message marks it read upstream, which is a write Planner will not make
+    /// on the user's behalf.
+    /// Lands with the New Task PR; declared here so the reader's button and the
+    /// list's context menu can bind to it now.
+    @objc func newTaskFromMessage(_ sender: Any?) {}
+
+    @objc func openMessageInOutlook(_ sender: Any?) {
+        guard let id = outlookIDOfSelectedMessage else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await mail.reveal(messageID: id) } catch { present(error) }
+        }
+    }
+
+    private var outlookIDOfSelectedMessage: Int64? {
+        switch selection.message {
+        case let .recent(id)?:
+            return id
+        case let .saved(uuid)?:
+            // Best-effort: a saved message keeps the id it had at save time,
+            // and Outlook may have moved on.
+            let stored = model.savedMessage(uuid: uuid)?.outlookID ?? 0
+            return stored == 0 ? nil : stored
+        case nil:
+            return nil
+        }
+    }
+
+    @objc func moveMessageToFolder(_ sender: Any?) {
+        guard let message = selectedSavedMessage else { return }
+        var target = (sender as? NSMenuItem)?.representedObject as? MailFolder
+        if target == nil { target = try? model.createMailFolder() }
+        guard let target else { return }
+        do {
+            try model.moveMessage(message, to: target)
+            selection.selectMailbox(.folder(target.uuid))
+            selection.selectMessage(.saved(message.uuid))
+        } catch {
+            // saveFailed already presented.
+        }
+    }
+
+    /// Removing is deleting Planner's only copy, so it asks — but only when it
+    /// really is the only one. A message filed in two folders can lose one of
+    /// them without ceremony.
+    @objc func removeSavedMessage(_ sender: Any?) {
+        guard let message = selectedSavedMessage else { return }
+        guard copiesElsewhere(of: message) == 0 else {
+            performRemove(message)
+            return
+        }
+        confirm(message: Self.removeConfirmationMessage(for: message)) { [weak self] confirmed in
+            guard confirmed else { return }
+            self?.performRemove(message)
+        }
+    }
+
+    /// Tests pass a result to skip the confirmation sheet.
+    func removeSavedMessage(confirmed: Bool) {
+        guard confirmed, let message = selectedSavedMessage else { return }
+        performRemove(message)
+    }
+
+    private func performRemove(_ message: SavedMessage) {
+        do {
+            try model.removeMessage(message)
+            selection.selectMessage(nil)
+        } catch {
+            // saveFailed already presented.
+        }
+    }
+
+    private func copiesElsewhere(of message: SavedMessage) -> Int {
+        model.mailFolders()
+            .filter { $0.objectID != message.folder?.objectID }
+            .reduce(0) { count, folder in
+                count + folder.messages.filter { $0.messageID == message.messageID }.count
+            }
+    }
+
+    static func removeConfirmationMessage(for message: SavedMessage) -> String {
+        let subject = message.subject.isEmpty ? "this message" : "“\(message.subject)”"
+        return "Remove \(subject)? This is Planner's only copy."
+    }
+
+    private var selectedSavedMessage: SavedMessage? {
+        guard case let .saved(uuid)? = selection.message else { return nil }
+        return model.savedMessage(uuid: uuid)
+    }
+
+    private func present(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        alert.informativeText = (error as? LocalizedError)?.recoverySuggestion ?? ""
+        alert.alertStyle = .warning
+        if let window = view.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc func renameSelected(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
         if isMailMode {
@@ -737,7 +888,9 @@ final class MainSplitViewController: NSSplitViewController {
             applyMode(selection.mode)
             focusPreferredResponder()
         }
-        if fields.contains(SelectionField.visibleWeek.rawValue) {
+        // The mail title names the open mailbox, so it follows the sidebar.
+        if fields.contains(SelectionField.visibleWeek.rawValue)
+            || fields.contains(SelectionField.mailbox.rawValue) {
             updateChrome()
         }
     }
@@ -834,6 +987,9 @@ final class MainSplitViewController: NSSplitViewController {
             bold: mailWindowTitle,
             trailing: nil
         )
+        // The window length is a property of Recent Mail. Over a folder it
+        // would be offering to change something the pane does not show.
+        windowRangeButton?.isEnabled = selection.isRecentMailSelected
     }
 
     /// Span bold, year lighter — the "August 2026" treatment, in the toolbar.
@@ -904,6 +1060,16 @@ final class MainSplitViewController: NSSplitViewController {
             return !isMailMode
         case #selector(newMailFolder(_:)):
             return isMailMode && !isFirstResponderTextInput
+        case #selector(saveMessageToFolder(_:)):
+            guard case .recent? = selection.message else { return false }
+            return isMailMode
+        case #selector(moveMessageToFolder(_:)), #selector(removeSavedMessage(_:)):
+            return isMailMode && selectedSavedMessage != nil
+        case #selector(openMessageInOutlook(_:)):
+            return isMailMode && outlookIDOfSelectedMessage != nil
+        case #selector(newTaskFromMessage(_:)):
+            // Lands with the New Task PR.
+            return false
         case #selector(refreshCalendarEvents(_:)):
             // Refreshing while one is in flight would just cancel and restart
             // it, which looks like the command did nothing.

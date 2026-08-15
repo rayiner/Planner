@@ -203,33 +203,19 @@ final class MailStoreTests: PersistenceTestCase {
 
     // MARK: - Lookups
 
-    func testFolderContainingFindsTheSavedCopy() throws {
-        let folder = try model.createMailFolder(name: "Celerity")
-        try model.saveMessage(envelope(), detail: detail(), into: folder)
-        XCTAssertEqual(model.folderContaining(messageID: "<a@example.com>")?.objectID, folder.objectID)
-        XCTAssertNil(model.folderContaining(messageID: "<nothing@example.com>"))
-        XCTAssertNil(model.folderContaining(messageID: ""))
-    }
-
-    func testFolderContainingPrefersTheFirstFolderInListOrder() throws {
-        let first = try model.createMailFolder(name: "First")
-        let second = try model.createMailFolder(name: "Second")
-        try model.saveMessage(envelope(), detail: detail(), into: second)
-        try model.saveMessage(envelope(), detail: detail(), into: first)
-
-        XCTAssertEqual(model.folderContaining(messageID: "<a@example.com>")?.objectID, first.objectID)
-    }
-
-    func testFoldersByMessageIDIndexesTheWholeStoreInOneFetch() throws {
+    /// Keyed on Outlook's record id, not the Message-ID: Recent Mail fetches
+    /// headers lazily, so an envelope does not know its own Message-ID and
+    /// could never match a saved copy by one.
+    func testFoldersByOutlookIDIndexesTheWholeStoreInOneFetch() throws {
         let first = try model.createMailFolder(name: "First")
         let second = try model.createMailFolder(name: "Second")
         try model.saveMessage(envelope(id: 1), detail: detail(id: 1, messageID: "<one@x>"), into: first)
         try model.saveMessage(envelope(id: 2), detail: detail(id: 2, messageID: "<two@x>"), into: second)
 
-        let index = model.foldersByMessageID()
-        XCTAssertEqual(index["<one@x>"]?.objectID, first.objectID)
-        XCTAssertEqual(index["<two@x>"]?.objectID, second.objectID)
-        XCTAssertNil(index["<three@x>"])
+        let index = model.foldersByOutlookID()
+        XCTAssertEqual(index[1]?.objectID, first.objectID)
+        XCTAssertEqual(index[2]?.objectID, second.objectID)
+        XCTAssertNil(index[3])
     }
 
     func testSavedMessageLookupByUUID() throws {

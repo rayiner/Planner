@@ -32,6 +32,34 @@ final class MailListRow: NSObject {
     }
 }
 
+/// A conversation inside a folder: a parent row that expands in place.
+///
+/// Only built when there is more than one message. A one-message conversation
+/// is just a message, and wrapping it in a thread row would make the common
+/// case cost an extra click to read.
+final class MailThreadRow: NSObject {
+    let subject: String
+    let participants: String
+    let latest: Date
+    let rows: [SavedMessageRow]
+
+    init(subject: String, participants: String, latest: Date, rows: [SavedMessageRow]) {
+        self.subject = subject
+        self.participants = participants
+        self.latest = latest
+        self.rows = rows
+    }
+}
+
+/// One saved message in a folder.
+final class SavedMessageRow: NSObject {
+    let message: SavedMessage
+
+    init(message: SavedMessage) {
+        self.message = message
+    }
+}
+
 /// The message list: Recent Mail strictly chronologically, newest first.
 ///
 /// **No threading here, deliberately.** Recent Mail is a timeline you sweep,
@@ -43,13 +71,18 @@ final class MailListViewController: NSViewController {
     let model: ModelController
     let selection: SelectionModel
     let mail: MailCoordinator
-    let outlineView = NSOutlineView()
+    let outlineView = MailListOutlineView()
 
     private let calendar: Calendar
     private let now: () -> Date
     private let emptyStateLabel = NSTextField(labelWithString: "")
     private var groups: [MailDateGroup] = []
+    /// Top-level rows in folder mode: thread parents and lone messages, mixed,
+    /// ordered by their newest message.
+    private var folderRows: [NSObject] = []
     private var isApplyingProgrammaticSelection = false
+
+    private var isShowingFolder: Bool { !selection.isRecentMailSelected }
 
     init(
         persistence: PersistenceController,
@@ -187,19 +220,63 @@ final class MailListViewController: NSViewController {
     // MARK: - Contents
 
     func reload() {
+        // Which conversations were open, so a reload — one arrives on every
+        // save — does not collapse the thread the user is reading.
+        let expanded = Set(folderRows.compactMap { row -> String? in
+            guard let thread = row as? MailThreadRow, outlineView.isItemExpanded(thread) else {
+                return nil
+            }
+            return thread.rows.first?.message.uuid.uuidString
+        })
+
         groups = makeGroups()
+        folderRows = makeFolderRows()
         isApplyingProgrammaticSelection = true
         outlineView.reloadData()
         for group in groups { outlineView.expandItem(group) }
+        for row in folderRows {
+            guard let thread = row as? MailThreadRow,
+                  let key = thread.rows.first?.message.uuid.uuidString,
+                  expanded.contains(key)
+            else { continue }
+            outlineView.expandItem(thread)
+        }
         revealSelection()
         isApplyingProgrammaticSelection = false
         updateEmptyState()
     }
 
-    /// Recent Mail only, for now: a folder's threaded list arrives with saving.
+    /// A folder's messages, threaded. Recomputed on every reload rather than
+    /// stored: threading is a *view* of a folder, and a stored membership
+    /// would need repairing on every save, move and remove.
+    private func makeFolderRows() -> [NSObject] {
+        guard let uuid = selection.selectedFolderUUID,
+              let folder = model.mailFolders().first(where: { $0.uuid == uuid })
+        else { return [] }
+
+        let messages = model.messages(in: folder)
+        let byUUID = Dictionary(uniqueKeysWithValues: messages.map { ($0.uuid, $0) })
+        let threads = MailThreading.threads(messages.map(\.threadingMessage))
+
+        return threads.compactMap { thread in
+            let rows = thread.messages.compactMap { byUUID[$0.id].map(SavedMessageRow.init) }
+            guard !rows.isEmpty else { return nil }
+            // A conversation of one is just a message.
+            guard rows.count > 1 else { return rows[0] }
+            return MailThreadRow(
+                subject: thread.subject,
+                participants: MailLabels.threadParticipants(
+                    rows.map(\.message.senderDisplayName)
+                ),
+                latest: thread.latestDate,
+                rows: rows
+            )
+        }
+    }
+
     private func makeGroups() -> [MailDateGroup] {
         guard selection.isRecentMailSelected else { return [] }
-        let saved = model.foldersByMessageID()
+        let saved = model.foldersByOutlookID()
         var groups: [MailDateGroup] = []
         var currentDay: Date?
         var currentRows: [MailListRow] = []
@@ -217,11 +294,7 @@ final class MailListViewController: NSViewController {
             }
             currentRows.append(MailListRow(
                 message: message,
-                // The envelope has no Message-ID — headers are lazy — so the
-                // synthetic id is the only key Recent Mail can match on. That
-                // is also what `saveMessage` stores for a header-less message,
-                // so a save made from this list matches itself.
-                savedFolderName: saved[ModelController.normalizedMessageID(nil, fallbackFor: message)]?.name
+                savedFolderName: saved[message.id]?.name
             ))
         }
         if let currentDay, !currentRows.isEmpty {
@@ -239,7 +312,9 @@ final class MailListViewController: NSViewController {
     }
 
     private func updateEmptyState() {
-        let isEmpty = groups.allSatisfy { $0.rows.isEmpty }
+        let isEmpty = isShowingFolder
+            ? folderRows.isEmpty
+            : groups.allSatisfy { $0.rows.isEmpty }
         emptyStateLabel.isHidden = !isEmpty
         guard isEmpty else { return }
         switch selection.mailbox {
@@ -263,43 +338,91 @@ final class MailListViewController: NSViewController {
     // MARK: - Selection
 
     private func revealSelection() {
-        guard case let .recent(id)? = selection.message else {
-            if selection.message == nil { outlineView.deselectAll(nil) }
-            return
+        switch selection.message {
+        case nil:
+            outlineView.deselectAll(nil)
+        case let .recent(id)?:
+            guard let row = groups.lazy.flatMap(\.rows).first(where: { $0.message.id == id }) else {
+                return
+            }
+            select(item: row)
+        case let .saved(uuid)?:
+            guard let row = savedRow(uuid: uuid) else { return }
+            // A message inside a collapsed conversation has no row until the
+            // conversation opens, so revealing it opens the conversation.
+            if let thread = thread(containing: row) { outlineView.expandItem(thread) }
+            select(item: row)
         }
-        guard let row = groups.lazy
-            .flatMap(\.rows)
-            .first(where: { $0.message.id == id })
-        else { return }
-        let index = outlineView.row(forItem: row)
+    }
+
+    private func select(item: Any) {
+        let index = outlineView.row(forItem: item)
         guard index >= 0 else { return }
         outlineView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         outlineView.scrollRowToVisible(index)
     }
 
+    private func savedRow(uuid: UUID) -> SavedMessageRow? {
+        for row in folderRows {
+            if let saved = row as? SavedMessageRow, saved.message.uuid == uuid { return saved }
+            if let thread = row as? MailThreadRow,
+               let match = thread.rows.first(where: { $0.message.uuid == uuid }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private func thread(containing row: SavedMessageRow) -> MailThreadRow? {
+        folderRows.compactMap { $0 as? MailThreadRow }.first { $0.rows.contains(row) }
+    }
+
+    /// Selecting a conversation opens its newest message: a thread row is a
+    /// heading, and landing on a heading with an empty reader would be a step
+    /// backwards from clicking the message directly.
     private func publishSelection() {
         guard !isApplyingProgrammaticSelection else { return }
-        guard let row = outlineView.item(atRow: outlineView.selectedRow) as? MailListRow else {
+        switch outlineView.item(atRow: outlineView.selectedRow) {
+        case let row as MailListRow:
+            selection.selectMessage(.recent(row.message.id))
+        case let row as SavedMessageRow:
+            selection.selectMessage(.saved(row.message.uuid))
+        case let thread as MailThreadRow:
+            selection.selectMessage(.saved(thread.rows[0].message.uuid))
+        default:
             selection.selectMessage(nil)
-            return
         }
-        selection.selectMessage(.recent(row.message.id))
+    }
+
+    /// The conversation the reader's "message k of n" line counts against.
+    func conversation(containing uuid: UUID) -> [SavedMessage] {
+        guard let row = savedRow(uuid: uuid) else { return [] }
+        guard let thread = thread(containing: row) else { return [row.message] }
+        return thread.rows.map(\.message)
     }
 }
 
 extension MailListViewController: NSOutlineViewDataSource {
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let item else { return groups.count }
-        return (item as? MailDateGroup)?.rows.count ?? 0
+        guard let item else { return isShowingFolder ? folderRows.count : groups.count }
+        switch item {
+        case let group as MailDateGroup: return group.rows.count
+        case let thread as MailThreadRow: return thread.rows.count
+        default: return 0
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        item is MailDateGroup
+        item is MailDateGroup || item is MailThreadRow
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let item else { return groups[index] }
-        return (item as! MailDateGroup).rows[index]
+        guard let item else { return isShowingFolder ? folderRows[index] : groups[index] }
+        switch item {
+        case let group as MailDateGroup: return group.rows[index]
+        case let thread as MailThreadRow: return thread.rows[index]
+        default: preconditionFailure("unknown mail list item")
+        }
     }
 }
 
@@ -314,8 +437,17 @@ extension MailListViewController: NSOutlineViewDelegate {
         !(item is MailDateGroup)
     }
 
+    /// Two heights, because some rows carry a third line and some do not: a
+    /// "Saved to X" chip and a conversation's message count both sit under the
+    /// subject, and a fixed height tall enough for them would leave every plain
+    /// row padded.
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        item is MailDateGroup ? 24 : 54
+        switch item {
+        case is MailDateGroup: return 24
+        case let row as MailListRow: return row.savedFolderName == nil ? 54 : 68
+        case is MailThreadRow: return 68
+        default: return 54
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -327,11 +459,20 @@ extension MailListViewController: NSOutlineViewDelegate {
             return cell
         }
 
-        guard let row = item as? MailListRow else { return nil }
         let identifier = NSUserInterfaceItemIdentifier("MessageRow")
         let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? MessageRowView
             ?? makeMessageRowCell(identifier: identifier)
-        cell.apply(row, calendar: calendar)
+
+        switch item {
+        case let row as MailListRow:
+            cell.apply(row, calendar: calendar)
+        case let thread as MailThreadRow:
+            cell.apply(thread, calendar: calendar)
+        case let row as SavedMessageRow:
+            cell.apply(row, calendar: calendar)
+        default:
+            return nil
+        }
         return cell
     }
 
@@ -464,6 +605,45 @@ private final class MessageRowView: NSTableCellView {
         ))
     }
 
+    /// A conversation heading: subject on top, participants below, the count
+    /// where the unread dot would be, and the latest date on the right.
+    func apply(_ thread: MailThreadRow, calendar: Calendar) {
+        senderField.stringValue = thread.subject
+        timeField.stringValue = MailLabels.listTime(for: thread.latest, calendar: calendar)
+        subjectField.stringValue = thread.participants
+        unreadDot.isHidden = true
+        savedChip.stringValue = MailLabels.messageCount(thread.rows.count)
+        savedChip.isHidden = false
+        alphaValue = 1
+        refreshColors()
+        setAccessibilityLabel(MailLabels.threadAccessibilityLabel(
+            subject: thread.subject,
+            count: thread.rows.count,
+            latest: thread.latest
+        ))
+    }
+
+    /// A saved message. No unread dot — Planner never learns whether a saved
+    /// copy has been read, and inventing one would be a claim it cannot make.
+    func apply(_ row: SavedMessageRow, calendar: Calendar) {
+        let message = row.message
+        senderField.stringValue = message.senderDisplayName
+        timeField.stringValue = MailLabels.listTime(for: message.receivedAt, calendar: calendar)
+        subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
+        unreadDot.isHidden = true
+        savedChip.isHidden = true
+        alphaValue = 1
+        refreshColors()
+        setAccessibilityLabel(MailLabels.messageAccessibilityLabel(
+            sender: message.senderDisplayName,
+            subject: message.subject,
+            receivedAt: message.receivedAt,
+            isRead: true,
+            savedFolderName: nil,
+            calendar: calendar
+        ))
+    }
+
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { refreshColors() }
     }
@@ -483,4 +663,8 @@ extension MailListViewController {
     var test_emptyStateText: String { emptyStateLabel.stringValue }
     var test_groupTitles: [String] { groups.map(\.title) }
     var test_rows: [MailListRow] { groups.flatMap(\.rows) }
+    var test_folderRows: [NSObject] { folderRows }
+    var test_threadSubjects: [String] {
+        folderRows.compactMap { ($0 as? MailThreadRow)?.subject }
+    }
 }

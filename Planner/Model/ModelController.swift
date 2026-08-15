@@ -213,28 +213,22 @@ final class ModelController {
         return (try? ctx.fetch(request))?.first
     }
 
-    /// Which folder already holds this message, for the "Saved to X" chip in
-    /// Recent Mail. Returns the first by `(sortIndex, uuid)` if somehow several
-    /// do — a chip has room for one name, and the list order settles which.
-    func folderContaining(messageID: String) -> MailFolder? {
-        guard !messageID.isEmpty else { return nil }
-        let request = SavedMessage.fetchRequest()
-        request.predicate = NSPredicate(format: "messageID == %@", messageID)
-        let folders = ((try? ctx.fetch(request)) ?? []).compactMap(\.folder)
-        return folders.min { ($0.sortIndex, $0.uuid) < ($1.sortIndex, $1.uuid) }
-    }
-
-    /// Every folder holding a copy of this message, keyed by message id — one
-    /// fetch for a whole list, rather than one per visible row.
-    func foldersByMessageID() -> [String: MailFolder] {
-        var index: [String: MailFolder] = [:]
+    /// Which folder holds each saved message, keyed by **Outlook's record id**
+    /// — one fetch for a whole list, rather than one per visible row.
+    ///
+    /// Keyed on the record id rather than the Message-ID because that is the
+    /// only key Recent Mail has: headers are fetched lazily, so an envelope
+    /// does not know its own Message-ID. Record ids are stable for the life of
+    /// a message, which comfortably outlasts a three-day window.
+    func foldersByOutlookID() -> [Int64: MailFolder] {
+        var index: [Int64: MailFolder] = [:]
         for message in (try? ctx.fetch(SavedMessage.fetchRequest())) ?? [] {
-            guard let folder = message.folder, !message.messageID.isEmpty else { continue }
-            if let existing = index[message.messageID],
+            guard let folder = message.folder, message.outlookID != 0 else { continue }
+            if let existing = index[message.outlookID],
                (existing.sortIndex, existing.uuid) <= (folder.sortIndex, folder.uuid) {
                 continue
             }
-            index[message.messageID] = folder
+            index[message.outlookID] = folder
         }
         return index
     }
