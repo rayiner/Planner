@@ -134,6 +134,7 @@ final class MailListViewController: NSViewController {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.setContentHuggingPriority(.defaultLow, for: .vertical)
 
         searchField.controlSize = .small
         searchField.sendsWholeSearchString = true
@@ -166,6 +167,7 @@ final class MailListViewController: NSViewController {
         let stack = NSStackView(views: [searchHeader, scrollView])
         stack.orientation = .vertical
         stack.alignment = .width
+        stack.distribution = .fill
         stack.spacing = 0
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
