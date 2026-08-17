@@ -22,4 +22,12 @@ final class MailSearchFieldEditor: NSTextView {
         guard tag == Int(NSFindPanelAction.showFindPanel.rawValue) else { return }
         selectAll(sender)
     }
+
+    /// Menu items target First Responder; NSTextView would enable Next / Previous / Use Selection.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(performFindPanelAction(_:)) {
+            return item.tag == Int(NSFindPanelAction.showFindPanel.rawValue)
+        }
+        return super.validateUserInterfaceItem(item)
+    }
 }

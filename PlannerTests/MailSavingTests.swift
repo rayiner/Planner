@@ -10,6 +10,7 @@ final class MailSavingTests: PersistenceTestCase {
     private var selection: SelectionModel!
     private var windows: [NSWindow] = []
     private var undoVendor: UndoManagerVendor?
+    private var fieldEditorVendor: FieldEditorVendor?
 
     private var coordinator: MailCoordinator { split.mail }
     private var list: MailListViewController { split.mailListViewController }
@@ -48,6 +49,7 @@ final class MailSavingTests: PersistenceTestCase {
         for window in windows { window.contentViewController = nil }
         windows = []
         undoVendor = nil
+        fieldEditorVendor = nil
         split = nil
         selection = nil
         source = nil
@@ -910,6 +912,9 @@ final class MailSavingTests: PersistenceTestCase {
         selection.selectMailbox(.folder(folder.uuid))
         list.reload()
         let window = try XCTUnwrap(windows.first)
+        let vendor = FieldEditorVendor()
+        fieldEditorVendor = vendor
+        window.delegate = vendor
         window.makeKeyAndOrderFront(nil)
         list.view.layoutSubtreeIfNeeded()
 
@@ -920,12 +925,13 @@ final class MailSavingTests: PersistenceTestCase {
             "Find is validated by tag, not isCommandEnabled"
         )
         split.performFindPanelAction(show)
-        let responder = window.firstResponder
         XCTAssertTrue(
-            responder === list.test_searchField
-                || responder === list.test_searchField.currentEditor()
-                || responder is MailSearchFieldEditor,
-            "⌘F should focus the search field, got \(String(describing: responder))"
+            list.test_searchField.currentEditor() === list.test_searchField.searchEditor,
+            "focusSearchField should install MailSearchFieldEditor"
+        )
+        XCTAssertTrue(
+            window.firstResponder is MailSearchFieldEditor,
+            "⌘F should focus the search field, got \(String(describing: window.firstResponder))"
         )
 
         selection.selectMailbox(.recent)
@@ -998,6 +1004,12 @@ final class MailSavingTests: PersistenceTestCase {
         editor.setSelectedRange(NSRange(location: 0, length: 0))
         editor.performFindPanelAction(findItem(.next))
         XCTAssertEqual(editor.selectedRange().length, 0)
+
+        // The live menu target is the editor, not the split.
+        XCTAssertTrue(editor.validateUserInterfaceItem(findItem(.showFindPanel)))
+        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.next)))
+        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.previous)))
+        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.setFindString)))
     }
 
     func testTheReaderBodyAndNotesUseTheFindBar() {
@@ -1141,4 +1153,11 @@ private final class UndoManagerVendor: NSObject, NSWindowDelegate {
     }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undoManager }
+}
+
+/// Stands in for `AppDelegate.windowWillReturnFieldEditor`.
+private final class FieldEditorVendor: NSObject, NSWindowDelegate {
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        (client as? MailSearchField)?.searchEditor
+    }
 }
