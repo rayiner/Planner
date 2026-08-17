@@ -207,6 +207,33 @@ final class ModelController {
         }
     }
 
+    /// Newest first, matching `messages(in:)`. Empty / whitespace delegates
+    /// there so browsing stays a relationship walk.
+    func messages(in folder: MailFolder, matching query: String) throws -> [SavedMessage] {
+        let tokens = SavedMessageSearch.tokens(in: query)
+        guard !tokens.isEmpty else { return messages(in: folder) }
+
+        let request = SavedMessage.fetchRequest()
+        let inFolder = NSPredicate(format: "folder == %@", folder)
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates:
+            [inFolder] + tokens.map(SavedMessageSearch.tokenPredicate)
+        )
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "receivedAt", ascending: false),
+            NSSortDescriptor(key: "uuid", ascending: true),
+        ]
+        let started = Date()
+        do {
+            let results = try ctx.fetch(request)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            PlannerLog.mail.debug("Saved-mail search tokens=\(tokens.count, privacy: .public) results=\(results.count, privacy: .public) ms=\(ms, privacy: .public)")
+            return results
+        } catch {
+            PlannerLog.mail.error("Saved-mail search failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
     func savedMessage(uuid: UUID) -> SavedMessage? {
         let request = SavedMessage.fetchRequest()
         request.predicate = NSPredicate(format: "uuid == %@", uuid as CVarArg)

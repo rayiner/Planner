@@ -32,6 +32,118 @@ final class MailStoreTests: PersistenceTestCase {
         )
     }
 
+    /// One saved row with every searchable field spelled out, so a token can
+    /// only hit through the field the test is checking.
+    @discardableResult
+    private func saveSearchMessage(
+        id: Int64,
+        subject: String,
+        senderName: String,
+        senderAddress: String,
+        body: String,
+        html: String? = nil,
+        recipients: String? = "you@example.com",
+        receivedAt: Date? = nil,
+        into folder: MailFolder
+    ) throws -> SavedMessage {
+        try model.saveMessage(
+            MailMessage.fixture(
+                id: id,
+                subject: subject,
+                senderName: senderName,
+                senderAddress: senderAddress,
+                receivedAt: receivedAt ?? date(year: 2026, month: 8, day: Int(id))
+            ),
+            detail: .fixture(
+                id: id,
+                body: body,
+                html: html,
+                messageID: "<\(id)@search>",
+                recipients: recipients
+            ),
+            into: folder
+        )
+    }
+
+    /// Six disjoint rows: one hit per searchable field, plus recipients-only
+    /// and html-only rows that must never match.
+    private func searchCorpus() throws -> (
+        folder: MailFolder,
+        other: MailFolder,
+        subject: SavedMessage,
+        senderName: SavedMessage,
+        senderAddress: SavedMessage,
+        body: SavedMessage,
+        recipients: SavedMessage,
+        html: SavedMessage
+    ) {
+        let folder = try model.createMailFolder(name: "Search")
+        let other = try model.createMailFolder(name: "Other")
+        let subject = try saveSearchMessage(
+            id: 6,
+            subject: "Celerity notes",
+            senderName: "Pat Kim",
+            senderAddress: "pat@other.test",
+            body: "neutral",
+            into: folder
+        )
+        let senderName = try saveSearchMessage(
+            id: 5,
+            subject: "Weekly report",
+            senderName: "Ada Lovelace",
+            senderAddress: "charles@nomail.test",
+            body: "neutral",
+            into: folder
+        )
+        let senderAddress = try saveSearchMessage(
+            id: 4,
+            subject: "Status",
+            senderName: "Charles Babbage",
+            senderAddress: "ada@analytical.engine",
+            body: "neutral",
+            into: folder
+        )
+        let body = try saveSearchMessage(
+            id: 3,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "other@nomail.test",
+            body: "Deposition transcript",
+            into: folder
+        )
+        let recipients = try saveSearchMessage(
+            id: 2,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "rcpt@nomail.test",
+            body: "neutral",
+            recipients: "hidden-recipient@x.test ada report Celerity Deposition",
+            into: folder
+        )
+        let html = try saveSearchMessage(
+            id: 1,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "html@nomail.test",
+            body: "",
+            html: "<p>uniquehtmltoken Celerity ada report Deposition</p>",
+            into: folder
+        )
+        try saveSearchMessage(
+            id: 10,
+            subject: "Celerity notes",
+            senderName: "Ada Lovelace",
+            senderAddress: "ada@analytical.engine",
+            body: "Deposition transcript",
+            into: other
+        )
+        return (folder, other, subject, senderName, senderAddress, body, recipients, html)
+    }
+
+    private func objectIDs(_ messages: [SavedMessage]) -> [NSManagedObjectID] {
+        messages.map(\.objectID)
+    }
+
     // MARK: - Folders
 
     func testCreateFolderAppendsSortIndex() throws {
@@ -240,6 +352,131 @@ final class MailStoreTests: PersistenceTestCase {
         let saved = try model.saveMessage(envelope(), detail: detail(), into: folder)
         XCTAssertEqual(model.savedMessage(uuid: saved.uuid)?.objectID, saved.objectID)
         XCTAssertNil(model.savedMessage(uuid: UUID()))
+    }
+
+    // MARK: - Search
+
+    func testSearchMatchesEachSearchableFieldInIsolation() throws {
+        let corpus = try searchCorpus()
+
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "Celerity")),
+            [corpus.subject.objectID]
+        )
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "Lovelace")),
+            [corpus.senderName.objectID]
+        )
+        // [cd]: the token is uppercase; the stored name is not.
+        XCTAssertTrue(
+            try model.messages(in: corpus.folder, matching: "ADA")
+                .contains { $0.objectID == corpus.senderName.objectID }
+        )
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "analytical")),
+            [corpus.senderAddress.objectID]
+        )
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "Deposition")),
+            [corpus.body.objectID]
+        )
+    }
+
+    func testSearchRequiresEveryToken() throws {
+        let corpus = try searchCorpus()
+
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "ada report")),
+            [corpus.senderName.objectID]
+        )
+
+        let ada = try Set(objectIDs(model.messages(in: corpus.folder, matching: "ada")))
+        XCTAssertEqual(ada, [corpus.senderName.objectID, corpus.senderAddress.objectID])
+    }
+
+    /// Recipients and HTML are display artifacts, not searchable keys.
+    func testSearchIgnoresRecipientsAndHTML() throws {
+        let corpus = try searchCorpus()
+        XCTAssertTrue(try model.messages(in: corpus.folder, matching: "hidden-recipient").isEmpty)
+        XCTAssertTrue(try model.messages(in: corpus.folder, matching: "uniquehtmltoken").isEmpty)
+        XCTAssertFalse(
+            try model.messages(in: corpus.folder, matching: "ada")
+                .contains { $0.objectID == corpus.recipients.objectID }
+        )
+        XCTAssertFalse(
+            try model.messages(in: corpus.folder, matching: "ada")
+                .contains { $0.objectID == corpus.html.objectID }
+        )
+    }
+
+    func testSearchDoesNotCrossFolders() throws {
+        let corpus = try searchCorpus()
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "Celerity")),
+            [corpus.subject.objectID]
+        )
+        XCTAssertEqual(try model.messages(in: corpus.other, matching: "Celerity").count, 1)
+    }
+
+    func testEmptySearchMatchesMessagesInOrder() throws {
+        let corpus = try searchCorpus()
+        let browsing = objectIDs(model.messages(in: corpus.folder))
+        XCTAssertEqual(try objectIDs(model.messages(in: corpus.folder, matching: "")), browsing)
+        XCTAssertEqual(try objectIDs(model.messages(in: corpus.folder, matching: "  \n\t ")), browsing)
+        XCTAssertEqual(browsing.count, 6)
+    }
+
+    /// LIKE treats `*` `?` as wildcards unless escaped; `%` `_` can survive
+    /// Core Data's SQL translation the same way.
+    func testSearchTreatsLIKEMetacharactersAsLiteral() throws {
+        let folder = try model.createMailFolder()
+        let literal = try saveSearchMessage(
+            id: 1,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "literal@nomail.test",
+            body: "prefix foo*bar a?b 100% a_b suffix",
+            into: folder
+        )
+        try saveSearchMessage(
+            id: 2,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "decoy@nomail.test",
+            body: "fooXXXbar axb 1000 ayb",
+            into: folder
+        )
+        try saveSearchMessage(
+            id: 3,
+            subject: "Status",
+            senderName: "Charles",
+            senderAddress: "plain@nomail.test",
+            body: "unrelated text",
+            into: folder
+        )
+
+        XCTAssertEqual(try objectIDs(model.messages(in: folder, matching: "foo*bar")), [literal.objectID])
+        XCTAssertEqual(try objectIDs(model.messages(in: folder, matching: "a?b")), [literal.objectID])
+        XCTAssertEqual(try objectIDs(model.messages(in: folder, matching: "100%")), [literal.objectID])
+        XCTAssertEqual(try objectIDs(model.messages(in: folder, matching: "a_b")), [literal.objectID])
+    }
+
+    func testEmptyBodyDoesNotCrashOrMatchABodyToken() throws {
+        let corpus = try searchCorpus()
+        XCTAssertEqual(corpus.html.body, "")
+        XCTAssertEqual(
+            try objectIDs(model.messages(in: corpus.folder, matching: "Deposition")),
+            [corpus.body.objectID]
+        )
+        XCTAssertTrue(try model.messages(in: corpus.folder, matching: "uniquehtmltoken").isEmpty)
+    }
+
+    func testSearchTokensCollapseWhitespace() {
+        XCTAssertEqual(
+            SavedMessageSearch.tokens(in: "ada  report"),
+            SavedMessageSearch.tokens(in: "ada report")
+        )
+        XCTAssertEqual(SavedMessageSearch.tokens(in: "ada  report"), ["ada", "report"])
     }
 
     // MARK: - Tasks from messages

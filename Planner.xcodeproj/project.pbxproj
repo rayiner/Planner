@@ -85,6 +85,7 @@
 		A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000007 /* MailCoordinatorTests.swift */; };
 		A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000008 /* MailFolder+CoreData.swift */; };
 		A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000009 /* SavedMessage+CoreData.swift */; };
+		A4000000000000000000000033 /* SavedMessageSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000033 /* SavedMessageSearch.swift */; };
 		A400000000000000000000000A /* MailThreading.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000A /* MailThreading.swift */; };
 		A400000000000000000000000B /* MailThreadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000B /* MailThreadingTests.swift */; };
 		A400000000000000000000000C /* MailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000C /* MailStoreTests.swift */; };
@@ -201,6 +202,7 @@
 		A3000000000000000000000007 /* MailCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailCoordinatorTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000008 /* MailFolder+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MailFolder+CoreData.swift"; sourceTree = "<group>"; };
 		A3000000000000000000000009 /* SavedMessage+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SavedMessage+CoreData.swift"; sourceTree = "<group>"; };
+		A3000000000000000000000033 /* SavedMessageSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedMessageSearch.swift; sourceTree = "<group>"; };
 		A300000000000000000000000A /* MailThreading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreading.swift; sourceTree = "<group>"; };
 		A300000000000000000000000B /* MailThreadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreadingTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000000C /* MailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStoreTests.swift; sourceTree = "<group>"; };
@@ -336,6 +338,7 @@
 			isa = PBXGroup;
 			children = (
 				A3000000000000000000000009 /* SavedMessage+CoreData.swift */,
+				A3000000000000000000000033 /* SavedMessageSearch.swift */,
 				A3000000000000000000000008 /* MailFolder+CoreData.swift */,
 				A2000000000000000000000001 /* Mail */,
 				A3000000000000000000000E /* Planner.xcdatamodeld */,
@@ -549,6 +552,7 @@
 				A400000000000000000000000E /* MailListViewController.swift in Sources */,
 				A400000000000000000000000A /* MailThreading.swift in Sources */,
 				A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */,
+				A4000000000000000000000033 /* SavedMessageSearch.swift in Sources */,
 				A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */,
 				A4000000000000000000000004 /* MailCoordinator.swift in Sources */,
 				A4000000000000000000000003 /* MailSource.swift in Sources */,
