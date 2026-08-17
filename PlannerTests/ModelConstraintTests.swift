@@ -278,14 +278,14 @@ final class ModelConstraintTests: PersistenceTestCase {
 
 @MainActor
 final class SelectionModelTests: XCTestCase {
-    func testVisibleWeekStartIsTheMondayOfTheCurrentWeek() {
+    func testVisibleWeekStartIsToday() {
         let calendar = Self.utcCalendar
-        // 2026-08-13 is a Thursday; its week starts Monday the 10th.
+        // 2026-08-13 is a Thursday; the grid opens on that day, not Monday.
         let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 18))!
         let selection = SelectionModel(now: now, calendar: calendar)
-        XCTAssertEqual(selection.visibleWeekStart, calendar.startOfWeek(for: now))
-        XCTAssertEqual(calendar.component(.day, from: selection.visibleWeekStart), 10)
-        XCTAssertEqual(calendar.component(.weekday, from: selection.visibleWeekStart), 2)
+        XCTAssertEqual(selection.visibleWeekStart, calendar.startOfDay(for: now))
+        XCTAssertEqual(calendar.component(.day, from: selection.visibleWeekStart), 13)
+        XCTAssertEqual(calendar.component(.weekday, from: selection.visibleWeekStart), 5)
         XCTAssertNil(selection.selectedNodeUUID)
         XCTAssertNil(selection.selectedDay)
     }
@@ -359,12 +359,15 @@ final class SelectionModelTests: XCTestCase {
         let midSeptember = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 8))!
         let fields = observe(selection) {
             selection.setVisibleWeekStart(midSeptember)
-            // Any day inside the same week normalizes to the same Monday.
-            selection.setVisibleWeekStart(calendar.startOfWeek(for: midSeptember))
+            // Same civil day is a no-op; a different day pages.
+            selection.setVisibleWeekStart(calendar.startOfDay(for: midSeptember))
             selection.setVisibleWeekStart(calendar.date(byAdding: .day, value: 3, to: midSeptember)!)
         }
-        XCTAssertEqual(selection.visibleWeekStart, calendar.startOfWeek(for: midSeptember))
-        XCTAssertEqual(fields, [["visibleWeek"]])
+        XCTAssertEqual(
+            selection.visibleWeekStart,
+            calendar.startOfDay(for: calendar.date(byAdding: .day, value: 3, to: midSeptember)!)
+        )
+        XCTAssertEqual(fields, [["visibleWeek"], ["visibleWeek"]])
     }
 
     private static var utcCalendar: Calendar {

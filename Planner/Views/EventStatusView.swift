@@ -144,3 +144,53 @@ final class EventStatusView: NSView {
     var test_opensSettings: Bool { opensSettings }
     func test_clickError() { errorClicked() }
 }
+
+/// A toolbar title with its feed's status light hanging off the trailing edge,
+/// in one view — and that view is an `NSTextField` on purpose. The toolbar
+/// draws a control capsule behind custom-view items but exempts text fields,
+/// and the exemption is what keeps a title looking like a title: a stack of
+/// label + status was tried, and both title and spinner got a capsule that
+/// read as a broken button.
+@MainActor
+final class TitleStatusField: NSTextField {
+    private let status: EventStatusView
+    private var statusVisibility: NSKeyValueObservation?
+    private static let statusSpacing: CGFloat = 8
+
+    init(status: EventStatusView) {
+        self.status = status
+        super.init(frame: .zero)
+        isEditable = false
+        isSelectable = false
+        isBezeled = false
+        drawsBackground = false
+        refusesFirstResponder = true
+        lineBreakMode = .byTruncatingTail
+
+        status.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(status)
+        NSLayoutConstraint.activate([
+            status.trailingAnchor.constraint(equalTo: trailingAnchor),
+            status.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        // The light hides itself when the feed is quiet, and the title
+        // reclaims the space rather than keeping a hole where a spinner
+        // sometimes is.
+        statusVisibility = status.observe(\.isHidden) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.invalidateIntrinsicContentSize() }
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        guard !status.isHidden else { return size }
+        size.width += Self.statusSpacing + status.intrinsicContentSize.width
+        size.height = max(size.height, status.intrinsicContentSize.height)
+        return size
+    }
+}

@@ -3,14 +3,13 @@ import XCTest
 
 /// What a day cell does when it runs out of room.
 ///
-/// The weekend rows are half height by design, so at ordinary window sizes they
-/// are the cells that overflow first — and before this was fixed, `+K more`
-/// escaped the cell and drew over the following day's number.
+/// Before this was fixed, `+K more` escaped a short cell and drew over the
+/// following day's number.
 @MainActor
 final class CalendarCellOverflowTests: XCTestCase {
     /// The window's own content minimum is 520pt; by the time the toolbar and
     /// the pane insets are taken out the grid is roughly this tall, which makes
-    /// a weekend row about 37pt.
+    /// a row about 64pt.
     private static let minimumGridHeight: CGFloat = 450
 
     private func makeView(height: CGFloat = minimumGridHeight) -> WeekCalendarView {
@@ -42,7 +41,7 @@ final class CalendarCellOverflowTests: XCTestCase {
         )
     }
 
-    /// Index 5 is Saturday, index 6 Sunday, in the first week column.
+    /// Days are chronological, so index 5 is the first Saturday, 6 the Sunday.
     private let saturday = 5
     private let sunday = 6
 
@@ -117,10 +116,10 @@ final class CalendarCellOverflowTests: XCTestCase {
 
     // MARK: - The count survives as a badge
 
-    /// A weekend cell too short for the `+K more` line still has to say that
+    /// A cell too short for the `+K more` line still has to say that
     /// something is hidden, or it silently shows one of three items.
     func testAShortCellShowsTheCountAsABadgeInstead() {
-        let view = makeView()
+        let view = makeView(height: 320)
         let day = view.test_days[saturday]
         view.deadlines = [task("Anna math", day: day)]
         view.events = (0..<2).map { event("Event \($0)", day: day, id: "e\($0)") }
@@ -170,10 +169,10 @@ final class CalendarCellOverflowTests: XCTestCase {
         XCTAssertTrue(label.contains("more"), label)
     }
 
-    // MARK: - The weekend cell earns its room back
+    // MARK: - Weekend cells are full size
 
-    /// The shorter weekend header is the whole point: at minimum height a
-    /// weekend cell used to have 15.5pt of usable space, which fits nothing.
+    /// Weekend cells match weekday cells, so a chip there gets its natural
+    /// height rather than the squeezed one the old half-height rows forced.
     func testAWeekendCellFitsARealRowAtMinimumHeight() {
         let view = makeView()
         let day = view.test_days[saturday]
@@ -186,23 +185,6 @@ final class CalendarCellOverflowTests: XCTestCase {
             frames[0].height, 18,
             "the task chip should get its natural height, not a squeezed one"
         )
-    }
-
-    /// The gutter labels line up with the day numbers, so the weekend day
-    /// number moving up has to move them too.
-    func testTheWeekdayGutterTracksTheWeekendDayNumber() {
-        let view = makeView()
-        view.layoutSubtreeIfNeeded()
-
-        for row in 0..<7 {
-            let gutter = view.test_weekdayGutterFrame(at: row)
-            let cell = view.test_cellFrame(at: row)
-            let dayNumber = view.test_dayNumberFrame(at: row)
-            XCTAssertEqual(
-                gutter.midY, cell.minY + dayNumber.midY, accuracy: 1.5,
-                "gutter row \(row) drifted from its day number"
-            )
-        }
     }
 }
 
@@ -338,13 +320,15 @@ final class CalendarDayHeaderTests: XCTestCase {
         }
     }
 
-    /// The weekend band is shorter, so its marker has to be too.
-    func testTheWeekendMarkerIsShorterThanTheWeekdayOne() {
+    /// Weekend cells are full size, so their marker matches the weekday one.
+    func testTheWeekendMarkerMatchesTheWeekdayOne() {
         let view = makeView()
-        XCTAssertTrue(view.test_isWeekend(at: 5))
-        XCTAssertLessThan(
-            view.test_todayMarkerRect(at: 5).height,
-            view.test_todayMarkerRect(at: 0).height
+        let weekday = view.test_days.indices.first { !view.test_isWeekend(at: $0) }!
+        let weekend = view.test_days.indices.first { view.test_isWeekend(at: $0) }!
+        XCTAssertEqual(
+            view.test_todayMarkerRect(at: weekend).height,
+            view.test_todayMarkerRect(at: weekday).height,
+            accuracy: 0.001
         )
     }
 }

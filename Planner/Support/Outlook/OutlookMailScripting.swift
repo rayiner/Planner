@@ -83,15 +83,36 @@ nonisolated enum OutlookMailScripting {
     /// Deliberately **not** `properties`: see the table above. The order of the
     /// columns here is the order `OutlookMailDecoder` reads them in.
     static func envelopes(accountIndex: Int, count: Int) -> String {
+        envelopes(accountIndex: accountIndex, from: 1, through: count)
+    }
+
+    /// A slice of the newest-first inbox, used to fetch only the new prefix
+    /// or to walk a full refresh in chunks so a body request can jump the
+    /// queue between Apple events.
+    static func envelopes(accountIndex: Int, from: Int, through: Int) -> String {
+        """
+        tell application "Microsoft Outlook"
+            set inb to inbox of exchange account \(accountIndex)
+            set theIDs to id of messages \(from) thru \(through) of inb
+            set theSubjects to subject of messages \(from) thru \(through) of inb
+            set theTimes to time received of messages \(from) thru \(through) of inb
+            set theRead to is read of messages \(from) thru \(through) of inb
+            set theSenders to sender of messages \(from) thru \(through) of inb
+            return {theIDs, theSubjects, theTimes, theRead, theSenders}
+        end tell
+        """
+    }
+
+    /// Ids and read flags only. Two properties instead of five, so a
+    /// refresh that can reuse cached envelopes does not walk subject and
+    /// sender again.
+    static func indexScan(accountIndex: Int, count: Int) -> String {
         """
         tell application "Microsoft Outlook"
             set inb to inbox of exchange account \(accountIndex)
             set theIDs to id of messages 1 thru \(count) of inb
-            set theSubjects to subject of messages 1 thru \(count) of inb
-            set theTimes to time received of messages 1 thru \(count) of inb
             set theRead to is read of messages 1 thru \(count) of inb
-            set theSenders to sender of messages 1 thru \(count) of inb
-            return {theIDs, theSubjects, theTimes, theRead, theSenders}
+            return {theIDs, theRead}
         end tell
         """
     }
@@ -109,6 +130,10 @@ nonisolated enum OutlookMailScripting {
             try
                 set theBody to plain text content of m
             end try
+            set theHTML to ""
+            try
+                set theHTML to content of m
+            end try
             set theHeaders to ""
             try
                 set theHeaders to headers of m
@@ -117,7 +142,7 @@ nonisolated enum OutlookMailScripting {
             try
                 set theNames to name of every attachment of m
             end try
-            return {theBody, theHeaders, theNames}
+            return {theBody, theHeaders, theNames, theHTML}
         end tell
         """
     }

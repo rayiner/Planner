@@ -51,12 +51,29 @@ final class MailCoordinator {
     private let calendar: Calendar
     private let now: @MainActor () -> Date
     private let defaults: UserDefaults
+    private let envelopeStore: MailEnvelopeStore
+    private let dismissalStore: MailDismissalStore
 
     private(set) var state: State = .idle
     private(set) var window: Range<Date>
     private(set) var windowDays: Int
     /// Newest first, which is both the source's order and the list's.
+    ///
+    /// The window **minus** what the user has dismissed. Everything that draws
+    /// Recent Mail reads this, so a dismissal leaves the list and the sidebar
+    /// count together and no caller has to know dismissals exist.
     private(set) var messages: [MailMessage] = []
+    /// The window as the source reported it, dismissals included.
+    ///
+    /// Kept because dropping dismissed messages here instead would wreck the
+    /// incremental sweep: `MailEnvelopeSweep.plan` decides between a cheap
+    /// prefix read and a full re-read by asking which inbox ids we already have
+    /// envelopes for, and a dismissed message sitting mid-inbox would read as
+    /// an unknown id in the tail — forcing every later refresh down the full
+    /// ~60ms-per-message path. So the sweep and the cache see everything, and
+    /// the filter is applied at exactly one place: `republish`.
+    private(set) var allMessages: [MailMessage] = []
+    private var dismissals = MailDismissalSet()
     /// Set when the last failure is one the user fixes in System Settings, so
     /// the error affordance can offer that instead of a pointless retry.
     private(set) var failureSettingsURL: URL?
@@ -88,6 +105,8 @@ final class MailCoordinator {
         calendar: Calendar = .current,
         now: @escaping @MainActor () -> Date = { Date() },
         defaults: UserDefaults = .standard,
+        envelopeStore: MailEnvelopeStore = .disabled,
+        dismissalStore: MailDismissalStore = .disabled,
         timeoutSeconds: Int = MailCoordinator.timeoutSeconds,
         detailTimeoutSeconds: Int = MailCoordinator.detailTimeoutSeconds
     ) {
@@ -95,10 +114,16 @@ final class MailCoordinator {
         self.calendar = calendar
         self.now = now
         self.defaults = defaults
+        self.envelopeStore = envelopeStore
+        self.dismissalStore = dismissalStore
         self.timeoutSeconds = timeoutSeconds
         self.detailTimeoutSeconds = detailTimeoutSeconds
         windowDays = MailWindow.days(from: defaults)
         window = MailWindow.current(days: windowDays, now: now(), calendar: calendar)
+        // Before the envelopes, so the very first list a launch paints is
+        // already filtered and a dismissed row never flashes up.
+        restoreDismissals()
+        restoreCachedEnvelopes()
 
         // Recent Mail is anchored on *today*, so at midnight yesterday's window
         // is one day stale. See `EventCoordinator` for why this is the
@@ -167,9 +192,18 @@ final class MailCoordinator {
         // cancellation, so a task-group timeout would sit behind it. The timer
         // only flips the UI; a late real result still applies via the
         // generation gate.
+        //
+        // Unfiltered on purpose — see `allMessages`. Handing the sweep the
+        // filtered list would make every dismissed message look like an id we
+        // have never seen.
+        let known = allMessages
         loadTask = Task { [weak self] in
             do {
-                let messages = try await source.envelopes(in: target, userInitiated: userInitiated)
+                let messages = try await source.envelopes(
+                    in: target,
+                    known: known,
+                    userInitiated: userInitiated
+                )
                 guard !Task.isCancelled else { return }
                 self?.apply(messages, window: target, generation: generation)
             } catch is CancellationError {
@@ -202,6 +236,57 @@ final class MailCoordinator {
     /// The day `message` drops out of the window, for the reader's banner.
     func expiryDay(for message: MailMessage) -> Date? {
         MailWindow.expiryDay(for: message.receivedAt, days: windowDays, calendar: calendar)
+    }
+
+    // MARK: - Dismissals
+
+    /// Takes `message` out of Recent Mail and remembers that across refreshes
+    /// and relaunches.
+    ///
+    /// **Outlook is not touched.** The message stays where it is, unread stays
+    /// unread; this hides a row in Planner's own list and nothing more.
+    func dismiss(_ message: MailMessage) {
+        guard !dismissals.contains(message) else { return }
+        dismissals.insert(message)
+        persistDismissals()
+        republish()
+        PlannerLog.mail.info("Dismissed message \(message.id, privacy: .public) from Recent Mail")
+        postChange()
+    }
+
+    /// Undoes a dismissal. The envelope never left `allMessages`, so the row
+    /// comes back without a round trip to Outlook.
+    func restore(_ message: MailMessage) {
+        guard dismissals.contains(message) else { return }
+        dismissals.remove(message)
+        persistDismissals()
+        republish()
+        postChange()
+    }
+
+    func isDismissed(_ message: MailMessage) -> Bool { dismissals.contains(message) }
+
+    /// Test seam and the shape any future "restore everything" command wants.
+    var dismissedCount: Int { dismissals.count }
+
+    private func restoreDismissals() {
+        guard let record = dismissalStore.load(), record.sourceID == source.sourceID else { return }
+        dismissals = MailDismissalSet(record.dismissals).pruned(before: pruneCutoff())
+    }
+
+    private func persistDismissals() {
+        dismissals = dismissals.pruned(before: pruneCutoff())
+        dismissalStore.save(
+            MailDismissalRecord(sourceID: source.sourceID, dismissals: dismissals.entries)
+        )
+    }
+
+    /// The oldest instant a message could still re-enter the window at. Uses
+    /// the maximum window, not the current one, so widening the window later
+    /// does not resurrect what was dismissed while it was narrow.
+    private func pruneCutoff() -> Date {
+        let today = calendar.startOfDay(for: now())
+        return calendar.date(byAdding: .day, value: -MailWindow.maximumDays, to: today) ?? .distantPast
     }
 
     // MARK: - Bodies
@@ -308,11 +393,42 @@ final class MailCoordinator {
         // Sorted here, once, so the list never re-sorts and cannot reshuffle
         // between refreshes. Newest first; id breaks ties so two messages that
         // arrived in the same second keep a stable order.
-        self.messages = messages.sorted {
+        allMessages = Self.sorted(messages)
+        republish()
+        state = .loaded(now())
+        persistEnvelopes()
+        postChange()
+    }
+
+    private func restoreCachedEnvelopes() {
+        guard let record = envelopeStore.load(), record.sourceID == source.sourceID else { return }
+        let kept = record.messages.filter { window.contains($0.receivedAt) }
+        guard !kept.isEmpty else { return }
+        allMessages = Self.sorted(kept)
+        republish()
+        state = .loaded(record.fetchedAt)
+    }
+
+    private func persistEnvelopes() {
+        envelopeStore.save(
+            MailEnvelopeRecord(
+                sourceID: source.sourceID,
+                windowDays: windowDays,
+                fetchedAt: now(),
+                messages: allMessages
+            )
+        )
+    }
+
+    /// The one place the dismissal filter is applied.
+    private func republish() {
+        messages = dismissals.isEmpty ? allMessages : allMessages.filter { !dismissals.contains($0) }
+    }
+
+    private static func sorted(_ messages: [MailMessage]) -> [MailMessage] {
+        messages.sorted {
             $0.receivedAt == $1.receivedAt ? $0.id > $1.id : $0.receivedAt > $1.receivedAt
         }
-        state = .loaded(now())
-        postChange()
     }
 
     /// Keeps whatever was already loaded. Blanking the list because one refresh

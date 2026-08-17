@@ -18,6 +18,14 @@ nonisolated enum OutlookMailDecoder {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Empty HTML is the same as none: the reader then falls back to plain text.
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return value
+    }
+
     /// Kept verbatim — bodies are the one place trailing whitespace is content
     /// rather than noise.
     static func rawString(_ descriptor: NSAppleEventDescriptor?) -> String? {
@@ -95,17 +103,33 @@ nonisolated enum OutlookMailDecoder {
         }
     }
 
-    /// Decodes the three-element body/headers/attachments reply.
+    /// Decodes the two-column id / is-read scan used by an incremental sweep.
+    static func indexScan(_ payload: NSAppleEventDescriptor?) throws -> [(id: Int64, isRead: Bool)] {
+        let columns = list(payload)
+        guard columns.count == 2 else { throw OutlookError.scriptingUnavailable }
+        let ids = list(columns[0])
+        let read = list(columns[1])
+        guard ids.count == read.count else { throw OutlookError.misalignedPayload }
+        return (0..<ids.count).compactMap { index in
+            guard let id = identifier(ids[index]) else { return nil }
+            return (id, bool(read[index]))
+        }
+    }
+
+    /// Decodes the body/headers/attachments reply. A fourth element is the
+    /// HTML `content`; older three-element payloads still decode, with no HTML.
     static func detail(_ payload: NSAppleEventDescriptor?, id: Int64) -> MailMessageDetail {
         let parts = list(payload)
         let body = parts.count > 0 ? rawString(parts[0]) : nil
         let headers = parts.count > 1 ? rawString(parts[1]) : nil
         let names = parts.count > 2 ? strings(parts[2]) : []
+        let html = parts.count > 3 ? nonempty(rawString(parts[3])) : nil
         let parsed = MailHeaders.parse(headers)
 
         return MailMessageDetail(
             id: id,
             body: body ?? "",
+            html: html,
             messageID: parsed.messageID,
             inReplyTo: parsed.inReplyTo,
             references: parsed.references,

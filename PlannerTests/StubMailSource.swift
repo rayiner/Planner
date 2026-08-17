@@ -18,6 +18,7 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     private var _userInitiatedFlags: [Bool] = []
     private var _requestedDetailIDs: [Int64] = []
     private var _revealedIDs: [Int64] = []
+    private var _knownIDsPerRequest: [[Int64]] = []
 
     /// Every range the coordinator has asked for, in order.
     var requestedRanges: [Range<Date>] {
@@ -40,6 +41,14 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         return _revealedIDs
     }
 
+    /// The ids the coordinator claimed to already hold envelopes for, per
+    /// sweep. What the incremental plan is computed from, so a test can catch a
+    /// change that quietly turns every refresh into a full re-read.
+    var knownIDsPerRequest: [[Int64]] {
+        lock.lock(); defer { lock.unlock() }
+        return _knownIDsPerRequest
+    }
+
     var pendingCount: Int {
         lock.lock(); defer { lock.unlock() }
         return pendingEnvelopes.count
@@ -48,6 +57,24 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     var pendingDetailCount: Int {
         lock.lock(); defer { lock.unlock() }
         return pendingDetails.count
+    }
+
+    /// Overrides the protocol's default, which drops `known` on the floor, so
+    /// the tests can see what the coordinator offered the incremental sweep.
+    func envelopes(
+        in range: Range<Date>,
+        known: [MailMessage],
+        userInitiated: Bool
+    ) async throws -> [MailMessage] {
+        // Recorded through a synchronous helper: NSLock cannot be taken
+        // directly from an async context.
+        recordKnown(known.map(\.id))
+        return try await envelopes(in: range, userInitiated: userInitiated)
+    }
+
+    private func recordKnown(_ ids: [Int64]) {
+        lock.lock(); defer { lock.unlock() }
+        _knownIDsPerRequest.append(ids)
     }
 
     func envelopes(in range: Range<Date>, userInitiated: Bool) async throws -> [MailMessage] {
@@ -172,6 +199,7 @@ extension MailMessageDetail {
     static func fixture(
         id: Int64 = 1,
         body: String = "Body",
+        html: String? = nil,
         messageID: String? = "<a@example.com>",
         inReplyTo: String? = nil,
         references: String? = nil,
@@ -182,6 +210,7 @@ extension MailMessageDetail {
         MailMessageDetail(
             id: id,
             body: body,
+            html: html,
             messageID: messageID,
             inReplyTo: inReplyTo,
             references: references,

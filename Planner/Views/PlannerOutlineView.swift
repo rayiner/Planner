@@ -51,29 +51,49 @@ final class PlannerOutlineView: NSOutlineView {
     func menu(forRow row: Int) -> NSMenu {
         cancelPendingRenameGesture()
         if row >= 0 {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            window?.makeFirstResponder(self)
             switch item(atRow: row) {
             case is Project:
+                selectForMenu(row: row)
                 return Self.makeMenu([
                     ("New Task", #selector(MainSplitViewController.newTask(_:))),
                     ("Rename", #selector(MainSplitViewController.renameSelected(_:))),
                     ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
                 ])
             case is TaskItem:
+                selectForMenu(row: row)
                 return Self.makeMenu([
                     ("New Task", #selector(MainSplitViewController.newTask(_:))),
                     ("Rename", #selector(MainSplitViewController.renameSelected(_:))),
                     ("Get Info", #selector(MainSplitViewController.showTaskInfo(_:))),
                     ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
                 ])
+            case is RecentMailbox:
+                selectForMenu(row: row)
+                return Self.makeMenu([
+                    ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
+                ])
+            case is MailFolder:
+                selectForMenu(row: row)
+                return Self.makeMenu([
+                    ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
+                    ("Rename", #selector(MainSplitViewController.renameSelected(_:))),
+                    ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
+                ])
             default:
+                // A section header or the placeholder: labels get the
+                // background menu, not a selection.
                 break
             }
         }
         return Self.makeMenu([
             ("New Project", #selector(MainSplitViewController.newProject(_:))),
+            ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
         ])
+    }
+
+    private func selectForMenu(row: Int) {
+        selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        window?.makeFirstResponder(self)
     }
 
     func cancelPendingRenameGesture() {

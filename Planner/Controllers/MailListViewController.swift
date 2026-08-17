@@ -81,6 +81,9 @@ final class MailListViewController: NSViewController {
     /// ordered by their newest message.
     private var folderRows: [NSObject] = []
     private var isApplyingProgrammaticSelection = false
+    /// Enough that a conversation's messages sit under the header rather than
+    /// in the same column, without crowding the subject in a 300pt pane.
+    static let conversationIndent: CGFloat = 16
 
     private var isShowingFolder: Bool { !selection.isRecentMailSelected }
 
@@ -166,6 +169,9 @@ final class MailListViewController: NSViewController {
         outlineView.intercellSpacing = NSSize(width: 0, height: 0)
         outlineView.headerView = nil
         outlineView.usesAlternatingRowBackgroundColors = false
+        // Folder conversations indent their children; Recent Mail days must
+        // not, or the triangle sits on the date title. `reload` picks the
+        // value for the open mailbox.
         outlineView.indentationPerLevel = 0
         outlineView.allowsMultipleSelection = false
         outlineView.allowsEmptySelection = true
@@ -210,7 +216,9 @@ final class MailListViewController: NSViewController {
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
         if fields.contains(SelectionField.mailbox.rawValue) {
-            reload()
+            // A different mailbox is a different list. Keeping the previous
+            // clip origin would land in the middle of the new one.
+            reload(preservingScroll: false)
             return
         }
         guard fields.contains(SelectionField.message.rawValue) else { return }
@@ -219,7 +227,11 @@ final class MailListViewController: NSViewController {
 
     // MARK: - Contents
 
-    func reload() {
+    func reload(preservingScroll: Bool = true) {
+        // Days in Recent Mail are outline parents only so they can float;
+        // indenting them would look like a hierarchy the timeline is not.
+        // A conversation *is* a hierarchy, so folder mode turns indent on.
+        outlineView.indentationPerLevel = isShowingFolder ? Self.conversationIndent : 0
         // Which conversations were open, so a reload — one arrives on every
         // save — does not collapse the thread the user is reading.
         let expanded = Set(folderRows.compactMap { row -> String? in
@@ -228,6 +240,9 @@ final class MailListViewController: NSViewController {
             }
             return thread.rows.first?.message.uuid.uuidString
         })
+
+        let clipView = outlineView.enclosingScrollView?.contentView
+        let savedOrigin = preservingScroll ? clipView?.bounds.origin : nil
 
         groups = makeGroups()
         folderRows = makeFolderRows()
@@ -241,8 +256,15 @@ final class MailListViewController: NSViewController {
             else { continue }
             outlineView.expandItem(thread)
         }
-        revealSelection()
+        // Don't scrollRowToVisible here: reloadData already jumped the clip
+        // view, and the caller is about to put it back. A reveal-driven
+        // scroll is what `plannerSelectionDidChange` is for.
+        revealSelection(scroll: false)
         isApplyingProgrammaticSelection = false
+        if let clipView, let savedOrigin {
+            clipView.scroll(to: savedOrigin)
+            outlineView.enclosingScrollView?.reflectScrolledClipView(clipView)
+        }
         updateEmptyState()
     }
 
@@ -337,7 +359,37 @@ final class MailListViewController: NSViewController {
 
     // MARK: - Selection
 
-    private func revealSelection() {
+    /// The row that should stay selected after `current` leaves the list.
+    /// Next remaining, then previous, then nothing — so Delete can be hit
+    /// again and keep walking down the list.
+    func messageToSelectAfterRemoving(_ current: MessageSelection) -> MessageSelection? {
+        let ordered = visibleMessageSelections()
+        guard let index = ordered.firstIndex(of: current) else { return nil }
+        if index + 1 < ordered.count { return ordered[index + 1] }
+        if index > 0 { return ordered[index - 1] }
+        return nil
+    }
+
+    /// Selectable messages in visual order: Recent Mail newest-first, a
+    /// folder in thread order. Date headers and conversation headings are
+    /// not destinations, so they are not in this list.
+    private func visibleMessageSelections() -> [MessageSelection] {
+        if isShowingFolder {
+            return folderRows.flatMap { row -> [MessageSelection] in
+                switch row {
+                case let saved as SavedMessageRow:
+                    return [.saved(saved.message.uuid)]
+                case let thread as MailThreadRow:
+                    return thread.rows.map { .saved($0.message.uuid) }
+                default:
+                    return []
+                }
+            }
+        }
+        return groups.flatMap(\.rows).map { .recent($0.message.id) }
+    }
+
+    private func revealSelection(scroll: Bool = true) {
         switch selection.message {
         case nil:
             outlineView.deselectAll(nil)
@@ -345,21 +397,21 @@ final class MailListViewController: NSViewController {
             guard let row = groups.lazy.flatMap(\.rows).first(where: { $0.message.id == id }) else {
                 return
             }
-            select(item: row)
+            select(item: row, scroll: scroll)
         case let .saved(uuid)?:
             guard let row = savedRow(uuid: uuid) else { return }
             // A message inside a collapsed conversation has no row until the
             // conversation opens, so revealing it opens the conversation.
             if let thread = thread(containing: row) { outlineView.expandItem(thread) }
-            select(item: row)
+            select(item: row, scroll: scroll)
         }
     }
 
-    private func select(item: Any) {
+    private func select(item: Any, scroll: Bool = true) {
         let index = outlineView.row(forItem: item)
         guard index >= 0 else { return }
         outlineView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        outlineView.scrollRowToVisible(index)
+        if scroll { outlineView.scrollRowToVisible(index) }
     }
 
     private func savedRow(uuid: UUID) -> SavedMessageRow? {
@@ -437,13 +489,28 @@ extension MailListViewController: NSOutlineViewDelegate {
         !(item is MailDateGroup)
     }
 
+    /// No disclosure triangle on a day header: with zero indentation it draws
+    /// over the title, and it offers a collapse the timeline never wants.
+    /// Conversations keep theirs — expanding in place is their whole point.
+    func outlineView(_ outlineView: NSOutlineView, shouldShowOutlineCellForItem item: Any) -> Bool {
+        !(item is MailDateGroup)
+    }
+
+    /// The triangle is gone, but collapse has other doors (double-click, ⌘←).
+    /// A collapsed day with no way to reopen it reads as lost mail.
+    func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
+        !(item is MailDateGroup)
+    }
+
     /// Two heights, because some rows carry a third line and some do not: a
     /// "Saved to X" chip and a conversation's message count both sit under the
     /// subject, and a fixed height tall enough for them would leave every plain
     /// row padded.
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         switch item {
-        case is MailDateGroup: return 24
+        // 18 matches the calendar's day-header band, so the two modes' headers
+        // read as the same weight of chrome.
+        case is MailDateGroup: return 18
         case let row as MailListRow: return row.savedFolderName == nil ? 54 : 68
         case is MailThreadRow: return 68
         default: return 54
@@ -453,9 +520,12 @@ extension MailListViewController: NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         if let group = item as? MailDateGroup {
             let identifier = NSUserInterfaceItemIdentifier("DateGroup")
-            let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
+            let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? DateGroupCellView
                 ?? makeDateGroupCell(identifier: identifier)
             cell.textField?.stringValue = group.title
+            // The line divides a day from the one above; the first day has
+            // nothing above it to divide from.
+            cell.separator.isHidden = group === groups.first
             return cell
         }
 
@@ -469,7 +539,7 @@ extension MailListViewController: NSOutlineViewDelegate {
         case let thread as MailThreadRow:
             cell.apply(thread, calendar: calendar)
         case let row as SavedMessageRow:
-            cell.apply(row, calendar: calendar)
+            cell.apply(row, calendar: calendar, inConversation: thread(containing: row) != nil)
         default:
             return nil
         }
@@ -480,21 +550,10 @@ extension MailListViewController: NSOutlineViewDelegate {
         publishSelection()
     }
 
-    private func makeDateGroupCell(identifier: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let cell = NSTableCellView()
+    private func makeDateGroupCell(identifier: NSUserInterfaceItemIdentifier) -> DateGroupCellView {
+        let cell = DateGroupCellView()
         cell.identifier = identifier
-        let field = NSTextField(labelWithString: "")
-        field.font = .systemFont(ofSize: 11, weight: .semibold)
-        field.textColor = .secondaryLabelColor
-        field.refusesFirstResponder = true
-        field.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(field)
-        cell.textField = field
-        NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
-            field.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
-            field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
+        cell.build()
         return cell
     }
 
@@ -503,6 +562,35 @@ extension MailListViewController: NSOutlineViewDelegate {
         cell.identifier = identifier
         cell.build()
         return cell
+    }
+}
+
+/// A day's sticky header: the title, with a hairline along the top that
+/// separates the day from the one before it as the list scrolls.
+private final class DateGroupCellView: NSTableCellView {
+    let separator = NSBox()
+
+    func build() {
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(separator)
+
+        let field = NSTextField(labelWithString: "")
+        field.font = .systemFont(ofSize: 11, weight: .semibold)
+        field.textColor = .secondaryLabelColor
+        field.refusesFirstResponder = true
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        textField = field
+
+        NSLayoutConstraint.activate([
+            separator.topAnchor.constraint(equalTo: topAnchor),
+            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor),
+            field.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
     }
 }
 
@@ -516,16 +604,30 @@ extension MailListViewController: NSOutlineViewDelegate {
 /// sweep is read on anyway.
 private final class MessageRowView: NSTableCellView {
     private let unreadDot = NSView()
+    /// Vertical tick in the unread-dot slot, for a message that belongs to
+    /// the conversation header above it. Saved rows have no unread state, so
+    /// the slot is free.
+    private let conversationTick = NSView()
     private let senderField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let subjectField = NSTextField(labelWithString: "")
     private let savedChip = NSTextField(labelWithString: "")
+    /// The subject is what the sweep is read on, so message rows show it in
+    /// the primary label color. A thread row reuses the field for its
+    /// participants, which stay secondary — the subject is already on top.
+    private var subjectIsSecondary = false
 
     func build() {
         unreadDot.wantsLayer = true
         unreadDot.layer?.cornerRadius = 4
         unreadDot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
         unreadDot.translatesAutoresizingMaskIntoConstraints = false
+
+        conversationTick.wantsLayer = true
+        conversationTick.layer?.cornerRadius = 1
+        conversationTick.layer?.backgroundColor = NSColor.tertiaryLabelColor.cgColor
+        conversationTick.isHidden = true
+        conversationTick.translatesAutoresizingMaskIntoConstraints = false
 
         senderField.font = .systemFont(ofSize: 13, weight: .semibold)
         senderField.lineBreakMode = .byTruncatingTail
@@ -538,7 +640,7 @@ private final class MessageRowView: NSTableCellView {
         timeField.setContentHuggingPriority(.required, for: .horizontal)
         timeField.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        subjectField.font = .systemFont(ofSize: 12)
+        subjectField.font = .systemFont(ofSize: 13)
         subjectField.lineBreakMode = .byTruncatingTail
 
         savedChip.font = .systemFont(ofSize: 11, weight: .medium)
@@ -557,20 +659,41 @@ private final class MessageRowView: NSTableCellView {
         lines.spacing = 2
         lines.detachesHiddenViews = true
 
-        let stack = NSStackView(views: [unreadDot, lines])
+        let leadingSlot = NSView()
+        leadingSlot.translatesAutoresizingMaskIntoConstraints = false
+        leadingSlot.addSubview(unreadDot)
+        leadingSlot.addSubview(conversationTick)
+
+        let stack = NSStackView(views: [leadingSlot, lines])
         stack.orientation = .horizontal
         stack.alignment = .top
         stack.spacing = 6
+        // A hidden dot keeps its slot: read and unread rows then share one
+        // leading edge, instead of read rows sliding left by the dot's width.
+        stack.detachesHiddenViews = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         textField = subjectField
 
         NSLayoutConstraint.activate([
+            leadingSlot.widthAnchor.constraint(equalToConstant: 8),
             unreadDot.widthAnchor.constraint(equalToConstant: 8),
             unreadDot.heightAnchor.constraint(equalToConstant: 8),
+            unreadDot.topAnchor.constraint(equalTo: leadingSlot.topAnchor, constant: 4),
+            unreadDot.centerXAnchor.constraint(equalTo: leadingSlot.centerXAnchor),
+            conversationTick.widthAnchor.constraint(equalToConstant: 2),
+            conversationTick.heightAnchor.constraint(equalToConstant: 28),
+            conversationTick.topAnchor.constraint(equalTo: leadingSlot.topAnchor),
+            conversationTick.centerXAnchor.constraint(equalTo: leadingSlot.centerXAnchor),
+            leadingSlot.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            // Pinned to the cell's trailing edge rather than left at its natural
+            // width: a stack is only as wide as its widest line, which would put
+            // the time at a different x in every row. Full width plus the
+            // right-aligned time field is what makes the times a column.
+            lines.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             topRow.widthAnchor.constraint(equalTo: lines.widthAnchor),
         ])
     }
@@ -580,7 +703,9 @@ private final class MessageRowView: NSTableCellView {
         senderField.stringValue = message.senderDisplayName
         timeField.stringValue = MailLabels.listTime(for: message.receivedAt, calendar: calendar)
         subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
+        subjectIsSecondary = false
         unreadDot.isHidden = message.isRead
+        conversationTick.isHidden = true
 
         if let folder = row.savedFolderName {
             savedChip.stringValue = MailLabels.savedChip(folderName: folder)
@@ -611,7 +736,9 @@ private final class MessageRowView: NSTableCellView {
         senderField.stringValue = thread.subject
         timeField.stringValue = MailLabels.listTime(for: thread.latest, calendar: calendar)
         subjectField.stringValue = thread.participants
+        subjectIsSecondary = true
         unreadDot.isHidden = true
+        conversationTick.isHidden = true
         savedChip.stringValue = MailLabels.messageCount(thread.rows.count)
         savedChip.isHidden = false
         alphaValue = 1
@@ -625,24 +752,34 @@ private final class MessageRowView: NSTableCellView {
 
     /// A saved message. No unread dot — Planner never learns whether a saved
     /// copy has been read, and inventing one would be a claim it cannot make.
-    func apply(_ row: SavedMessageRow, calendar: Calendar) {
+    /// A row under a conversation header gets a tick in that slot instead,
+    /// so it reads as part of the thread and not as another top-level message.
+    func apply(_ row: SavedMessageRow, calendar: Calendar, inConversation: Bool) {
         let message = row.message
         senderField.stringValue = message.senderDisplayName
         timeField.stringValue = MailLabels.listTime(for: message.receivedAt, calendar: calendar)
         subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
+        subjectIsSecondary = false
         unreadDot.isHidden = true
+        conversationTick.isHidden = !inConversation
         savedChip.isHidden = true
         alphaValue = 1
         refreshColors()
-        setAccessibilityLabel(MailLabels.messageAccessibilityLabel(
+        var label = MailLabels.messageAccessibilityLabel(
             sender: message.senderDisplayName,
             subject: message.subject,
             receivedAt: message.receivedAt,
             isRead: true,
             savedFolderName: nil,
             calendar: calendar
-        ))
+        )
+        if inConversation {
+            label = "In conversation. \(label)"
+        }
+        setAccessibilityLabel(label)
     }
+
+    var test_showsConversationTick: Bool { !conversationTick.isHidden }
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { refreshColors() }
@@ -651,10 +788,15 @@ private final class MessageRowView: NSTableCellView {
     private func refreshColors() {
         let emphasized = backgroundStyle == .emphasized
         senderField.textColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
-        subjectField.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        subjectField.textColor = emphasized
+            ? .alternateSelectedControlTextColor
+            : (subjectIsSecondary ? .secondaryLabelColor : .labelColor)
         timeField.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
         savedChip.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
         unreadDot.layer?.backgroundColor = (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).cgColor
+        conversationTick.layer?.backgroundColor = (emphasized
+            ? NSColor.alternateSelectedControlTextColor
+            : NSColor.tertiaryLabelColor).cgColor
     }
 }
 
@@ -666,5 +808,16 @@ extension MailListViewController {
     var test_folderRows: [NSObject] { folderRows }
     var test_threadSubjects: [String] {
         folderRows.compactMap { ($0 as? MailThreadRow)?.subject }
+    }
+    var test_indentationPerLevel: CGFloat { outlineView.indentationPerLevel }
+    var test_scrollOrigin: NSPoint {
+        outlineView.enclosingScrollView?.contentView.bounds.origin ?? .zero
+    }
+    func test_showsConversationTick(for item: Any) -> Bool {
+        let row = outlineView.row(forItem: item)
+        guard row >= 0,
+              let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as? MessageRowView
+        else { return false }
+        return cell.test_showsConversationTick
     }
 }

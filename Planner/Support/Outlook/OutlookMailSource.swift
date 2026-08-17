@@ -40,14 +40,18 @@ nonisolated final class OutlookMailSource: MailSource {
         }
     }
 
+    /// How many messages one envelope Apple event covers. A click that wants
+    /// a body is queued as a `.detail` and can only run *between* events, so
+    /// a full refresh is walked in slices rather than one 10-second tell.
+    static let envelopeChunkSize = 40
+
     let sourceID = "outlook"
     var displayName: String { configuration.accountName ?? "Inbox" }
 
     private let configuration: Configuration
-    /// Apple events block the caller, so this needs a thread of its own, and
-    /// serializing means two refreshes can never interleave inside Outlook.
-    /// The same shape `OutlookEventSource` uses, for the same reasons.
-    private let queue = DispatchQueue(label: "com.rihscb.Planner.outlook.mail", qos: .utility)
+    /// Serialises Apple events. Details jump ahead of sweep slices so
+    /// opening a message is not stuck behind `messages 1 thru N`.
+    private let events = MailAppleEventQueue()
 
     init(configuration: Configuration = .fromDefaults()) {
         self.configuration = configuration
@@ -56,17 +60,19 @@ nonisolated final class OutlookMailSource: MailSource {
     // MARK: - MailSource
 
     func envelopes(in range: Range<Date>, userInitiated: Bool) async throws -> [MailMessage] {
-        try await onQueue { [configuration] in
-            try Self.fetchEnvelopes(
-                in: range,
-                configuration: configuration,
-                userInitiated: userInitiated
-            )
-        }
+        try await envelopes(in: range, known: [], userInitiated: userInitiated)
+    }
+
+    func envelopes(
+        in range: Range<Date>,
+        known: [MailMessage],
+        userInitiated: Bool
+    ) async throws -> [MailMessage] {
+        try await fetchEnvelopes(in: range, known: known, userInitiated: userInitiated)
     }
 
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail {
-        try await onQueue {
+        try await events.submit(priority: .detail) {
             try Self.preflight(userInitiated: true)
             let payload = try Self.runOnMessage(OutlookMailScripting.detail(messageID: id))
             return OutlookMailDecoder.detail(payload, id: id)
@@ -74,17 +80,9 @@ nonisolated final class OutlookMailSource: MailSource {
     }
 
     func reveal(messageID id: Int64) async throws {
-        try await onQueue {
+        try await events.submit(priority: .detail) {
             try Self.preflight(userInitiated: true)
             _ = try Self.runOnMessage(OutlookMailScripting.reveal(messageID: id))
-        }
-    }
-
-    private func onQueue<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                continuation.resume(with: Result { try work() })
-            }
         }
     }
 
@@ -104,25 +102,26 @@ nonisolated final class OutlookMailSource: MailSource {
 
     // MARK: - The fetch
 
-    private static func fetchEnvelopes(
+    private func fetchEnvelopes(
         in range: Range<Date>,
-        configuration: Configuration,
+        known: [MailMessage],
         userInitiated: Bool
-    ) throws -> [MailMessage] {
-        try preflight(userInitiated: userInitiated)
-
+    ) async throws -> [MailMessage] {
         let started = Date()
-        let calendar = Calendar.current
-        let accountIndex = try resolveAccountIndex(configuration: configuration)
+        let configuration = configuration
+        let accountIndex = try await events.submit(priority: .sweep) {
+            try Self.preflight(userInitiated: userInitiated)
+            return try Self.resolveAccountIndex(configuration: configuration)
+        }
 
-        // Step one: how far back does the window reach into the list? The
-        // collection is newest-first, so this is a count, not a filter.
-        let countPayload = try run(OutlookMailScripting.windowCount(
-            accountIndex: accountIndex,
-            since: range.lowerBound,
-            calendar: calendar
-        ))
-        let matched = Int(OutlookMailDecoder.identifier(countPayload) ?? 0)
+        let matched = try await events.submit(priority: .sweep) { () -> Int in
+            let payload = try Self.run(OutlookMailScripting.windowCount(
+                accountIndex: accountIndex,
+                since: range.lowerBound,
+                calendar: Calendar.current
+            ))
+            return Int(OutlookMailDecoder.identifier(payload) ?? 0)
+        }
         guard matched > 0 else {
             PlannerLog.mail.info("Outlook mail sweep: window is empty")
             return []
@@ -137,28 +136,112 @@ nonisolated final class OutlookMailSource: MailSource {
             )
         }
 
-        // Step two: five columns, one Apple event each.
-        let payload = try run(OutlookMailScripting.envelopes(
-            accountIndex: accountIndex,
-            count: count
-        ))
-        let decoded = try OutlookMailDecoder.envelopes(payload)
+        let messages: [MailMessage]
+        if userInitiated || known.isEmpty {
+            messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
+            logSweep(kind: "full", matched: matched, kept: messages.count, started: started)
+        } else {
+            messages = try await readIncrementalEnvelopes(
+                accountIndex: accountIndex,
+                count: count,
+                known: known,
+                matched: matched,
+                started: started
+            )
+        }
+
         // The count query only bounds the *older* edge. A message dated in the
         // future — a clock skew upstream, or a draft-like oddity — would sit at
         // the head of the list and belongs nowhere in a "last N days" window.
-        let messages = decoded.filter { range.contains($0.receivedAt) }
+        return messages.filter { range.contains($0.receivedAt) }
+    }
 
-        // Counts and timings only. Subjects, senders and bodies are someone
-        // else's correspondence and never reach the log.
+    private func readIncrementalEnvelopes(
+        accountIndex: Int,
+        count: Int,
+        known: [MailMessage],
+        matched: Int,
+        started: Date
+    ) async throws -> [MailMessage] {
+        let scan: [(id: Int64, isRead: Bool)]
+        do {
+            scan = try await events.submit(priority: .sweep) {
+                let payload = try Self.run(OutlookMailScripting.indexScan(
+                    accountIndex: accountIndex,
+                    count: count
+                ))
+                return try OutlookMailDecoder.indexScan(payload)
+            }
+        } catch {
+            PlannerLog.mail.error(
+                "Outlook mail index scan failed; falling back to a full sweep"
+            )
+            let messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
+            logSweep(kind: "full-fallback", matched: matched, kept: messages.count, started: started)
+            return messages
+        }
+
+        let currentIDs = scan.map(\.id)
+        let knownIDs = Set(known.map(\.id))
+        switch MailEnvelopeSweep.plan(currentIDs: currentIDs, knownIDs: knownIDs) {
+        case .full:
+            let messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
+            logSweep(kind: "full-tail", matched: matched, kept: messages.count, started: started)
+            return messages
+        case .reuse:
+            let assembled = MailEnvelopeSweep.assemble(
+                currentIDs: currentIDs,
+                isRead: Dictionary(uniqueKeysWithValues: scan.map { ($0.id, $0.isRead) }),
+                known: Dictionary(uniqueKeysWithValues: known.map { ($0.id, $0) }),
+                fresh: []
+            )
+            logSweep(kind: "reuse", matched: matched, kept: assembled.count, started: started)
+            return assembled
+        case let .prefix(prefixCount):
+            let fresh = try await readFullEnvelopes(accountIndex: accountIndex, count: prefixCount)
+            let assembled = MailEnvelopeSweep.assemble(
+                currentIDs: currentIDs,
+                isRead: Dictionary(uniqueKeysWithValues: scan.map { ($0.id, $0.isRead) }),
+                known: Dictionary(uniqueKeysWithValues: known.map { ($0.id, $0) }),
+                fresh: fresh
+            )
+            logSweep(kind: "prefix-\(prefixCount)", matched: matched, kept: assembled.count, started: started)
+            return assembled
+        }
+    }
+
+    /// Walks `1 thru count` in slices so a `.detail` item queued mid-sweep
+    /// can run at a slice boundary rather than after the whole window.
+    private func readFullEnvelopes(accountIndex: Int, count: Int) async throws -> [MailMessage] {
+        var collected: [MailMessage] = []
+        var start = 1
+        while start <= count {
+            let end = min(start + Self.envelopeChunkSize - 1, count)
+            let sliceStart = start
+            let sliceEnd = end
+            let batch = try await events.submit(priority: .sweep) {
+                let payload = try Self.run(OutlookMailScripting.envelopes(
+                    accountIndex: accountIndex,
+                    from: sliceStart,
+                    through: sliceEnd
+                ))
+                return try OutlookMailDecoder.envelopes(payload)
+            }
+            collected.append(contentsOf: batch)
+            start = end + 1
+        }
+        return collected
+    }
+
+    private func logSweep(kind: String, matched: Int, kept: Int, started: Date) {
         PlannerLog.mail.info(
             """
-            Outlook mail sweep: \(matched, privacy: .public) in window, \
-            \(decoded.count, privacy: .public) decoded, \
-            \(messages.count, privacy: .public) kept \
+            Outlook mail sweep (\(kind, privacy: .public)): \
+            \(matched, privacy: .public) in window, \
+            \(kept, privacy: .public) kept \
             in \(Int(Date().timeIntervalSince(started) * 1000), privacy: .public)ms
             """
         )
-        return messages
     }
 
     /// Which Exchange account to read, as an index into Outlook's own list.
@@ -207,6 +290,64 @@ nonisolated final class OutlookMailSource: MailSource {
             return try run(source)
         } catch let error as OutlookError where error.isMissingObject {
             throw MailSourceError.messageUnavailable
+        }
+    }
+}
+
+/// Serialises Apple events to Outlook. A `.detail` item is always taken
+/// before a `.sweep` slice, so a click that wants a body runs at the next
+/// event boundary instead of after the rest of the window.
+nonisolated final class MailAppleEventQueue: @unchecked Sendable {
+    enum Priority {
+        case detail
+        case sweep
+    }
+
+    private let lock = NSLock()
+    private var pending: [(priority: Priority, work: () -> Void)] = []
+    private var running = false
+    private let runner = DispatchQueue(
+        label: "com.rihscb.Planner.outlook.mail",
+        qos: .userInitiated
+    )
+
+    func submit<T: Sendable>(
+        priority: Priority,
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueue(priority: priority) {
+                continuation.resume(with: Result { try work() })
+            }
+        }
+    }
+
+    func enqueue(priority: Priority, _ work: @escaping () -> Void) {
+        lock.lock()
+        pending.append((priority, work))
+        let start = !running
+        if start { running = true }
+        lock.unlock()
+        if start {
+            runner.async { self.drain() }
+        }
+    }
+
+    private func drain() {
+        while true {
+            lock.lock()
+            let next: (() -> Void)?
+            if let index = pending.firstIndex(where: { $0.priority == .detail }) {
+                next = pending.remove(at: index).work
+            } else if !pending.isEmpty {
+                next = pending.removeFirst().work
+            } else {
+                running = false
+                lock.unlock()
+                return
+            }
+            lock.unlock()
+            next?()
         }
     }
 }

@@ -158,6 +158,7 @@ final class ModelController {
         message.recipients = detail?.recipients
         message.receivedAt = envelope.receivedAt
         message.body = detail?.body
+        message.htmlBody = detail?.html
         message.inReplyTo = detail?.inReplyTo
         message.references = detail?.references
         message.attachmentNames = detail?.attachmentNames
@@ -464,7 +465,7 @@ final class ModelController {
     }
 
     func tasks(deadlineInWeeksFrom weekStart: Date, count: Int, calendar: Calendar) throws -> [TaskItem] {
-        let start = calendar.startOfWeek(for: weekStart)
+        let start = calendar.startOfDay(for: weekStart)
         return try fetchTasks(deadlineFrom: start, to: calendar.endOfWeeks(from: start, count: count))
     }
 

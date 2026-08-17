@@ -36,11 +36,12 @@ final class MailStatusTests: PersistenceTestCase {
         window.contentViewController = split
         windows.append(window)
         split.loadViewIfNeeded()
-        // The status view's retry hook is wired when the toolbar builds its
-        // item, and nothing installs a toolbar on a windowless split.
+        // The status view's retry hook is wired when the toolbar builds the
+        // title item it rides in, and nothing installs a toolbar on a
+        // windowless split.
         _ = split.toolbar(
             NSToolbar(identifier: "test"),
-            itemForItemIdentifier: .mailStatus,
+            itemForItemIdentifier: .mailTitle,
             willBeInsertedIntoToolbar: true
         )
     }
@@ -150,33 +151,47 @@ final class MailStatusTests: PersistenceTestCase {
 
     // MARK: - The window control
 
-    func testTheRangePopUpCoversOneThroughSevenDays() throws {
-        let toolbar = NSToolbar(identifier: "test")
-        let item = try XCTUnwrap(split.toolbar(
-            toolbar, itemForItemIdentifier: .windowRange, willBeInsertedIntoToolbar: true
-        ))
-        let button = try XCTUnwrap(item.view as? NSPopUpButton)
+    /// The range moved out of the toolbar into View → Recent Mail Window: it is
+    /// set once and then left alone for weeks, which does not earn permanent
+    /// toolbar width the message list has to make room for.
+    func testTheRangeMenuCoversOneThroughSevenDaysAndChecksTheCurrentOne() throws {
+        let parent = menuItem(#selector(MainSplitViewController.showMailWindowMenu(_:)))
+        _ = split.validateMenuItem(parent)
+
+        let submenu = try XCTUnwrap(parent.submenu)
         XCTAssertEqual(
-            button.itemTitles,
+            submenu.items.map(\.title),
             ["Today", "Last 2 Days", "Last 3 Days", "Last 4 Days",
              "Last 5 Days", "Last 6 Days", "Last 7 Days"]
         )
-        XCTAssertEqual(button.selectedTag(), MailWindow.defaultDays)
+        XCTAssertEqual(submenu.items.filter { $0.state == .on }.map(\.tag), [MailWindow.defaultDays])
+    }
+
+    func testChoosingARangeSetsTheWindowAndMovesTheCheck() throws {
+        let parent = menuItem(#selector(MainSplitViewController.showMailWindowMenu(_:)))
+        _ = split.validateMenuItem(parent)
+        let submenu = try XCTUnwrap(parent.submenu)
+        let sevenDays = try XCTUnwrap(submenu.items.first { $0.tag == 7 })
+
+        split.setMailWindowDays(sevenDays)
+        XCTAssertEqual(split.mail.windowDays, 7)
+
+        _ = split.validateMenuItem(parent)
+        XCTAssertEqual(submenu.items.filter { $0.state == .on }.map(\.tag), [7])
     }
 
     /// The window length is a property of Recent Mail; over a folder it would
     /// offer to change something the pane does not show.
-    func testTheRangePopUpIsDisabledOverAFolder() throws {
-        let toolbar = NSToolbar(identifier: "test")
-        let item = try XCTUnwrap(split.toolbar(
-            toolbar, itemForItemIdentifier: .windowRange, willBeInsertedIntoToolbar: true
-        ))
-        let button = try XCTUnwrap(item.view as? NSPopUpButton)
-        XCTAssertTrue(button.isEnabled)
+    func testTheRangeMenuIsDisabledOverAFolder() throws {
+        let parent = menuItem(#selector(MainSplitViewController.showMailWindowMenu(_:)))
+        XCTAssertTrue(split.validateMenuItem(parent))
 
         let folder = try model.createMailFolder(name: "Celerity")
         selection.selectMailbox(.folder(folder.uuid))
-        XCTAssertFalse(button.isEnabled)
+        XCTAssertFalse(split.validateMenuItem(parent))
+        XCTAssertFalse(
+            split.validateMenuItem(menuItem(#selector(MainSplitViewController.setMailWindowDays(_:))))
+        )
     }
 
     // MARK: - The keyboard path
@@ -185,15 +200,16 @@ final class MailStatusTests: PersistenceTestCase {
     /// down a toolbar button is not a keyboard path.
     func testEveryMailCommandIsReachableFromTheMenuBar() throws {
         let selectors: [Selector] = [
-            #selector(MainSplitViewController.showTasksMode(_:)),
-            #selector(MainSplitViewController.showMailMode(_:)),
             #selector(MainSplitViewController.newMailFolder(_:)),
             #selector(MainSplitViewController.saveMessageToFolder(_:)),
             #selector(MainSplitViewController.moveMessageToFolder(_:)),
-            #selector(MainSplitViewController.removeSavedMessage(_:)),
+            #selector(MainSplitViewController.removeSelectedMessage(_:)),
             #selector(MainSplitViewController.newTaskFromMessage(_:)),
             #selector(MainSplitViewController.openMessageInOutlook(_:)),
             #selector(MainSplitViewController.refreshCurrentMode(_:)),
+            // Both lost their toolbar buttons, so the menu is now the only way
+            // to reach them at all.
+            #selector(MainSplitViewController.showMailWindowMenu(_:)),
         ]
         let menu = try XCTUnwrap(loadMainMenu())
         let actions = Set(allItems(of: menu).compactMap(\.action))
@@ -202,8 +218,12 @@ final class MailStatusTests: PersistenceTestCase {
         }
     }
 
+    private func menuItem(_ action: Selector) -> NSMenuItem {
+        NSMenuItem(title: "", action: action, keyEquivalent: "")
+    }
+
     /// Two items sharing a key equivalent means one of them silently never
-    /// fires. ⌘1/⌘2 and ⇧⌘N were all added at once, so this is worth checking.
+    /// fires.
     func testNoTwoMenuItemsShareAKeyEquivalent() throws {
         let menu = try XCTUnwrap(loadMainMenu())
         var seen: [String: String] = [:]

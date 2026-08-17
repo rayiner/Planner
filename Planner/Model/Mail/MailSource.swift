@@ -19,6 +19,15 @@ nonisolated protocol MailSource: Sendable {
     ///   consent dialog; an automatic one (launch, day rollover) must not.
     func envelopes(in range: Range<Date>, userInitiated: Bool) async throws -> [MailMessage]
 
+    /// Same as `envelopes(in:userInitiated:)`, with the last successful window
+    /// so a source that can do an incremental sweep does not re-read every
+    /// field. Sources that cannot ignore `known`.
+    func envelopes(
+        in range: Range<Date>,
+        known: [MailMessage],
+        userInitiated: Bool
+    ) async throws -> [MailMessage]
+
     /// The body and headers of one message, by the id its envelope carried.
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail
 
@@ -32,6 +41,16 @@ nonisolated protocol MailSource: Sendable {
 /// Returning nothing is a legitimate state, not an error: a user with no
 /// Outlook still gets a working planner, with mail folders they can file into
 /// by hand and an empty Recent Mail.
+extension MailSource {
+    func envelopes(
+        in range: Range<Date>,
+        known: [MailMessage],
+        userInitiated: Bool
+    ) async throws -> [MailMessage] {
+        try await envelopes(in: range, userInitiated: userInitiated)
+    }
+}
+
 nonisolated struct NullMailSource: MailSource {
     let sourceID = "none"
     let displayName = "No Mailbox"

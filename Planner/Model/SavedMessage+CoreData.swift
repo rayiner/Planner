@@ -21,6 +21,9 @@ final class SavedMessage: NSManagedObject {
     @NSManaged var recipients: String?
     @NSManaged var receivedAt: Date
     @NSManaged var body: String?
+    /// Outlook HTML, when the save captured it. The reader prefers this over
+    /// `body` and falls back to plain text for rows saved before HTML existed.
+    @NSManaged var htmlBody: String?
     @NSManaged var inReplyTo: String?
     /// Space-joined ids, oldest first, exactly as the header carried them.
     /// Parsed by `MailThreading`; never split at write time.

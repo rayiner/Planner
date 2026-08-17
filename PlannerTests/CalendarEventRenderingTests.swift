@@ -5,7 +5,9 @@ import XCTest
 @MainActor
 final class CalendarEventRenderingTests: XCTestCase {
     private func makeView(weeks: Int = 4) -> WeekCalendarView {
-        let view = WeekCalendarView(frame: NSRect(x: 0, y: 0, width: 720, height: 520))
+        // Tall enough that a cell fits a task-task-event stack: these tests are
+        // about ordering and identity, not about running out of room.
+        let view = WeekCalendarView(frame: NSRect(x: 0, y: 0, width: 720, height: 610))
         view.test_setWeekCount(weeks)
         view.layoutSubtreeIfNeeded()
         return view
@@ -143,19 +145,20 @@ final class CalendarEventRenderingTests: XCTestCase {
         XCTAssertGreaterThan(view.test_overflowCount(at: 3), 0)
     }
 
-    /// A half-height weekend row barely fits one line; showing the row matters
-    /// more than showing the count.
+    /// However short the cell, showing at least one row matters more than
+    /// showing the count — and the books must still balance.
     func testAWeekendRowStillShowsSomething() {
         let view = makeView()
-        let saturday = view.test_days[5]
-        XCTAssertTrue(view.test_isWeekend(at: 5))
+        let index = view.test_days.indices.first { view.test_isWeekend(at: $0) }!
+        let saturday = view.test_days[index]
+        XCTAssertTrue(view.test_isWeekend(at: index))
         view.deadlines = [task("Weekend task", day: saturday)]
         view.events = (0..<3).map { event("Event \($0)", day: saturday, id: "w\($0)") }
         view.layoutSubtreeIfNeeded()
 
-        let shown = view.test_visibleChips(at: 5).count + view.test_visibleEvents(at: 5).count
+        let shown = view.test_visibleChips(at: index).count + view.test_visibleEvents(at: index).count
         XCTAssertGreaterThanOrEqual(shown, 1)
-        XCTAssertEqual(shown + view.test_overflowCount(at: 5), 4)
+        XCTAssertEqual(shown + view.test_overflowCount(at: index), 4)
     }
 
     func testAnEventOnlyDayStillRenders() {

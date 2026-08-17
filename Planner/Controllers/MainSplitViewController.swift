@@ -10,12 +10,9 @@ final class MainSplitViewController: NSSplitViewController {
     let outlineViewController: OutlineViewController
     private let calendarViewController: CalendarViewController
     private let inspectorViewController: InspectorViewController
-    let mailboxListViewController: MailboxListViewController
     let mailListViewController: MailListViewController
     let mailReaderViewController: MailReaderViewController
 
-    /// The one pane that survives a mode switch. See `ModeContainerViewController`.
-    private let sidebarContainer = ModeContainerViewController()
     private var sidebarSplitItem: NSSplitViewItem!
     private var calendarSplitItem: NSSplitViewItem!
     private var inspectorSplitItem: NSSplitViewItem!
@@ -25,22 +22,20 @@ final class MainSplitViewController: NSSplitViewController {
     private var appliedMode: PlannerMode?
     /// Divider 1 is per-mode; divider 0 is shared. See `applyMode`.
     private var middlePaneWidths: [PlannerMode: CGFloat] = [:]
-    private var trailingCollapsed: [PlannerMode: Bool] = [:]
 
-    private let calendarTitleField = NSTextField(labelWithString: "")
-    private let mailTitleField = NSTextField(labelWithString: "")
+    private lazy var calendarTitleField = TitleStatusField(status: eventStatusView)
+    private lazy var mailTitleField = TitleStatusField(status: mailStatusView)
     private let weekNavigationControl = NSSegmentedControl()
-    private let sidebarModeControl = NSSegmentedControl()
+    /// Each rides inside its mode's title item rather than holding a toolbar
+    /// slot of its own: the toolbar draws a control pill behind every separate
+    /// slot, and a spinner in a pill reads as a broken button. Beside the title
+    /// text it is plainly a status light. The view hides itself when quiet and
+    /// the title's stack reclaims the space.
     private let eventStatusView = EventStatusView()
     private let mailStatusView = EventStatusView()
-    /// Held so the items themselves can be hidden. Hiding only the inner view
-    /// still leaves the toolbar drawing an empty pill where the slot is.
-    private var eventStatusToolbarItem: NSToolbarItem?
-    private var mailStatusToolbarItem: NSToolbarItem?
     /// Items that act on the sidebar's content, hidden while it is collapsed.
     private var sidebarToolbarItems: [NSToolbarItem] = []
     private var sidebarCollapseObservation: NSKeyValueObservation?
-    private weak var windowRangeButton: NSPopUpButton?
     private let userDefaults: UserDefaults
 
     private enum NavigationSegment: Int {
@@ -64,7 +59,8 @@ final class MainSplitViewController: NSSplitViewController {
         outlineViewController = OutlineViewController(
             persistence: persistence,
             model: model,
-            selection: selection
+            selection: selection,
+            mail: mail
         )
         calendarViewController = CalendarViewController(
             persistence: persistence,
@@ -76,12 +72,6 @@ final class MainSplitViewController: NSSplitViewController {
             persistence: persistence,
             model: model,
             selection: selection
-        )
-        mailboxListViewController = MailboxListViewController(
-            persistence: persistence,
-            model: model,
-            selection: selection,
-            mail: mail
         )
         mailListViewController = MailListViewController(
             persistence: persistence,
@@ -125,10 +115,18 @@ final class MainSplitViewController: NSSplitViewController {
 
         // A real sidebar item supplies the source-list material, the inset row
         // metrics, and the toolbar/sidebar coordination that hand-rolled
-        // thickness clamping used to approximate.
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarContainer)
+        // thickness clamping used to approximate. One sidebar for both modes:
+        // the unified outline carries Projects and Mail as sections, so a mode
+        // switch replaces only the trailing pair.
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: outlineViewController)
         sidebarItem.minimumThickness = Self.sidebarMinimum
         sidebarItem.maximumThickness = Self.sidebarMinimum * 2
+        // `sidebarWithViewController:` installs a 250-pt automatic max, below
+        // the 480 the user may drag to. Automatic / proportional sizing
+        // (fullscreen, a fitting-size change) would then clamp a widened
+        // sidebar back. The absolute max still holds; this only drops the
+        // tighter automatic one.
+        sidebarItem.automaticMaximumThickness = NSSplitViewItem.unspecifiedDimension
         sidebarItem.preferredThicknessFraction = 260.0 / 1100.0
         // Higher holding priority = resists resizing. The sidebar keeps its width
         // and the detail pane absorbs the slack, not the other way round.
@@ -155,8 +153,12 @@ final class MainSplitViewController: NSSplitViewController {
         inspectorItem.maximumThickness = Self.inspectorMaximum
         inspectorItem.preferredThicknessFraction = 300.0 / 1100.0
         inspectorItem.holdingPriority = NSLayoutConstraint.Priority(260)
-        inspectorItem.canCollapse = true
-        inspectorItem.canCollapseFromWindowResize = true
+        // Not collapsible, the same bargain the mail reader makes: notes are
+        // half the point of tasks mode, and a pane that can vanish reads as
+        // lost, not hidden. The window refusing to shrink past the panes'
+        // minimum sum is the accepted trade.
+        inspectorItem.canCollapse = false
+        inspectorItem.canCollapseFromWindowResize = false
         inspectorItem.isCollapsed = false
         inspectorSplitItem = inspectorItem
 
@@ -167,7 +169,19 @@ final class MainSplitViewController: NSSplitViewController {
         // — which is fixed at init.
         let mailListItem = NSSplitViewItem(contentListWithViewController: mailListViewController)
         mailListItem.minimumThickness = Self.mailListMinimum
-        mailListItem.maximumThickness = Self.mailListMaximum
+        // `contentListWithViewController:` also installs an automatic max
+        // (576) and a 0.33 preferred fraction — the no-sidebar value, because
+        // this item is built before it sits next to one. Clear the auto-max
+        // so a user-widened list is not clamped on the next automatic pass,
+        // and pin the fraction to the same default width first-run mail uses.
+        // No absolute maximumThickness: the holding priorities already send
+        // window growth to the reader, and while the reader is collapsed the
+        // list is the only pane that can absorb slack — capping it (with the
+        // sidebar already capped) would leave a wide window with space no
+        // pane may fill, which Auto Layout resolves by breaking a maximum
+        // at random.
+        mailListItem.automaticMaximumThickness = NSSplitViewItem.unspecifiedDimension
+        mailListItem.preferredThicknessFraction = Self.mailListDefaultWidth / 1100.0
         mailListItem.holdingPriority = NSLayoutConstraint.Priority(260)
         mailListItem.canCollapse = false
         mailListSplitItem = mailListItem
@@ -175,12 +189,13 @@ final class MainSplitViewController: NSSplitViewController {
         let mailReaderItem = NSSplitViewItem(viewController: mailReaderViewController)
         mailReaderItem.minimumThickness = Self.mailReaderMinimum
         mailReaderItem.holdingPriority = NSLayoutConstraint.Priority(240)
-        // Collapsible only from a window resize: the reader is the point of
-        // mail mode, so nothing offers to hide it, but a window dragged narrower
-        // than both minimums must give somewhere rather than refusing to shrink.
-        mailReaderItem.canCollapse = true
-        mailReaderItem.canCollapseFromWindowResize = true
-        mailReaderItem.isCollapsed = false
+        // Not collapsible at all — the reader is the point of mail mode, and
+        // its minimum is now low enough that the window refusing to shrink
+        // past the panes' minimum sum is the better trade. Collapse-from-resize
+        // was tried and proved a trapdoor: AppKit sprang it on transient
+        // squeezes mid-resize (even while the window *grew*), and nothing on
+        // AppKit's side reliably reopened a pane that has no Show command.
+        mailReaderItem.canCollapse = false
         mailReaderSplitItem = mailReaderItem
 
         addSplitViewItem(sidebarItem)
@@ -193,7 +208,6 @@ final class MainSplitViewController: NSSplitViewController {
                 self?.updateToolbarItemVisibility()
             }
         }
-
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(plannerSelectionDidChange),
@@ -227,6 +241,15 @@ final class MainSplitViewController: NSSplitViewController {
             name: .NSUndoManagerDidRedoChange,
             object: persistence.viewContext.undoManager
         )
+        // Mode switches record the trailing geometry on the way out; quitting
+        // *inside* a mode is the same departure, so it records too — otherwise
+        // a divider dragged since the last switch reverts on relaunch.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillTerminate(_:)),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
     }
 
     override func viewWillAppear() {
@@ -242,11 +265,37 @@ final class MainSplitViewController: NSSplitViewController {
     private static let detailMinimum: CGFloat = 420
     private static let inspectorMinimum: CGFloat = 260
     private static let inspectorMaximum: CGFloat = 380
-    // Chosen so both modes' minimum sums come to the same 920: switching modes
-    // can then never be the thing that forces the window wider.
-    private static let mailListMinimum: CGFloat = 300
-    private static let mailListMaximum: CGFloat = 520
-    private static let mailReaderMinimum: CGFloat = 380
+    /// Never below what the toolbar parks over this pane: everything between
+    /// the two tracking separators is confined to the middle pane's width, so
+    /// a pane narrower than its own toolbar section pushes those items into the
+    /// overflow menu — the title first, which is the pane's only label.
+    static let mailListMinimum: CGFloat = max(300, mailToolbarSectionMinimum)
+
+    /// Width the mail toolbar's middle section needs: the title, plus the feed
+    /// status light that rides inside it, plus the toolbar's own padding.
+    ///
+    /// Measured rather than hardcoded, and calibrated on **"Recent Mail"** —
+    /// the one title that is not user-supplied. A folder name is unbounded and
+    /// truncates by design; guaranteeing the fixed title fits is what the pane
+    /// minimum can honestly promise. Same bargain as the calendar's
+    /// `chipWidthCalibrationTitle`.
+    static let mailToolbarSectionMinimum: CGFloat = {
+        let title = MailLabels.recentMailName as NSString
+        let width = title.size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 16, weight: .bold),
+        ]).width
+        // The status light and its spacing (`TitleStatusField.statusSpacing`),
+        // then the padding the toolbar puts around a view-backed item.
+        return (width + 8 + 16 + 32).rounded(.up)
+    }()
+    // Well under the list's minimum: the reader is a wrapping text column and
+    // stays legible far narrower than the list's fixed-format rows. Mail's
+    // minimum sum (762) sits *below* tasks' 920, which is safe in the only
+    // direction that matters: switching into mail never forces the window
+    // wider. Switching into tasks from a narrower window grows it to the
+    // minimum sum — with the inspector no longer collapsible there is nothing
+    // left to shed, and that is the going rate for panes that never vanish.
+    private static let mailReaderMinimum: CGFloat = 220
     /// Where divider 1 sits in mail mode the first time it is entered.
     private static let mailListDefaultWidth: CGFloat = 384
 
@@ -259,22 +308,17 @@ final class MainSplitViewController: NSSplitViewController {
         .tasks: "tasks.middlePaneWidth",
         .mail: "mail.middlePaneWidth",
     ]
-    private static let trailingCollapseDefaultsKeys: [PlannerMode: String] = [
-        .tasks: "tasks.trailingCollapsed",
-        .mail: "mail.trailingCollapsed",
-    ]
 
     // MARK: - Mode
 
-    /// Swaps the sidebar's content and replaces the two trailing panes.
+    /// Replaces the two trailing panes; the unified sidebar stays put.
     ///
     /// Divider 0 and the sidebar's collapse state are deliberately untouched:
     /// a frozen sidebar makes the switch read as "the content changed" rather
-    /// than "the layout rearranged", which is the effect Preview gets swapping
-    /// Thumbnails for a Table of Contents. Divider 1 is per-mode, restored in
+    /// than "the layout rearranged". Divider 1 is per-mode, restored in
     /// the same layout pass and **unanimated** — a jump cut is invisible while
-    /// all three panes' content is replaced, whereas animating would slide the
-    /// toolbar's tracking separator after the cut.
+    /// both trailing panes' content is replaced, whereas animating would slide
+    /// the toolbar's tracking separator after the cut.
     private func applyMode(_ mode: PlannerMode) {
         guard appliedMode != mode else { return }
         let outgoing = appliedMode
@@ -292,7 +336,6 @@ final class MainSplitViewController: NSSplitViewController {
             while splitViewItems.count > 1 {
                 removeSplitViewItem(splitViewItems[splitViewItems.count - 1])
             }
-            sidebarContainer.show(mode == .tasks ? outlineViewController : mailboxListViewController)
 
             switch mode {
             case .tasks:
@@ -339,21 +382,16 @@ final class MainSplitViewController: NSSplitViewController {
         return paneView.convert(paneView.bounds, to: splitView)
     }
 
-    /// Captures divider 1 and the trailing pane's collapse state for the mode
-    /// being left. Recorded in memory *and* in defaults: the split view's own
-    /// autosave cannot serve two geometries under one name, and quitting while
-    /// in mail mode would otherwise leave it holding mail's numbers.
+    /// Captures divider 1 for the mode being left. Recorded in memory *and* in
+    /// defaults: the split view's own autosave cannot serve two geometries
+    /// under one name, and quitting while in mail mode would otherwise leave
+    /// it holding mail's numbers.
     private func recordTrailingGeometry(for mode: PlannerMode) {
         guard splitViewItems.count == 3 else { return }
-        let collapsed = trailingItem(for: mode)?.isCollapsed ?? false
-        trailingCollapsed[mode] = collapsed
-        if let key = Self.trailingCollapseDefaultsKeys[mode] {
-            userDefaults.set(collapsed, forKey: key)
-        }
-
-        // A collapsed trailing pane has no width worth remembering; keeping the
-        // last real one means reopening lands where the user left it.
-        guard !collapsed else { return }
+        // Neither trailing pane can collapse from the UI any more, but a
+        // programmatic collapse inflates the middle pane, and a width measured
+        // then is not one worth replaying.
+        guard trailingItem(for: mode)?.isCollapsed != true else { return }
         guard let width = paneFrame(at: 1)?.width, width > 0 else { return }
         middlePaneWidths[mode] = width
         if let key = Self.middleWidthDefaultsKeys[mode] {
@@ -361,7 +399,7 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    /// Restores the trailing pair's collapse state and divider 1.
+    /// Restores divider 1 for the mode being entered.
     ///
     /// Each step gets its own layout pass. Setting a divider before the split
     /// view has settled the one before it makes AppKit resolve the conflict by
@@ -369,22 +407,31 @@ final class MainSplitViewController: NSSplitViewController {
     /// is the sidebar, and the sidebar is the one thing that must not move.
     private func restoreTrailingGeometry(for mode: PlannerMode) {
         guard let item = trailingItem(for: mode), splitViewItems.count == 3 else { return }
-        // An inherited collapsed state would open mail with no reading pane,
-        // which reads as broken rather than as collapsed.
-        item.isCollapsed = storedTrailingCollapsed(for: mode)
+        // Neither trailing pane may open shut — a mode with its trailing pane
+        // missing reads as broken, not as collapsed — so a stored collapse
+        // (from a build that allowed one) is dropped, not replayed.
+        item.isCollapsed = false
         view.layoutSubtreeIfNeeded()
 
         guard !item.isCollapsed,
               let width = storedMiddleWidth(for: mode),
               let sidebarEdge = paneFrame(at: 0)?.maxX
         else { return }
-        splitView.setPosition(sidebarEdge + splitView.dividerThickness + width, ofDividerAt: 1)
+        // Clamped so the trailing pane keeps its minimum: a width stored in a
+        // wider window would otherwise hand AppKit a conflict, which it
+        // resolves by squeezing whichever pane is cheapest — the sidebar, or
+        // the reader right out of existence.
+        let room = splitView.bounds.width - sidebarEdge
+            - 2 * splitView.dividerThickness - item.minimumThickness
+        guard room >= splitViewItems[1].minimumThickness else { return }
+        splitView.setPosition(
+            sidebarEdge + splitView.dividerThickness + min(width, room),
+            ofDividerAt: 1
+        )
     }
 
-    private func storedTrailingCollapsed(for mode: PlannerMode) -> Bool {
-        if let collapsed = trailingCollapsed[mode] { return collapsed }
-        guard let key = Self.trailingCollapseDefaultsKeys[mode] else { return false }
-        return userDefaults.bool(forKey: key)
+    @objc private func applicationWillTerminate(_ notification: Notification) {
+        if let appliedMode { recordTrailingGeometry(for: appliedMode) }
     }
 
     /// The remembered middle-pane width, or — the first time mail mode is
@@ -398,14 +445,6 @@ final class MainSplitViewController: NSSplitViewController {
             if stored > 0 { return CGFloat(stored) }
         }
         return mode == .mail ? Self.mailListDefaultWidth : nil
-    }
-
-    @objc func showTasksMode(_ sender: Any?) {
-        selection.setMode(.tasks)
-    }
-
-    @objc func showMailMode(_ sender: Any?) {
-        selection.setMode(.mail)
     }
 
     var isMailMode: Bool { selection.mode == .mail }
@@ -435,6 +474,8 @@ final class MainSplitViewController: NSSplitViewController {
     @objc func newProject(_ sender: Any?) {
         do {
             let project = try model.createProject()
+            // The Projects section is visible in both modes, but the project
+            // is a tasks-mode thing — creating one goes to where it lives.
             selectAndBeginEditing(project)
         } catch {
             // saveFailed already presented; do not retarget selection.
@@ -458,10 +499,9 @@ final class MainSplitViewController: NSSplitViewController {
         guard !isFirstResponderTextInput else { return }
         do {
             let folder = try model.createMailFolder()
-            selection.setMode(.mail)
             selection.selectMailbox(.folder(folder.uuid))
             DispatchQueue.main.async { [weak self] in
-                self?.mailboxListViewController.beginEditingName(of: folder)
+                self?.outlineViewController.beginEditingName(of: folder)
             }
         } catch {
             // saveFailed already presented; leave the selection alone.
@@ -487,6 +527,19 @@ final class MainSplitViewController: NSSplitViewController {
         }
         let folder = item.representedObject as? MailFolder
         Task { [weak self] in await self?.save(envelope, into: folder) }
+    }
+
+    /// The toolbar's folder button, doing double duty: over Recent Mail it
+    /// saves the open message to a folder, over a folder it moves the message.
+    /// One button because the two are the same gesture — "put this message in
+    /// a folder" — and the mailbox already says which kind of putting is
+    /// possible. The File menu keeps them separate: a menu names its verbs.
+    @objc func fileMessageToFolder(_ sender: Any?) {
+        switch selection.message {
+        case .recent?: saveMessageToFolder(sender)
+        case .saved?: moveMessageToFolder(sender)
+        case nil: break
+        }
     }
 
     /// A menu item that carries a folder choice, as opposed to the command
@@ -526,7 +579,7 @@ final class MainSplitViewController: NSSplitViewController {
                 // A folder made on the way to saving still needs a name, and
                 // the message it was made for is the best reminder of why.
                 selection.selectMailbox(.folder(target.uuid))
-                mailboxListViewController.beginEditingName(of: target)
+                outlineViewController.beginEditingName(of: target)
             }
             PlannerLog.mail.info("Saved message \(saved.outlookID, privacy: .public)")
             return saved.uuid
@@ -579,9 +632,6 @@ final class MainSplitViewController: NSSplitViewController {
         do {
             let parent = try taskParent()
             let task = try model.createTask(from: message, under: parent)
-            // Switching modes is the point: the task is the thing to look at
-            // now, and it lives in the other half of the app.
-            selection.setMode(.tasks)
             selectAndBeginEditing(task)
         } catch {
             // saveFailed already presented.
@@ -602,7 +652,6 @@ final class MainSplitViewController: NSSplitViewController {
               let message = model.sourceMessage(of: task),
               let folder = message.folder
         else { return }
-        selection.setMode(.mail)
         selection.selectMailbox(.folder(folder.uuid))
         selection.selectMessage(.saved(message.uuid))
     }
@@ -674,10 +723,20 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
+    /// The trash's two halves: over a folder it deletes Planner's copy of a
+    /// saved message, and over Recent Mail it dismisses a passing one. Double
+    /// duty the same way the folder button is, and for the same reason — one
+    /// button in one place, named by validation for whichever half applies.
+    ///
     /// Removing is deleting Planner's only copy, so it asks — but only when it
     /// really is the only one. A message filed in two folders can lose one of
-    /// them without ceremony.
-    @objc func removeSavedMessage(_ sender: Any?) {
+    /// them without ceremony. Dismissing destroys nothing at all, so it never
+    /// asks.
+    @objc func removeSelectedMessage(_ sender: Any?) {
+        if let envelope = dismissableRecentMessage {
+            dismiss(envelope)
+            return
+        }
         guard let message = selectedSavedMessage else { return }
         guard copiesElsewhere(of: message) == 0 else {
             performRemove(message)
@@ -690,17 +749,50 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     /// Tests pass a result to skip the confirmation sheet.
-    func removeSavedMessage(confirmed: Bool) {
+    func removeSelectedMessage(confirmed: Bool) {
+        if let envelope = dismissableRecentMessage {
+            dismiss(envelope)
+            return
+        }
         guard confirmed, let message = selectedSavedMessage else { return }
         performRemove(message)
     }
 
+    /// The open Recent Mail message, when dismissing it is a thing that can
+    /// happen. A message already saved to a folder is excluded: its row carries
+    /// a "Saved to …" chip, and that chip is the receipt for the filing — a
+    /// command that hides it would be hiding the evidence the save worked.
+    private var dismissableRecentMessage: MailMessage? {
+        guard selection.isRecentMailSelected,
+              case let .recent(id)? = selection.message,
+              let envelope = mail.message(id: id),
+              model.foldersByOutlookID()[id] == nil
+        else { return nil }
+        return envelope
+    }
+
+    private func dismiss(_ envelope: MailMessage) {
+        // Neighbour first: dismiss republishes immediately, and this row is
+        // gone from the list by the time we write the new selection.
+        let next = mailListViewController.messageToSelectAfterRemoving(.recent(envelope.id))
+        mail.dismiss(envelope)
+        selection.selectMessage(next)
+        // Not Core Data's undo, but the same stack: ⌘Z means "the last thing I
+        // did" regardless of which store it landed in.
+        undoManager?.registerUndo(withTarget: self) { target in
+            target.mail.restore(envelope)
+            target.selection.selectMessage(.recent(envelope.id))
+        }
+        undoManager?.setActionName("Remove from Recent Mail")
+    }
+
     private func performRemove(_ message: SavedMessage) {
+        let next = mailListViewController.messageToSelectAfterRemoving(.saved(message.uuid))
         do {
             try model.removeMessage(message)
-            selection.selectMessage(nil)
+            selection.selectMessage(next)
         } catch {
-            // saveFailed already presented.
+            // saveFailed already presented; selection and list stay put.
         }
     }
 
@@ -738,7 +830,7 @@ final class MainSplitViewController: NSSplitViewController {
         guard !isFirstResponderTextInput else { return }
         if isMailMode {
             guard let folder = selectedMailFolder else { return }
-            mailboxListViewController.beginEditingName(of: folder)
+            outlineViewController.beginEditingName(of: folder)
             return
         }
         guard let node = selectedOutlineNode else { return }
@@ -750,13 +842,6 @@ final class MainSplitViewController: NSSplitViewController {
         revealInspector()
     }
 
-    /// AppKit's own inspector toggle; overridden only to revalidate the toolbar.
-    /// Unlike Get Info this needs no selection, so the pane can always be reclaimed.
-    override func toggleInspector(_ sender: Any?) {
-        super.toggleInspector(sender)
-        view.window?.toolbar?.validateVisibleItems()
-    }
-
     override func toggleSidebar(_ sender: Any?) {
         super.toggleSidebar(sender)
         view.window?.toolbar?.validateVisibleItems()
@@ -765,6 +850,13 @@ final class MainSplitViewController: NSSplitViewController {
     @objc func deleteSelected(_ sender: Any?) {
         guard !isFirstResponderTextInput else { return }
         if isMailMode {
+            // ⌫ acts on the pane the user is actually in. Over the message list
+            // that means dismissing the open message; over the sidebar it keeps
+            // meaning the folder, which is what it has always meant.
+            if isMailListFirstResponder, dismissableRecentMessage != nil {
+                removeSelectedMessage(sender)
+                return
+            }
             guard let folder = selectedMailFolder else { return }
             confirm(message: Self.deleteConfirmationMessage(for: folder)) { [weak self] confirmed in
                 guard confirmed else { return }
@@ -792,7 +884,12 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     private func shiftVisibleWeeks(by weeks: Int) {
-        let target = Calendar.current.date(byAdding: .day, value: weeks * 7, to: selection.visibleWeekStart)!
+        let columns = calendarViewController.weekView.visibleWeekCount
+        let target = Calendar.current.date(
+            byAdding: .day,
+            value: weeks * columns,
+            to: selection.visibleWeekStart
+        )!
         selection.setVisibleWeekStart(target)
     }
 
@@ -858,7 +955,6 @@ final class MainSplitViewController: NSSplitViewController {
         let window = events.window
         let lastDay = Calendar.current.date(byAdding: .day, value: -1, to: window.upperBound)
             ?? window.upperBound
-        eventStatusToolbarItem?.isHidden = !isEventStatusVisible
         eventStatusView.apply(
             events.state,
             settingsURL: events.failureSettingsURL,
@@ -874,12 +970,10 @@ final class MainSplitViewController: NSSplitViewController {
     func test_updateMailStatus() { updateMailStatus() }
     var test_isEventStatusVisible: Bool { isEventStatusVisible }
     func test_updateEventStatus() { updateEventStatus() }
-    /// The split item holds a container, so the sidebar's actual content is a
-    /// child of a child — which the mode tests are precisely about.
-    var test_sidebarChild: NSViewController? { sidebarContainer.current }
     /// The window title is computed here even when there is no window to set it
     /// on, which is the case in tests.
     var test_windowTitle: String { isMailMode ? mailWindowTitle : calendarWindowTitle }
+    var test_visibleColumnCount: Int { calendarViewController.weekView.visibleWeekCount }
     /// Pane widths in pane order, which `splitView.subviews` does not give.
     static var test_folderMenuItemTag: Int { folderMenuItemTag }
     var test_inspectorSourceChip: String? { inspectorViewController.test_sourceMessageChip }
@@ -961,6 +1055,16 @@ final class MainSplitViewController: NSSplitViewController {
         Self.isTextInputResponder(firstResponderForValidation ?? view.window?.firstResponder)
     }
 
+    /// Whether the message list — rather than the sidebar — holds focus. Shares
+    /// the validation seam so a test can put focus somewhere without a window.
+    private var isMailListFirstResponder: Bool {
+        guard let responder = firstResponderForValidation ?? view.window?.firstResponder else {
+            return false
+        }
+        guard let view = responder as? NSView else { return false }
+        return view.isDescendant(of: mailListViewController.view)
+    }
+
     private func selectAndBeginEditing(_ node: OutlineNode) {
         selection.selectNode(uuid: node.uuid)
         DispatchQueue.main.async { [weak self] in
@@ -1036,8 +1140,8 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    /// Puts the caret back where the mode expects it, so ⌘1/⌘2 leaves the
-    /// keyboard usable without a click.
+    /// Puts the caret back where the mode expects it, so selecting a
+    /// sidebar row leaves the keyboard usable without a second click.
     private func focusPreferredResponder() {
         guard let window = view.window else { return }
         switch selection.mode {
@@ -1048,16 +1152,12 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    /// Get Info targets the selection: it shows the inspector if hidden and puts
-    /// the caret in the note. The inspector rebinds itself from `SelectionModel`.
-    /// Both a task and a calendar day have a note, so both qualify.
+    /// Get Info targets the selection: it puts the caret in the note. The
+    /// inspector rebinds itself from `SelectionModel`. Both a task and a
+    /// calendar day have a note, so both qualify.
     func revealInspector() {
-        guard hasNoteEditableSelection, let inspectorSplitItem else { return }
-        if inspectorSplitItem.isCollapsed {
-            inspectorSplitItem.animator().isCollapsed = false
-        }
+        guard hasNoteEditableSelection else { return }
         inspectorViewController.focusNote()
-        view.window?.toolbar?.validateVisibleItems()
     }
 
     var isInspectorVisible: Bool {
@@ -1077,20 +1177,11 @@ final class MainSplitViewController: NSSplitViewController {
         for item in sidebarToolbarItems where item.isHidden != collapsed {
             item.isHidden = collapsed
         }
-        updateLeadingSpace(collapsed: collapsed)
-    }
-
-    /// The leading flexible space is what pushes the sidebar group against the
-    /// divider. With the sidebar shut there is no divider to hug, so drop the
-    /// space and let the toggle sit beside the window buttons, as Preview does.
-    private func updateLeadingSpace(collapsed: Bool) {
-        guard let toolbar = view.window?.toolbar else { return }
-        let hasLeadingSpace = toolbar.items.first?.itemIdentifier == .flexibleSpace
-        if collapsed, hasLeadingSpace {
-            toolbar.removeItem(at: 0)
-        } else if !collapsed, !hasLeadingSpace {
-            toolbar.insertItem(withItemIdentifier: .flexibleSpace, at: 0)
-        }
+        // The collapse also changes which items belong in the toolbar at all
+        // (the leading space and divider 0's tracking separator go with the
+        // sidebar); the rebuild's identifier comparison makes this a no-op
+        // when nothing changed.
+        rebuildToolbarItems()
     }
 
     /// Both modes keep a title in the same slot, and the window title follows
@@ -1128,9 +1219,6 @@ final class MainSplitViewController: NSSplitViewController {
             bold: mailWindowTitle,
             trailing: nil
         )
-        // The window length is a property of Recent Mail. Over a folder it
-        // would be offering to change something the pane does not show.
-        windowRangeButton?.isEnabled = selection.isRecentMailSelected
     }
 
     /// Span bold, year lighter — the "August 2026" treatment, in the toolbar.
@@ -1190,22 +1278,40 @@ final class MainSplitViewController: NSSplitViewController {
 
     private func isCommandEnabled(for action: Selector?) -> Bool {
         switch action {
-        case #selector(toggleSidebar(_:)), #selector(showTasksMode(_:)), #selector(showMailMode(_:)):
-            // Always available: they are how the user gets between the two
-            // modes and back to a sidebar they shut.
+        case #selector(toggleSidebar(_:)):
             return true
         case #selector(revealToday(_:)), #selector(goToPreviousWeek(_:)),
-             #selector(goToNextWeek(_:)), #selector(toggleInspector(_:)):
+             #selector(goToNextWeek(_:)):
             return !isMailMode
+        // Both sections live in the unified sidebar, so both creations are
+        // reachable from either mode; each switches to its own mode. New
+        // Project is deliberately not gated on text input — the field editor
+        // commits — matching its behavior before the sidebars merged.
         case #selector(newProject(_:)):
-            return !isMailMode
+            return true
         case #selector(newMailFolder(_:)):
-            return isMailMode && !isFirstResponderTextInput
+            return !isFirstResponderTextInput
         case #selector(saveMessageToFolder(_:)):
             guard case .recent? = selection.message else { return false }
             return isMailMode
-        case #selector(moveMessageToFolder(_:)), #selector(removeSavedMessage(_:)):
+        case #selector(moveMessageToFolder(_:)):
             return isMailMode && selectedSavedMessage != nil
+        case #selector(removeSelectedMessage(_:)):
+            // Double duty, so it is enabled whenever either half would be —
+            // and this gate has to agree with the dispatch about which half.
+            // Over Recent Mail that is only an *unsaved* message: a filed one
+            // keeps its row so the "Saved to …" chip stays visible.
+            guard isMailMode else { return false }
+            return dismissableRecentMessage != nil || selectedSavedMessage != nil
+        case #selector(fileMessageToFolder(_:)):
+            // Enabled whenever either half would be: the dispatch above and
+            // this gate must agree on which half that is.
+            guard isMailMode else { return false }
+            switch selection.message {
+            case .recent?: return true
+            case .saved?: return selectedSavedMessage != nil
+            case nil: return false
+            }
         case #selector(openMessageInOutlook(_:)):
             return isMailMode && outlookIDOfSelectedMessage != nil
         case #selector(newTaskFromMessage(_:)):
@@ -1222,13 +1328,27 @@ final class MainSplitViewController: NSSplitViewController {
         case #selector(refreshCurrentMode(_:)):
             guard !isFirstResponderTextInput else { return false }
             return isMailMode ? !mail.isLoading : events.state != .loading
+        case #selector(refreshMailMessages(_:)):
+            return isMailMode && !isFirstResponderTextInput && !mail.isLoading
+        case #selector(setMailWindowDays(_:)), #selector(showMailWindowMenu(_:)):
+            // The window length is a property of Recent Mail. Over a folder it
+            // would be offering to change something the pane does not show.
+            return isMailMode && selection.isRecentMailSelected && !isFirstResponderTextInput
         case #selector(newTask(_:)):
             return !isMailMode && !isFirstResponderTextInput
                 && (selectedOutlineNode is Project || selectedOutlineNode is TaskItem)
-        case #selector(renameSelected(_:)), #selector(deleteSelected(_:)):
+        case #selector(renameSelected(_:)):
             guard !isFirstResponderTextInput else { return false }
-            // Recent Mail is not a folder: it cannot be renamed or deleted.
+            // Recent Mail is not a folder: it cannot be renamed.
             return isMailMode ? selectedMailFolder != nil : selectedOutlineNode != nil
+        case #selector(deleteSelected(_:)):
+            guard !isFirstResponderTextInput else { return false }
+            guard isMailMode else { return selectedOutlineNode != nil }
+            // Has to agree with the dispatch, which sends ⌫ to whichever pane
+            // holds focus — enabling this only for the folder would leave the
+            // command greyed out over the message list, where it now does work.
+            if isMailListFirstResponder, dismissableRecentMessage != nil { return true }
+            return selectedMailFolder != nil
         case #selector(showTaskInfo(_:)):
             return !isMailMode && !isFirstResponderTextInput && hasNoteEditableSelection
         default:
@@ -1236,15 +1356,28 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    /// Mode items are radio buttons across the View menu and the sidebar
-    /// control's attached menu, so validation also has to say which is on.
+    /// The sidebar toggle names the direction it would go.
     private func updateModeMenuItemState(_ item: NSMenuItem) {
         switch item.action {
-        case #selector(showTasksMode(_:)): item.state = isMailMode ? .off : .on
-        case #selector(showMailMode(_:)): item.state = isMailMode ? .on : .off
+        case #selector(toggleSidebar(_:)):
+            item.title = isSidebarVisible ? "Hide Sidebar" : "Show Sidebar"
+        case #selector(showMailWindowMenu(_:)): updateWindowRangeMenu(item)
+        // The ellipsis is a promise that a sheet follows, and only the folder
+        // half keeps it — dismissing takes nothing away that Outlook still has.
+        case #selector(removeSelectedMessage(_:)):
+            item.title = dismissableRecentMessage != nil
+                ? "Remove from Recent Mail"
+                : "Remove Message\u{2026}"
+        case #selector(setMailWindowDays(_:)):
+            item.state = item.tag == mail.windowDays ? .on : .off
         default: break
         }
     }
+
+    /// The parent of the range submenu. It carries no action of its own — the
+    /// submenu's entries do the work — but it needs a selector so validation
+    /// can populate it and gate it on Recent Mail being open.
+    @objc func showMailWindowMenu(_ sender: Any?) {}
 }
 
 extension MainSplitViewController: NSMenuItemValidation, NSToolbarItemValidation {
@@ -1254,7 +1387,35 @@ extension MainSplitViewController: NSMenuItemValidation, NSToolbarItemValidation
     }
 
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        isCommandEnabled(for: item.action)
+        if item.itemIdentifier == .fileMessage { updateFileMessageItem(item) }
+        if item.itemIdentifier == .removeMessage { updateRemoveMessageItem(item) }
+        return isCommandEnabled(for: item.action)
+    }
+
+    /// The folder button's name follows the open mailbox, so the overflow menu
+    /// and tooltip say which half of its double duty a click would do.
+    private func updateFileMessageItem(_ item: NSToolbarItem) {
+        if selection.isRecentMailSelected {
+            item.label = "Save"
+            item.toolTip = "Save this message to a folder"
+        } else {
+            item.label = "Move"
+            item.toolTip = "Move this message to another folder"
+        }
+    }
+
+    /// The trash's name follows the open mailbox too, and here it is doing more
+    /// than labelling: "Remove" over a folder deletes Planner's copy, while the
+    /// Recent Mail half touches nothing but this list. Saying so is the only
+    /// warning the user gets that the two are not the same act.
+    private func updateRemoveMessageItem(_ item: NSToolbarItem) {
+        if selection.isRecentMailSelected {
+            item.label = "Dismiss"
+            item.toolTip = "Remove this message from Recent Mail (Outlook is unchanged)"
+        } else {
+            item.label = "Remove"
+            item.toolTip = "Remove this message from its folder"
+        }
     }
 }
 
@@ -1266,14 +1427,16 @@ extension NSToolbarItem.Identifier {
     static let paneSeparator = NSToolbarItem.Identifier("PaneSeparator")
     static let inspectorSeparator = NSToolbarItem.Identifier("InspectorSeparator")
     static let calendarTitle = NSToolbarItem.Identifier("CalendarTitle")
+    static let inspectorTitle = NSToolbarItem.Identifier("InspectorTitle")
     static let mailTitle = NSToolbarItem.Identifier("MailTitle")
     static let weekNavigation = NSToolbarItem.Identifier("WeekNavigation")
     static let windowRange = NSToolbarItem.Identifier("WindowRange")
     static let today = NSToolbarItem.Identifier("Today")
-    static let eventStatus = NSToolbarItem.Identifier("EventStatus")
-    static let mailStatus = NSToolbarItem.Identifier("MailStatus")
     static let refreshMail = NSToolbarItem.Identifier("RefreshMail")
-    static let getInfo = NSToolbarItem.Identifier("GetInfo")
+    static let fileMessage = NSToolbarItem.Identifier("FileMessage")
+    static let removeMessage = NSToolbarItem.Identifier("RemoveMessage")
+    static let newTaskFromMessage = NSToolbarItem.Identifier("NewTaskFromMessage")
+    static let openInOutlook = NSToolbarItem.Identifier("OpenInOutlook")
 }
 
 extension MainSplitViewController: NSToolbarDelegate {
@@ -1283,7 +1446,7 @@ extension MainSplitViewController: NSToolbarDelegate {
     /// split view rather than to the items, so they survive both the per-mode
     /// swap of the trailing panes and this rebuild. The leading flexible space
     /// pushes the sidebar's own group up against the first divider, so it hugs
-    /// the splitter the way the inspector toggle hugs the second one.
+    /// the splitter the way mail's reader actions hug the second one.
     /// Everything between the separators sits over the middle pane: title hard
     /// left, controls hard right.
     ///
@@ -1300,16 +1463,17 @@ extension MainSplitViewController: NSToolbarDelegate {
             return [
                 .flexibleSpace, .addProject, .addTask, .sidebarMode,
                 .paneSeparator,
-                .calendarTitle, .eventStatus, .flexibleSpace, .weekNavigation,
+                .calendarTitle, .flexibleSpace, .weekNavigation,
                 .inspectorSeparator,
-                .getInfo,
+                .inspectorTitle,
             ]
         case .mail:
             return [
                 .flexibleSpace, .newMailFolder, .sidebarMode,
                 .paneSeparator,
-                .mailTitle, .mailStatus, .flexibleSpace, .windowRange, .refreshMail,
+                .mailTitle, .flexibleSpace,
                 .inspectorSeparator,
+                .fileMessage, .removeMessage, .newTaskFromMessage, .openInOutlook,
             ]
         }
     }
@@ -1318,18 +1482,37 @@ extension MainSplitViewController: NSToolbarDelegate {
         identifiers(for: .tasks) + identifiers(for: .mail)
     }
 
-    /// Swaps the toolbar's contents to the current mode's, in one pass.
+    /// What the toolbar should hold right now: the mode's items, minus the
+    /// pieces that only make sense while the sidebar is open.
+    ///
+    /// The leading flexible space is what pushes the sidebar group against
+    /// divider 0; with the sidebar shut there is no divider to hug, so it goes
+    /// and the toggle sits beside the window buttons, as Preview does. The
+    /// `paneSeparator` goes for the same reason with worse failure: a tracking
+    /// separator whose divider is collapsed has nothing to track, and AppKit
+    /// parks it — and everything laid out against it — over the wrong divider.
+    func wantedToolbarIdentifiers() -> [NSToolbarItem.Identifier] {
+        var wanted = identifiers(for: selection.mode)
+        if !isSidebarVisible {
+            wanted.removeAll { $0 == .paneSeparator }
+            if wanted.first == .flexibleSpace { wanted.removeFirst() }
+        }
+        return wanted
+    }
+
+    /// Swaps the toolbar's contents to what the mode and sidebar state want,
+    /// in one pass. The identifier comparison is what keeps this from
+    /// rebuilding on every validation pass.
     private func rebuildToolbarItems() {
         guard let toolbar = view.window?.toolbar else { return }
-        var wanted = identifiers(for: selection.mode)
-        // The leading space is dropped while the sidebar is shut; leaving it in
-        // the comparison would rebuild the toolbar on every validation pass.
-        if !isSidebarVisible, wanted.first == .flexibleSpace { wanted.removeFirst() }
+        let wanted = wantedToolbarIdentifiers()
         guard toolbar.items.map(\.itemIdentifier) != wanted else { return }
         while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
         for (index, identifier) in wanted.enumerated() {
             toolbar.insertItem(withItemIdentifier: identifier, at: index)
         }
+        // Freshly inserted sidebar items must start with the current collapse
+        // state; the rebuild guard above stops this from recursing.
         updateToolbarItemVisibility()
     }
 
@@ -1361,13 +1544,40 @@ extension MainSplitViewController: NSToolbarDelegate {
             item.toolTip = "New Folder"
             item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "New Folder")
             item.action = #selector(newMailFolder(_:))
-        case .refreshMail:
+        // The reader's actions live over its own pane, past the second tracking
+        // separator. The folder button pops the folder menu itself — the
+        // command asks which folder when the sender carries none, so a plain
+        // button is enough. It does double duty (save from Recent Mail, move
+        // within a folder), so validation renames it to whichever half the
+        // open mailbox makes true.
+        case .fileMessage:
             item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Refresh"
-            item.paletteLabel = "Refresh"
-            item.toolTip = "Re-read recent mail from Outlook"
-            item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")
-            item.action = #selector(refreshMailMessages(_:))
+            item.label = "Save"
+            item.paletteLabel = "Save or Move to Folder"
+            item.toolTip = "Save this message to a folder"
+            item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Save or Move to Folder")
+            item.action = #selector(fileMessageToFolder(_:))
+        case .removeMessage:
+            item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Remove"
+            item.paletteLabel = "Remove"
+            item.toolTip = "Remove this message from its folder"
+            item.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Remove")
+            item.action = #selector(removeSelectedMessage(_:))
+        case .newTaskFromMessage:
+            item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "New Task"
+            item.paletteLabel = "New Task from Message"
+            item.toolTip = "Turn this message into a task"
+            item.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "New Task from Message")
+            item.action = #selector(newTaskFromMessage(_:))
+        case .openInOutlook:
+            item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Open in Outlook"
+            item.paletteLabel = "Open in Outlook"
+            item.toolTip = "Open the original message in Outlook"
+            item.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: "Open in Outlook")
+            item.action = #selector(openMessageInOutlook(_:))
         case .paneSeparator:
             return NSTrackingSeparatorToolbarItem(
                 identifier: itemIdentifier,
@@ -1384,25 +1594,14 @@ extension MainSplitViewController: NSToolbarDelegate {
         // bordered/validating treatment below, but they still belong to a mode.
         case .calendarTitle:
             return makeCalendarTitleItem()
+        case .inspectorTitle:
+            return makeInspectorTitleItem()
         case .mailTitle:
             return makeMailTitleItem()
         case .weekNavigation:
             return makeWeekNavigationItem()
-        case .windowRange:
-            return makeWindowRangeItem()
-        case .eventStatus:
-            return makeEventStatusItem()
-        case .mailStatus:
-            return makeMailStatusItem()
         case .sidebarMode:
             return makeSidebarModeItem()
-        case .getInfo:
-            item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Inspector"
-            item.paletteLabel = "Inspector"
-            item.toolTip = "Show or hide the inspector"
-            item.image = NSImage(systemSymbolName: "sidebar.trailing", accessibilityDescription: "Inspector")
-            item.action = #selector(toggleInspector(_:))
         default:
             return nil
         }
@@ -1422,12 +1621,35 @@ extension MainSplitViewController: NSToolbarDelegate {
         return item
     }
 
+    /// Title text with the feed's status light riding inside it, one item.
+    /// `TitleStatusField` says why the two share a text field.
+    /// The selected task or day's name, plus the completion circle when the
+    /// subject is a task. Lives past divider 1 so it sits over the inspector
+    /// the way the calendar title sits over the grid.
+    private func makeInspectorTitleItem() -> NSToolbarItem {
+        let view = inspectorViewController.titleToolbarView
+        view.removeFromSuperview()
+        // Do not set `label`: an unsized view-backed item falls back to that
+        // string as a chevron button, which the tracking separator then parks
+        // over the calendar. Size comes from the view's own constraints.
+        let item = NSToolbarItem(itemIdentifier: .inspectorTitle)
+        item.view = view
+        item.paletteLabel = "Info"
+        item.visibilityPriority = .high
+        return item
+    }
+
     private func makeCalendarTitleItem() -> NSToolbarItem {
-        calendarTitleField.lineBreakMode = .byTruncatingTail
-        calendarTitleField.refusesFirstResponder = true
         calendarTitleField.setContentHuggingPriority(.required, for: .horizontal)
         calendarTitleField.removeFromSuperview()
         updateCalendarChrome()
+
+        eventStatusView.onRetry = { [weak self] in self?.events.refresh(userInitiated: true) }
+        eventStatusView.onOpenAutomationSettings = { [weak self] in
+            guard let url = self?.events.failureSettingsURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        updateEventStatus()
 
         let item = NSToolbarItem(itemIdentifier: .calendarTitle)
         item.view = calendarTitleField
@@ -1437,36 +1659,17 @@ extension MainSplitViewController: NSToolbarDelegate {
         return item
     }
 
-    /// Sits immediately after the range label, inside the calendar pane's
-    /// tracked span, so the feed's state reads as belonging to the calendar
-    /// rather than to the window.
-    private func makeEventStatusItem() -> NSToolbarItem {
-        eventStatusView.onRetry = { [weak self] in self?.events.refresh(userInitiated: true) }
-        eventStatusView.onOpenAutomationSettings = { [weak self] in
-            guard let url = self?.events.failureSettingsURL else { return }
-            NSWorkspace.shared.open(url)
-        }
-        eventStatusView.translatesAutoresizingMaskIntoConstraints = false
-        eventStatusView.setContentHuggingPriority(.required, for: .horizontal)
-
-        let item = NSToolbarItem(itemIdentifier: .eventStatus)
-        item.label = "Calendar Events"
-        item.paletteLabel = "Calendar Events"
-        item.view = eventStatusView
-        // Not a command: it is a status light that occasionally becomes a
-        // button, so it must never be dimmed by toolbar validation.
-        item.autovalidates = false
-        eventStatusToolbarItem = item
-        updateEventStatus()
-        return item
-    }
-
     private func makeMailTitleItem() -> NSToolbarItem {
-        mailTitleField.lineBreakMode = .byTruncatingTail
-        mailTitleField.refusesFirstResponder = true
         mailTitleField.setContentHuggingPriority(.required, for: .horizontal)
         mailTitleField.removeFromSuperview()
         updateMailChrome()
+
+        mailStatusView.onRetry = { [weak self] in self?.mail.refresh(userInitiated: true) }
+        mailStatusView.onOpenAutomationSettings = { [weak self] in
+            guard let url = self?.mail.failureSettingsURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        updateMailStatus()
 
         let item = NSToolbarItem(itemIdentifier: .mailTitle)
         item.view = mailTitleField
@@ -1476,125 +1679,63 @@ extension MainSplitViewController: NSToolbarDelegate {
         return item
     }
 
-    /// How far back Recent Mail reaches. A pop-up rather than a stepper: the
-    /// range is a choice from a short list, and the list says what the choices
-    /// mean. Wired up in the refresh-and-polish PR.
-    private func makeWindowRangeItem() -> NSToolbarItem {
-        let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.bezelStyle = .toolbar
-        for days in MailWindow.minimumDays...MailWindow.maximumDays {
-            let menuItem = NSMenuItem(
-                title: MailLabels.windowRangeName(days: days),
-                action: #selector(windowRangeChanged(_:)),
-                keyEquivalent: ""
-            )
-            menuItem.target = self
-            menuItem.tag = days
-            button.menu?.addItem(menuItem)
-        }
-        button.selectItem(withTag: mail.windowDays)
-        button.target = self
-        button.action = #selector(windowRangeChanged(_:))
-        windowRangeButton = button
-
-        let item = NSToolbarItem(itemIdentifier: .windowRange)
-        item.view = button
-        item.label = "Range"
-        item.paletteLabel = "Range"
-        item.toolTip = "How far back Recent Mail reaches"
-        item.autovalidates = false
-        return item
-    }
-
-    /// The sidebar toggle, with the mode switch hung off it.
-    ///
-    /// A custom item rather than the system `.toggleSidebar`, which cannot grow
-    /// a menu. A plain click still toggles the sidebar — that muscle memory is
-    /// worth more than the slot — and the menu indicator beside it opens Tasks
-    /// / Mail. The View menu carries the same two commands, because a menu you
-    /// reach by clicking a small arrow is not a keyboard path.
-    ///
-    /// A one-segment `NSSegmentedControl` rather than `NSMenuToolbarItem`,
-    /// which renders as a ~90pt pill: everything before the first tracking
-    /// separator has to fit inside the sidebar's own width, alongside the
-    /// window buttons and two more items, and 90pt does not. The explicit
-    /// segment width matters for the same reason — without one the control
-    /// measures as zero and the toolbar drops it into the overflow menu.
+    /// Hide / Show Sidebar. A clickable icon, not a menu: mode follows the
+    /// selected sidebar row, so this button has only one job.
     private func makeSidebarModeItem() -> NSToolbarItem {
-        sidebarModeControl.segmentStyle = .rounded
-        sidebarModeControl.trackingMode = .momentary
-        sidebarModeControl.segmentCount = 1
-        sidebarModeControl.setImage(
-            NSImage(systemSymbolName: "sidebar.leading", accessibilityDescription: "Sidebar"),
-            forSegment: 0
-        )
-        sidebarModeControl.setWidth(32, forSegment: 0)
-        sidebarModeControl.setMenu(makeModeMenu(), forSegment: 0)
-        sidebarModeControl.setShowsMenuIndicator(true, forSegment: 0)
-        sidebarModeControl.target = self
-        sidebarModeControl.action = #selector(toggleSidebar(_:))
-        sidebarModeControl.removeFromSuperview()
-
         let item = NSToolbarItem(itemIdentifier: .sidebarMode)
-        item.view = sidebarModeControl
+        item.image = NSImage(systemSymbolName: "sidebar.leading", accessibilityDescription: "Sidebar")
+        item.isBordered = true
         item.label = "Sidebar"
         item.paletteLabel = "Sidebar"
-        item.toolTip = "Show or hide the sidebar. The arrow switches between Tasks and Mail."
-        item.autovalidates = false
+        item.toolTip = "Hide or show the sidebar"
+        item.action = #selector(toggleSidebar(_:))
+        item.target = self
+        item.autovalidates = true
         return item
     }
 
-    private func makeModeMenu() -> NSMenu {
-        let menu = NSMenu()
-        let tasks = NSMenuItem(title: "Tasks", action: #selector(showTasksMode(_:)), keyEquivalent: "1")
-        let mail = NSMenuItem(title: "Mail", action: #selector(showMailMode(_:)), keyEquivalent: "2")
-        for item in [tasks, mail] {
-            item.target = self
-            menu.addItem(item)
-        }
-        return menu
-    }
-
-    @objc private func windowRangeChanged(_ sender: Any?) {
-        let days = (sender as? NSPopUpButton)?.selectedTag() ?? (sender as? NSMenuItem)?.tag
-        guard let days else { return }
+    /// How far back Recent Mail reaches. Menu-only: the range is set once and
+    /// then left alone for weeks, which does not earn permanent toolbar width —
+    /// and the toolbar's mail section has to fit inside the message list's own
+    /// minimum width. The item carries the day count as its tag.
+    @objc func setMailWindowDays(_ sender: Any?) {
+        guard let days = (sender as? NSMenuItem)?.tag, days > 0 else { return }
         mail.setWindowDays(days)
         updateChrome()
     }
 
-    /// The mailbox's counterpart to the calendar's status light, in the same
-    /// place relative to its own title. One control class serves both, because
-    /// a slow foreign feed has the same three things to say either way.
-    private func makeMailStatusItem() -> NSToolbarItem {
-        mailStatusView.onRetry = { [weak self] in self?.mail.refresh(userInitiated: true) }
-        mailStatusView.onOpenAutomationSettings = { [weak self] in
-            guard let url = self?.mail.failureSettingsURL else { return }
-            NSWorkspace.shared.open(url)
+    /// Populates View → Recent Mail Window from the coordinator's own bounds,
+    /// so the menu cannot drift from what `setWindowDays` will accept. The xib
+    /// supplies an empty submenu; this fills it and keeps the check mark on the
+    /// current length.
+    private func updateWindowRangeMenu(_ item: NSMenuItem) {
+        let submenu = item.submenu ?? NSMenu(title: item.title)
+        item.submenu = submenu
+        if submenu.items.count != MailWindow.maximumDays - MailWindow.minimumDays + 1 {
+            submenu.removeAllItems()
+            for days in MailWindow.minimumDays...MailWindow.maximumDays {
+                let entry = NSMenuItem(
+                    title: MailLabels.windowRangeName(days: days),
+                    action: #selector(setMailWindowDays(_:)),
+                    keyEquivalent: ""
+                )
+                entry.target = self
+                entry.tag = days
+                submenu.addItem(entry)
+            }
         }
-        mailStatusView.translatesAutoresizingMaskIntoConstraints = false
-        mailStatusView.setContentHuggingPriority(.required, for: .horizontal)
-        mailStatusView.removeFromSuperview()
-
-        let item = NSToolbarItem(itemIdentifier: .mailStatus)
-        item.label = "Mail"
-        item.paletteLabel = "Mail"
-        item.view = mailStatusView
-        // Not a command: a status light that occasionally becomes a button must
-        // never be dimmed by toolbar validation.
-        item.autovalidates = false
-        mailStatusToolbarItem = item
-        updateMailStatus()
-        return item
+        for entry in submenu.items {
+            entry.state = entry.tag == mail.windowDays ? .on : .off
+        }
     }
 
     /// Only loading and failure have anything to say; the rest of the time the
-    /// slot goes away entirely rather than sitting there empty.
+    /// light goes away entirely rather than sitting there empty.
     private var isMailStatusVisible: Bool {
         FeedStatus(mail.state) != .quiet
     }
 
     private func updateMailStatus() {
-        mailStatusToolbarItem?.isHidden = !isMailStatusVisible
         mailStatusView.apply(
             mail.state,
             settingsURL: mail.failureSettingsURL,

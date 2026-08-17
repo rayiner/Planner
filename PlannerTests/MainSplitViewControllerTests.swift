@@ -94,20 +94,21 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         let (split, outline) = makeSplit()
         _ = split
         let project = try model.createProject()
-        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
+        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: project), 0)
         let undoManager = try XCTUnwrap(persistence.viewContext.undoManager)
 
         undoManager.undo()
 
         XCTAssertFalse(persistence.viewContext.hasChanges, "the undone create is saved")
-        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+        XCTAssertEqual(outline.outlineView.row(forItem: project), -1)
         XCTAssertTrue(try model.allProjects().isEmpty)
 
         undoManager.redo()
 
         XCTAssertFalse(persistence.viewContext.hasChanges, "the redone create is saved")
-        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
-        XCTAssertEqual((outline.outlineView.item(atRow: 0) as? Project)?.uuid, project.uuid)
+        let row = outline.outlineView.row(forItem: project)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        XCTAssertEqual((outline.outlineView.item(atRow: row) as? Project)?.uuid, project.uuid)
     }
 
     func testUndoOfDeleteIsSavedAndRestoresTheOutlineRow() throws {
@@ -123,13 +124,14 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         undoManager.removeAllActions()
 
         split.deleteSelected(confirmed: true)
-        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+        XCTAssertEqual(outline.outlineView.row(forItem: project), -1)
 
         undoManager.undo()
 
         XCTAssertFalse(persistence.viewContext.hasChanges, "the undone delete is saved")
-        XCTAssertEqual(outline.outlineView.numberOfRows, 1)
-        XCTAssertEqual((outline.outlineView.item(atRow: 0) as? Project)?.uuid, uuid)
+        let row = outline.outlineView.row(forItem: project)
+        XCTAssertGreaterThanOrEqual(row, 0)
+        XCTAssertEqual((outline.outlineView.item(atRow: row) as? Project)?.uuid, uuid)
     }
 
     func testDeleteSelectsPreviousSiblingThenParent() throws {
@@ -331,31 +333,32 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         )
     }
 
-    func testRevealTodaySetsVisibleWeekToThisWeek() {
+    func testRevealTodaySetsVisibleWeekToToday() {
         let selection = SelectionModel(defaults: isolatedDefaults())
         let past = Calendar.current.date(byAdding: .day, value: -70, to: Date())!
         selection.setVisibleWeekStart(past)
-        XCTAssertNotEqual(selection.visibleWeekStart, Calendar.current.startOfWeek(for: Date()))
+        XCTAssertNotEqual(selection.visibleWeekStart, Calendar.current.startOfDay(for: Date()))
 
         let (split, _) = makeSplit(selection: selection)
         split.revealToday(nil)
-        XCTAssertEqual(selection.visibleWeekStart, Calendar.current.startOfWeek(for: Date()))
+        XCTAssertEqual(selection.visibleWeekStart, Calendar.current.startOfDay(for: Date()))
     }
 
-    func testPreviousAndNextWeekShiftVisibleWeekBySevenDays() {
+    func testPreviousAndNextWeekShiftVisibleWeekByColumnCount() {
         let selection = SelectionModel(defaults: isolatedDefaults())
         let start = selection.visibleWeekStart
         let (split, _) = makeSplit(selection: selection)
         let calendar = Calendar.current
+        let step = split.test_visibleColumnCount
 
         split.goToNextWeek(nil)
-        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: 7, to: start)!)
+        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: step, to: start)!)
 
         split.goToPreviousWeek(nil)
         XCTAssertEqual(selection.visibleWeekStart, start)
 
         split.goToPreviousWeek(nil)
-        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: -7, to: start)!)
+        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: -step, to: start)!)
 
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToNextWeek(_:)))))
         XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToPreviousWeek(_:)))))
@@ -453,7 +456,7 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         let inspector = split.splitViewItems[2]
         XCTAssertGreaterThanOrEqual(inspector.minimumThickness, 240)
         XCTAssertLessThanOrEqual(inspector.maximumThickness, 420)
-        XCTAssertTrue(inspector.canCollapse)
+        XCTAssertFalse(inspector.canCollapse, "the notes pane must never disappear")
     }
 
     func testSplitPaneHoldingPrioritiesStayBelowWindowResizePriority() {
@@ -465,33 +468,29 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         }
     }
 
-    func testToggleInspectorCollapsesAndRestoresWithoutSelection() {
+    /// The inspector is the notes pane and, like the mail reader, cannot
+    /// collapse — so the toggle command is dead, not merely tasks-only.
+    func testTheInspectorCannotCollapseAndHasNoToggle() {
         let (split, _) = makeSplit()
         XCTAssertTrue(split.isInspectorVisible)
-        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.toggleInspector(_:)))))
-
-        split.toggleInspector(nil)
-        XCTAssertFalse(split.isInspectorVisible)
-
-        split.toggleInspector(nil)
-        XCTAssertTrue(split.isInspectorVisible)
+        XCTAssertFalse(split.splitViewItems[2].canCollapse)
+        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.toggleInspector(_:)))))
     }
 
-    func testShowTaskInfoExpandsInspectorOnlyForATask() throws {
+    /// Get Info no longer has a collapse to undo; what is left to gate is the
+    /// command itself, which targets things that own a note.
+    func testGetInfoValidatesOnlyForANoteEditableSelection() throws {
         let selection = SelectionModel(defaults: isolatedDefaults())
         let (split, _) = makeSplit(selection: selection)
-        split.toggleInspector(nil)
-        XCTAssertFalse(split.isInspectorVisible)
+        let getInfo = menuItem(#selector(MainSplitViewController.showTaskInfo(_:)))
 
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
-        split.showTaskInfo(nil)
-        XCTAssertFalse(split.isInspectorVisible, "Get Info targets tasks, not projects")
+        XCTAssertFalse(split.validateMenuItem(getInfo), "Get Info targets tasks, not projects")
 
         let task = try model.createTask(in: project)
         selection.selectNode(uuid: task.uuid)
-        split.showTaskInfo(nil)
-        XCTAssertTrue(split.isInspectorVisible)
+        XCTAssertTrue(split.validateMenuItem(getInfo))
     }
 
     private func makeSplit(

@@ -47,9 +47,24 @@ nonisolated extension Calendar {
         return (0..<7).map { startOfDay(for: self.date(byAdding: .day, value: $0, to: first)!) }
     }
 
-    /// Exclusive end of the visible range: the Monday after the last shown week.
-    func endOfWeeks(from weekStart: Date, count: Int) -> Date {
-        date(byAdding: .day, value: max(0, count) * 7, to: startOfWeek(for: weekStart))!
+    /// Exclusive end of the visible range: `count` weeks of days after `start`.
+    /// `start` is the first visible day, not snapped to Monday.
+    func endOfWeeks(from start: Date, count: Int) -> Date {
+        date(byAdding: .day, value: max(0, count) * 7, to: startOfDay(for: start))!
+    }
+
+    /// `count` consecutive start-of-days beginning at `start`.
+    func visibleDays(from start: Date, count: Int) -> [Date] {
+        let first = startOfDay(for: start)
+        return (0..<max(0, count)).map {
+            startOfDay(for: self.date(byAdding: .day, value: $0, to: first)!)
+        }
+    }
+
+    /// Saturday or Sunday in this calendar, regardless of `firstWeekday`.
+    func isWeekend(_ date: Date) -> Bool {
+        let weekday = component(.weekday, from: date)
+        return weekday == 1 || weekday == 7
     }
 
     /// Full month name for the header that marks a month's first day, e.g.
@@ -66,8 +81,8 @@ nonisolated extension Calendar {
 
     /// The visible span split so the header can weight them differently:
     /// ("Aug 10 – Sep 6", "2026").
-    func weekRangeComponents(from weekStart: Date, count: Int) -> (span: String, year: String) {
-        let first = startOfWeek(for: weekStart)
+    func weekRangeComponents(from start: Date, count: Int) -> (span: String, year: String) {
+        let first = startOfDay(for: start)
         let last = date(byAdding: .day, value: max(1, count) * 7 - 1, to: first)!
 
         let dayMonth = DateFormatter()

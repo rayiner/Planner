@@ -24,7 +24,8 @@ final class ModeSwitchTests: PersistenceTestCase {
     private var windows: [NSWindow] = []
 
     private func makeSplit(
-        selection: SelectionModel? = nil
+        selection: SelectionModel? = nil,
+        mail: MailCoordinator? = nil
     ) -> (MainSplitViewController, SelectionModel) {
         let selection = selection ?? SelectionModel(defaults: defaults)
         let split = MainSplitViewController(
@@ -32,7 +33,7 @@ final class ModeSwitchTests: PersistenceTestCase {
             model: model,
             selection: selection,
             events: EventCoordinator(source: NullEventSource()),
-            mail: MailCoordinator(source: NullMailSource(), defaults: defaults),
+            mail: mail ?? MailCoordinator(source: NullMailSource(), defaults: defaults),
             userDefaults: defaults
         )
         let window = NSWindow(
@@ -46,6 +47,24 @@ final class ModeSwitchTests: PersistenceTestCase {
         split.loadViewIfNeeded()
         split.view.layoutSubtreeIfNeeded()
         return (split, selection)
+    }
+
+    private func settleMail(
+        source: StubMailSource,
+        mail: MailCoordinator,
+        messages: [MailMessage]
+    ) async {
+        let before = source.requestedRanges.count
+        if mail.state == .idle { mail.refresh() }
+        for _ in 0..<400 {
+            if source.requestedRanges.count > before || source.pendingCount > 0 { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        source.finishAll(with: messages)
+        for _ in 0..<400 {
+            if !mail.isLoading { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     // MARK: - The selection model's contract
@@ -113,7 +132,36 @@ final class ModeSwitchTests: PersistenceTestCase {
 
         selection.selectMailbox(.folder(UUID()))
         XCTAssertNil(selection.message, "the reader kept a message the list no longer holds")
-        XCTAssertEqual(posted, [SelectionField.mailbox.rawValue, SelectionField.message.rawValue])
+        XCTAssertEqual(selection.mode, .mail)
+        XCTAssertEqual(
+            posted,
+            [SelectionField.mailbox.rawValue, SelectionField.message.rawValue, SelectionField.mode.rawValue]
+        )
+    }
+
+    /// Mode is the kind of sidebar row that is selected, so picking a
+    /// mailbox from tasks — even the one already stored — must enter mail.
+    func testSelectingAMailboxEntersMailMode() {
+        let selection = SelectionModel(defaults: defaults)
+        XCTAssertEqual(selection.mode, .tasks)
+        XCTAssertTrue(selection.isRecentMailSelected)
+        selection.selectMailbox(.recent)
+        XCTAssertEqual(selection.mode, .mail)
+    }
+
+    func testSelectingANodeEntersTasksMode() {
+        let selection = SelectionModel(defaults: defaults)
+        selection.setMode(.mail)
+        selection.selectNode(uuid: UUID())
+        XCTAssertEqual(selection.mode, .tasks)
+    }
+
+    func testClearingTheNodeDoesNotChangeMode() {
+        let selection = SelectionModel(defaults: defaults)
+        selection.selectNode(uuid: UUID())
+        XCTAssertEqual(selection.mode, .tasks)
+        selection.selectNode(uuid: nil)
+        XCTAssertEqual(selection.mode, .tasks)
     }
 
     func testRecentAndFolderMailboxesAreDistinguishable() {
@@ -132,7 +180,7 @@ final class ModeSwitchTests: PersistenceTestCase {
     func testTasksModeIsTheOriginalThreePaneLayout() {
         let (split, _) = makeSplit()
         XCTAssertEqual(split.splitViewItems.count, 3)
-        XCTAssertTrue(split.test_sidebarChild is OutlineViewController)
+        XCTAssertTrue(split.splitViewItems[0].viewController is OutlineViewController)
         XCTAssertTrue(split.splitViewItems[1].viewController is CalendarViewController)
         XCTAssertTrue(split.splitViewItems[2].viewController is InspectorViewController)
     }
@@ -142,7 +190,6 @@ final class ModeSwitchTests: PersistenceTestCase {
         selection.setMode(.mail)
 
         XCTAssertEqual(split.splitViewItems.count, 3)
-        XCTAssertTrue(split.test_sidebarChild is MailboxListViewController)
         XCTAssertTrue(split.splitViewItems[1].viewController is MailListViewController)
         XCTAssertTrue(split.splitViewItems[2].viewController is MailReaderViewController)
     }
@@ -152,35 +199,40 @@ final class ModeSwitchTests: PersistenceTestCase {
         selection.setMode(.mail)
         selection.setMode(.tasks)
 
-        XCTAssertTrue(split.test_sidebarChild is OutlineViewController)
         XCTAssertTrue(split.splitViewItems[1].viewController is CalendarViewController)
         XCTAssertTrue(split.splitViewItems[2].viewController is InspectorViewController)
     }
 
-    /// The sidebar item is the one pane that survives, which is what makes the
-    /// switch read as "the content changed" rather than "the layout moved".
-    func testTheSidebarItemItselfSurvivesTheSwitch() {
+    /// The unified sidebar serves both modes, so the item *and* its content
+    /// survive the switch — only the trailing pair changes.
+    func testTheUnifiedSidebarSurvivesTheSwitch() {
         let (split, selection) = makeSplit()
         let before = split.splitViewItems[0]
         selection.setMode(.mail)
         XCTAssertTrue(split.splitViewItems[0] === before)
+        XCTAssertTrue(split.splitViewItems[0].viewController is OutlineViewController)
     }
 
     func testLaunchingIntoMailModeBuildsTheMailPanes() {
         defaults.set(PlannerMode.mail.rawValue, forKey: SelectionModel.modeDefaultsKey)
         let (split, _) = makeSplit()
-        XCTAssertTrue(split.test_sidebarChild is MailboxListViewController)
+        XCTAssertTrue(split.splitViewItems[0].viewController is OutlineViewController)
         XCTAssertTrue(split.splitViewItems[1].viewController is MailListViewController)
     }
 
     // MARK: - Geometry
 
-    func testBothModesHaveTheSameMinimumWidthSoSwitchingCannotGrowTheWindow() {
+    /// Mail's reader cannot collapse, so mail's minimum sum is the mail
+    /// window's hard floor — it must not exceed tasks', or switching into mail
+    /// could be the thing that forces the window wider. The other direction is
+    /// covered without matching sums: switching into tasks at a narrower
+    /// window sheds the inspector (its resize collapse) rather than growing.
+    func testMailsMinimumWidthDoesNotExceedTasksSoSwitchingToMailCannotGrowTheWindow() {
         let (split, selection) = makeSplit()
         let tasksMinimum = split.splitViewItems.reduce(0) { $0 + $1.minimumThickness }
         selection.setMode(.mail)
         let mailMinimum = split.splitViewItems.reduce(0) { $0 + $1.minimumThickness }
-        XCTAssertEqual(tasksMinimum, mailMinimum)
+        XCTAssertLessThanOrEqual(mailMinimum, tasksMinimum)
     }
 
     func testHoldingPrioritiesStayBelowWindowResizePriorityInBothModes() {
@@ -205,6 +257,97 @@ final class ModeSwitchTests: PersistenceTestCase {
         )
     }
 
+    /// `sidebarWithViewController:` installs a 250-pt automatic max, tighter
+    /// than the 480 the user may drag to. Left in place, fullscreen or a
+    /// fitting-size change clamps a widened sidebar back.
+    func testTheSidebarHasNoAutomaticMaximumBelowTheUserMaximum() {
+        let (split, _) = makeSplit()
+        let sidebar = split.splitViewItems[0]
+        XCTAssertEqual(sidebar.automaticMaximumThickness, NSSplitViewItem.unspecifiedDimension)
+        XCTAssertEqual(sidebar.maximumThickness, 480)
+    }
+
+    /// `contentListWithViewController:` installs a 576 automatic max and a
+    /// 0.33 fraction (the no-sidebar default). The list is created before it
+    /// sits next to the sidebar, so those have to be replaced explicitly.
+    func testTheMailListHasNoAutomaticMaximumAndUsesTheDefaultListFraction() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        let list = split.splitViewItems[1]
+        XCTAssertEqual(list.automaticMaximumThickness, NSSplitViewItem.unspecifiedDimension)
+        XCTAssertEqual(list.preferredThicknessFraction, 384.0 / 1100.0, accuracy: 0.0001)
+        XCTAssertEqual(list.maximumThickness, NSSplitViewItem.unspecifiedDimension)
+    }
+
+    /// A long subject used to report a several-thousand-point fitting width
+    /// and, at compression 490, beat every pane's holding priority — so
+    /// clicking between messages walked the sidebar and the list. After a
+    /// user drag, both dividers must stay put.
+    func testSelectingMailItemsDoesNotMoveDividersAfterADrag() async {
+        let source = StubMailSource()
+        let mail = MailCoordinator(source: source, defaults: defaults)
+        let selection = SelectionModel(defaults: defaults)
+        selection.setMode(.mail)
+        let (split, _) = makeSplit(selection: selection, mail: mail)
+        defer { source.drain(); mail.cancel() }
+
+        windows[0].setContentSize(NSSize(width: 1100, height: 720))
+        split.view.layoutSubtreeIfNeeded()
+
+        let short = MailMessage.fixture(id: 1, subject: "Hi")
+        let long = MailMessage.fixture(
+            id: 2,
+            subject: String(repeating: "LongSubjectWord ", count: 30),
+            senderName: String(repeating: "Very Long Sender Name ", count: 8)
+        )
+        await settleMail(source: source, mail: mail, messages: [short, long])
+
+        split.splitView.setPosition(400, ofDividerAt: 0)
+        split.view.layoutSubtreeIfNeeded()
+        split.splitView.setPosition(400 + split.splitView.dividerThickness + 450, ofDividerAt: 1)
+        split.view.layoutSubtreeIfNeeded()
+        let afterDrag = split.test_paneWidths
+        XCTAssertEqual(afterDrag[0], 400, accuracy: 1, "the sidebar drag did not take")
+        XCTAssertEqual(afterDrag[1], 450, accuracy: 2, "the list drag did not take")
+
+        selection.selectMessage(.recent(1))
+        split.mailReaderViewController.rebind()
+        split.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(split.test_paneWidths[0], afterDrag[0], accuracy: 1)
+        XCTAssertEqual(split.test_paneWidths[1], afterDrag[1], accuracy: 1)
+
+        selection.selectMessage(.recent(2))
+        split.mailReaderViewController.rebind()
+        split.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(split.test_paneWidths[0], afterDrag[0], accuracy: 1, "the sidebar moved on a long subject")
+        XCTAssertEqual(split.test_paneWidths[1], afterDrag[1], accuracy: 1, "the list moved on a long subject")
+        XCTAssertEqual(split.mailReaderViewController.test_subject, long.subject)
+
+        for _ in 0..<400 {
+            if source.pendingDetailCount > 0 { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        source.finishDetail(.fixture(
+            id: 2,
+            body: "Body",
+            recipients: String(repeating: "counsel@example.com, ", count: 40)
+        ))
+        for _ in 0..<400 {
+            if split.mailReaderViewController.test_recipients != nil { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        split.view.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(split.mailReaderViewController.test_recipients)
+        XCTAssertEqual(split.test_paneWidths[0], afterDrag[0], accuracy: 1, "the sidebar moved on a long To: line")
+        XCTAssertEqual(split.test_paneWidths[1], afterDrag[1], accuracy: 1, "the list moved on a long To: line")
+
+        selection.selectMessage(.recent(1))
+        split.mailReaderViewController.rebind()
+        split.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(split.test_paneWidths[0], afterDrag[0], accuracy: 1)
+        XCTAssertEqual(split.test_paneWidths[1], afterDrag[1], accuracy: 1)
+    }
+
     func testTheSidebarDoesNotMoveWhenTheModeChanges() {
         let (split, selection) = makeSplit()
         let before = split.test_paneWidths[0]
@@ -221,15 +364,12 @@ final class ModeSwitchTests: PersistenceTestCase {
         XCTAssertFalse(split.isSidebarVisible, "the sidebar reopened on a mode switch")
     }
 
-    /// A collapsed inspector must not carry over into mail mode: a reading pane
-    /// that opens shut reads as broken, not as collapsed.
-    func testACollapsedInspectorDoesNotCollapseTheMailReader() {
-        let (split, selection) = makeSplit()
-        split.toggleInspector(nil)
-        XCTAssertFalse(split.isInspectorVisible)
-
-        selection.setMode(.mail)
-        XCTAssertFalse(split.splitViewItems[2].isCollapsed, "mail opened with no reading pane")
+    /// The inspector is the notes pane: like the reader, it cannot collapse,
+    /// from the divider or from a window resize.
+    func testTheInspectorCannotCollapse() {
+        let (split, _) = makeSplit()
+        XCTAssertFalse(split.splitViewItems[2].canCollapse)
+        XCTAssertFalse(split.splitViewItems[2].canCollapseFromWindowResize)
     }
 
     func testEachModeKeepsItsOwnDividerPosition() {
@@ -262,6 +402,106 @@ final class ModeSwitchTests: PersistenceTestCase {
         XCTAssertEqual(relaunched.test_paneWidths[1], width, accuracy: 1)
     }
 
+    /// Mode switches record the divider on the way out; quitting *inside* mail
+    /// mode is the same departure and must record too, or the drag reverts.
+    func testTheMailDividerPositionSurvivesQuitInsideMailMode() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        split.splitView.setPosition(700, ofDividerAt: 1)
+        split.view.layoutSubtreeIfNeeded()
+        let width = split.test_paneWidths[1]
+
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+
+        let (relaunched, relaunchedSelection) = makeSplit()
+        relaunchedSelection.setMode(.mail)
+        relaunched.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(relaunched.test_paneWidths[1], width, accuracy: 1)
+    }
+
+    /// The reader has no Show command, so a recorded collapse could only
+    /// replay an accident forever: it never restores shut, whatever was stored.
+    func testTheMailReaderNeverOpensCollapsed() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        split.splitViewItems[2].isCollapsed = true
+
+        selection.setMode(.tasks)
+        selection.setMode(.mail)
+        XCTAssertFalse(split.splitViewItems[2].isCollapsed, "mail opened with no reading pane")
+    }
+
+    /// Like the reader, the inspector never opens shut: a collapse stored by a
+    /// build that allowed one is dropped, not replayed.
+    func testTheInspectorNeverOpensCollapsed() {
+        let (split, selection) = makeSplit()
+        split.splitViewItems[2].isCollapsed = true
+
+        selection.setMode(.mail)
+        selection.setMode(.tasks)
+        XCTAssertTrue(split.isInspectorVisible, "tasks opened with no notes pane")
+    }
+
+    /// A list width stored in a wide window is clamped when it returns in a
+    /// narrower one, so the reader keeps its minimum and the sidebar stays put
+    /// instead of AppKit squeezing whichever pane is cheapest.
+    func testAStoredListWidthTooWideForTheWindowIsClamped() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        split.view.layoutSubtreeIfNeeded()
+        let sidebar = split.test_paneWidths[0]
+        split.splitView.setPosition(
+            sidebar + split.splitView.dividerThickness + 440,
+            ofDividerAt: 1
+        )
+        split.view.layoutSubtreeIfNeeded()
+        selection.setMode(.tasks)   // records the 440pt list
+
+        windows[0].setContentSize(NSSize(width: 960, height: 720))
+        split.view.layoutSubtreeIfNeeded()
+        selection.setMode(.mail)
+        split.view.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(split.splitViewItems[2].isCollapsed)
+        XCTAssertGreaterThanOrEqual(
+            split.test_paneWidths[2],
+            split.splitViewItems[2].minimumThickness - 1,
+            "the reader lost its minimum"
+        )
+        XCTAssertEqual(split.test_paneWidths[0], sidebar, accuracy: 1, "the sidebar moved")
+    }
+
+    /// The reader cannot collapse, full stop: `canCollapseFromWindowResize`
+    /// proved a trapdoor (AppKit sprang it on transient squeezes mid-resize,
+    /// even growing ones, and never reliably reopened a pane with no Show
+    /// command). The window refusing to shrink past the minimum sum is the
+    /// trade that made a low reader minimum acceptable.
+    func testTheMailReaderCannotCollapse() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        XCTAssertFalse(split.splitViewItems[2].canCollapse, "the resize trapdoor is back")
+    }
+
+    /// At the panes' minimum sum — the narrowest window mail mode permits —
+    /// every pane is open at its minimum; the reader gives width, never itself.
+    func testAtTheMinimumWindowWidthTheReaderIsOpenAtItsMinimum() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        let minimumSum = split.splitViewItems.reduce(0) { $0 + $1.minimumThickness }
+            + CGFloat(split.splitViewItems.count - 1) * split.splitView.dividerThickness
+
+        windows[0].setContentSize(NSSize(width: minimumSum, height: 720))
+        split.view.layoutSubtreeIfNeeded()
+
+        XCTAssertFalse(split.splitViewItems[2].isCollapsed, "the reader collapsed instead of holding its minimum")
+        XCTAssertEqual(
+            split.test_paneWidths[2],
+            split.splitViewItems[2].minimumThickness,
+            accuracy: 1,
+            "the reader is not at its minimum in a minimum-width window"
+        )
+    }
+
     // MARK: - Toolbar and menus
 
     private func toolbarItem(
@@ -290,10 +530,33 @@ final class ModeSwitchTests: PersistenceTestCase {
         let mail = split.toolbarDefaultItemIdentifiers(NSToolbar(identifier: "test"))
         XCTAssertTrue(mail.contains(.newMailFolder))
         XCTAssertTrue(mail.contains(.mailTitle))
-        XCTAssertTrue(mail.contains(.windowRange))
         XCTAssertFalse(mail.contains(.addProject))
         XCTAssertFalse(mail.contains(.weekNavigation))
-        XCTAssertFalse(mail.contains(.getInfo), "the inspector toggle is tasks-only")
+
+        // The reader's actions are toolbar items over its pane, mail-mode only.
+        for action: NSToolbarItem.Identifier in
+            [.fileMessage, .removeMessage, .newTaskFromMessage, .openInOutlook] {
+            XCTAssertTrue(mail.contains(action), "\(action.rawValue) missing from mail mode")
+            XCTAssertFalse(tasks.contains(action), "\(action.rawValue) leaked into tasks mode")
+        }
+
+        // The inspector's name (and completion circle) sit past divider 1.
+        XCTAssertTrue(tasks.contains(.inspectorTitle))
+        XCTAssertFalse(mail.contains(.inspectorTitle))
+        let separator = try! XCTUnwrap(tasks.firstIndex(of: .inspectorSeparator))
+        let title = try! XCTUnwrap(tasks.firstIndex(of: .inspectorTitle))
+        XCTAssertLessThan(separator, title)
+    }
+
+    /// A view-backed item that measures as empty becomes AppKit's label
+    /// button — the "Info" double chevron that was parking over the calendar.
+    func testTheInspectorTitleItemHasARealSize() throws {
+        let (split, _) = makeSplit()
+        let item = try toolbarItem(split, .inspectorTitle)
+        let view = try XCTUnwrap(item.view)
+        XCTAssertGreaterThan(view.fittingSize.width, 1)
+        XCTAssertGreaterThan(view.intrinsicContentSize.width, 1)
+        XCTAssertNotEqual(item.label, "Info")
     }
 
     /// Both modes keep the sidebar slot and both tracking separators, so the
@@ -306,6 +569,68 @@ final class ModeSwitchTests: PersistenceTestCase {
             XCTAssertTrue(identifiers.contains(.paneSeparator), "\(mode) lost divider 0's separator")
             XCTAssertTrue(identifiers.contains(.inspectorSeparator), "\(mode) lost divider 1's separator")
         }
+    }
+
+    /// The range pop-up and the refresh button are gone from the toolbar; both
+    /// live in the View menu now, which is why the mail section is narrow
+    /// enough for the list to hold it at the pane's minimum width.
+    func testTheRangeAndRefreshButtonsAreNotInTheToolbar() {
+        let (split, _) = makeSplit()
+        let identifiers = split.identifiers(for: .mail) + split.identifiers(for: .tasks)
+        XCTAssertFalse(identifiers.contains(.windowRange))
+        XCTAssertFalse(identifiers.contains(.refreshMail))
+    }
+
+    /// Everything between the two tracking separators is confined to the middle
+    /// pane's width, so a pane narrower than its own toolbar section pushes
+    /// those items into the overflow menu — the title first, which is the
+    /// pane's only label.
+    func testTheMailListCannotBeNarrowerThanItsToolbarSection() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        XCTAssertGreaterThanOrEqual(
+            split.splitViewItems[1].minimumThickness,
+            MainSplitViewController.mailToolbarSectionMinimum,
+            "the list's minimum is narrower than the toolbar it has to hold"
+        )
+    }
+
+    /// The floor is real at runtime, not just in the constant: squeezing the
+    /// window as far as it goes leaves the list at or above that width.
+    func testSqueezingTheWindowNeverTakesTheListBelowItsToolbarSection() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        windows[0].setContentSize(NSSize(width: 200, height: 720))
+        split.view.layoutSubtreeIfNeeded()
+
+        XCTAssertGreaterThanOrEqual(
+            split.test_paneWidths[1],
+            MainSplitViewController.mailToolbarSectionMinimum - 1,
+            "the list was squeezed below its toolbar section"
+        )
+    }
+
+    /// With the sidebar shut, divider 0 does not exist: its tracking separator
+    /// (and the leading space that hugs it) must leave the toolbar, or AppKit
+    /// parks the separator — and everything laid out against it — over the
+    /// wrong divider.
+    func testHidingTheSidebarDropsDividerZerosToolbarPieces() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        XCTAssertTrue(split.wantedToolbarIdentifiers().contains(.paneSeparator))
+        XCTAssertEqual(split.wantedToolbarIdentifiers().first, .flexibleSpace)
+
+        split.toggleSidebar(nil)
+        XCTAssertFalse(split.wantedToolbarIdentifiers().contains(.paneSeparator))
+        XCTAssertNotEqual(split.wantedToolbarIdentifiers().first, .flexibleSpace)
+        XCTAssertTrue(
+            split.wantedToolbarIdentifiers().contains(.inspectorSeparator),
+            "divider 1 still exists and keeps its separator"
+        )
+
+        split.toggleSidebar(nil)
+        XCTAssertTrue(split.wantedToolbarIdentifiers().contains(.paneSeparator))
+        XCTAssertEqual(split.wantedToolbarIdentifiers().first, .flexibleSpace)
     }
 
     func testSidebarItemsHideWithTheSidebar() throws {
@@ -329,42 +654,33 @@ final class ModeSwitchTests: PersistenceTestCase {
         XCTAssertTrue(try toolbarItem(split, .newMailFolder).isHidden)
     }
 
-    /// The sidebar slot is a custom item now, because the system one cannot
-    /// grow a menu — but it must still toggle the sidebar on a plain click.
-    func testTheSidebarSlotStillTogglesTheSidebar() throws {
+    /// The sidebar slot is Hide / Show Sidebar, not a mode menu. Mode
+    /// follows the selected sidebar row.
+    func testTheSidebarSlotTogglesTheSidebar() throws {
         let (split, _) = makeSplit()
-        let item = toolbarItem
-        let control = try XCTUnwrap(item(split, .sidebarMode).view as? NSSegmentedControl)
-        XCTAssertEqual(control.action, #selector(NSSplitViewController.toggleSidebar(_:)))
-        XCTAssertTrue(control.showsMenuIndicator(forSegment: 0))
-        XCTAssertEqual(
-            control.menu(forSegment: 0)?.items.map(\.action),
-            [
-                #selector(MainSplitViewController.showTasksMode(_:)),
-                #selector(MainSplitViewController.showMailMode(_:)),
-            ],
-            "the mode menu is not attached"
-        )
+        let item = try toolbarItem(split, .sidebarMode)
+        XCTAssertFalse(item is NSMenuToolbarItem)
+        XCTAssertNotNil(item.image)
+        XCTAssertEqual(item.action, #selector(NSSplitViewController.toggleSidebar(_:)))
     }
 
-    func testModeCommandsAreAlwaysAvailableAndShowWhichIsOn() {
-        let (split, selection) = makeSplit()
-        let tasks = NSMenuItem(title: "", action: #selector(MainSplitViewController.showTasksMode(_:)), keyEquivalent: "")
-        let mail = NSMenuItem(title: "", action: #selector(MainSplitViewController.showMailMode(_:)), keyEquivalent: "")
+    /// The toggle item names the direction it would go, as Preview's does.
+    func testTheSidebarMenuToggleItemNamesItsDirection() throws {
+        let (split, _) = makeSplit()
+        let toggle = NSMenuItem(title: "", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "")
 
-        XCTAssertTrue(split.validateMenuItem(tasks))
-        XCTAssertTrue(split.validateMenuItem(mail))
-        XCTAssertEqual(tasks.state, .on)
-        XCTAssertEqual(mail.state, .off)
+        XCTAssertTrue(split.validateMenuItem(toggle))
+        XCTAssertEqual(toggle.title, "Hide Sidebar")
 
-        selection.setMode(.mail)
-        _ = split.validateMenuItem(tasks)
-        _ = split.validateMenuItem(mail)
-        XCTAssertEqual(tasks.state, .off)
-        XCTAssertEqual(mail.state, .on)
+        split.toggleSidebar(nil)
+        XCTAssertTrue(split.validateMenuItem(toggle))
+        XCTAssertEqual(toggle.title, "Show Sidebar")
     }
 
-    func testTaskCommandsAreDisabledInMailMode() throws {
+    /// New Task needs the outline's task context, so it stays tasks-only.
+    /// New Project and New Folder create into sections the unified sidebar
+    /// always shows, so they work from either mode and switch to their own.
+    func testOnlyNewTaskIsModeGated() throws {
         let (split, selection) = makeSplit()
         let project = try model.createProject()
         selection.selectNode(uuid: project.uuid)
@@ -374,12 +690,21 @@ final class ModeSwitchTests: PersistenceTestCase {
         let newFolder = NSMenuItem(title: "", action: #selector(MainSplitViewController.newMailFolder(_:)), keyEquivalent: "")
         XCTAssertTrue(split.validateMenuItem(newTask))
         XCTAssertTrue(split.validateMenuItem(newProject))
-        XCTAssertFalse(split.validateMenuItem(newFolder))
+        XCTAssertTrue(split.validateMenuItem(newFolder))
 
         selection.setMode(.mail)
         XCTAssertFalse(split.validateMenuItem(newTask))
-        XCTAssertFalse(split.validateMenuItem(newProject))
+        XCTAssertTrue(split.validateMenuItem(newProject))
         XCTAssertTrue(split.validateMenuItem(newFolder))
+    }
+
+    /// New Project from mail mode has to land somewhere the user can see it.
+    func testNewProjectFromMailModeSwitchesToTasks() {
+        let (split, selection) = makeSplit()
+        selection.setMode(.mail)
+        split.newProject(nil)
+        XCTAssertEqual(selection.mode, .tasks)
+        XCTAssertEqual(try? model.allProjects().count, 1)
     }
 
     func testRefreshRoutesToWhicheverFeedTheModeShows() async {

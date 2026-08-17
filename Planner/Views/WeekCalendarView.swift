@@ -14,25 +14,18 @@ struct TaskDeadlineChip: Hashable {
     var isCompleted: Bool
 }
 
-/// Weeks run as vertical columns: Monday at the top down to Sunday, with the
-/// weekend rows at half height. A narrow left gutter carries the MON…SUN labels
-/// once instead of repeating them in every cell. Columns are weeks, so paging
-/// moves by a week.
+/// Days flow in reading order: the first visible day at the top left, each
+/// row filling left to right before the next begins. A row holds one day per
+/// column — the count the pane width allows — so the grid is always seven
+/// rows and paging moves by that many days, one column at a time. Weekend
+/// cells are full size; a gray wash is what distinguishes them from weekdays.
 final class WeekCalendarView: NSView {
     /// Upper bound only; each cell fits as many chips as its height allows.
     fileprivate static let maxVisibleChips = 6
 
-    /// Weekday rows carry weight 1; Saturday and Sunday keep their own rows in
-    /// the same column but at half height — this planner is for work-week
-    /// deadlines. Five full rows plus two halves is exactly six rows of height.
-    static let weekendRowWeight: CGFloat = 0.5
-
+    /// Days per week over days per row (`visibleWeekCount`): the grid is
+    /// always exactly seven rows deep.
     static let rowCount = 7
-    static let weekdayRowCount = 5
-
-    /// Left gutter holding one MON…SUN label per row, so the weekday marker is
-    /// printed once instead of repeated in every cell.
-    static let weekdayGutterWidth: CGFloat = 34
 
     /// Width a chip's text loses to insets before a glyph is drawn: the cell's
     /// inset on both sides, plus the chip's bar gutter and trailing padding.
@@ -61,11 +54,11 @@ final class WeekCalendarView: NSView {
 
     weak var delegate: WeekCalendarViewDelegate?
 
-    /// First visible Monday. Setter must not call the delegate.
+    /// First visible day. Setter must not call the delegate.
     var visibleWeekStart: Date {
         get { _visibleWeekStart }
         set {
-            let normalized = Calendar.current.startOfWeek(for: newValue)
+            let normalized = Calendar.current.startOfDay(for: newValue)
             guard _visibleWeekStart != normalized else { return }
             _visibleWeekStart = normalized
             applyVisibleWeeks()
@@ -113,15 +106,14 @@ final class WeekCalendarView: NSView {
     private var _selectedDay: Date?
 
     private let gridContainer = GridContainer()
-    private var weekdayLabels: [NSTextField] = []
-    /// Seven cells per week column, in Monday-first order; each fills the full
-    /// column width, and only the row height differs at the weekend.
+    /// Chronological, first visible day first; the cell at index `i` sits at
+    /// row `i / visibleWeekCount`, column `i % visibleWeekCount`.
     private var dayCells: [DayCellView] = []
 
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
-        _visibleWeekStart = Calendar.current.startOfWeek(for: Date())
+        _visibleWeekStart = Calendar.current.startOfDay(for: Date())
         super.init(frame: frameRect)
         configure()
         rebuildCells()
@@ -133,7 +125,7 @@ final class WeekCalendarView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Calls `didChangeVisibleWeekStart` with today's week; does not assign.
+    /// Calls `didChangeVisibleWeekStart` with today; does not assign.
     func revealToday() {
         delegate?.weekCalendar(self, didChangeVisibleWeekStart: Date())
     }
@@ -146,8 +138,14 @@ final class WeekCalendarView: NSView {
         shiftVisibleWeeks(by: 1)
     }
 
+    /// One step is one column: the grid slides left or right by the number of
+    /// days in a row, so every cell moves into its neighbour's place.
     private func shiftVisibleWeeks(by weeks: Int) {
-        let target = Calendar.current.date(byAdding: .day, value: weeks * 7, to: _visibleWeekStart)!
+        let target = Calendar.current.date(
+            byAdding: .day,
+            value: weeks * visibleWeekCount,
+            to: _visibleWeekStart
+        )!
         delegate?.weekCalendar(self, didChangeVisibleWeekStart: target)
     }
 
@@ -156,21 +154,21 @@ final class WeekCalendarView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
-        guard let offset = Self.dayOffset(for: event) else {
+        guard let offset = Self.dayOffset(for: event, daysPerRow: visibleWeekCount) else {
             super.keyDown(with: event)
             return
         }
         moveSelection(byDays: offset)
     }
 
-    /// Vertical movement walks days down a week column; horizontal movement
-    /// jumps a whole week, because columns are weeks.
-    static func dayOffset(for event: NSEvent) -> Int? {
+    /// Reading order: horizontal movement walks days along a row; vertical
+    /// movement jumps a whole row, which is one day per visible week.
+    static func dayOffset(for event: NSEvent, daysPerRow: Int) -> Int? {
         switch Int(event.keyCode) {
-        case 123: return -7   // left
-        case 124: return 7    // right
-        case 125: return 1    // down
-        case 126: return -1   // up
+        case 123: return -1            // left
+        case 124: return 1             // right
+        case 125: return daysPerRow    // down
+        case 126: return -daysPerRow   // up
         default: return nil
         }
     }
@@ -193,11 +191,12 @@ final class WeekCalendarView: NSView {
         let calendar = Calendar.current
         delegate?.weekCalendar(self, didSelectDay: day)
 
-        // Page only when the new day falls outside what is on screen.
-        let firstVisible = _visibleWeekStart
-        let lastVisible = calendar.endOfWeeks(from: _visibleWeekStart, count: visibleWeekCount)
+        // Page only when the new day falls outside what is on screen, and
+        // then by whole columns so the grid stays on its current phase.
+        let firstVisible = calendar.startOfDay(for: _visibleWeekStart)
+        let lastVisible = calendar.endOfWeeks(from: firstVisible, count: visibleWeekCount)
         if day < firstVisible || day >= lastVisible {
-            delegate?.weekCalendar(self, didChangeVisibleWeekStart: calendar.startOfWeek(for: day))
+            delegate?.weekCalendar(self, didChangeVisibleWeekStart: pagedStart(containing: day))
         }
     }
 
@@ -225,10 +224,7 @@ final class WeekCalendarView: NSView {
     }
 
     private func updateWeekCountForWidth() {
-        // The gutter is not available to columns, so it must not count toward
-        // how many columns fit.
-        let available = gridContainer.bounds.width - Self.weekdayGutterWidth
-        let wanted = Self.weekCount(fittingWidth: available)
+        let wanted = Self.weekCount(fittingWidth: gridContainer.bounds.width)
         guard wanted != visibleWeekCount else { return }
         visibleWeekCount = wanted
         rebuildCells()
@@ -236,17 +232,12 @@ final class WeekCalendarView: NSView {
         delegate?.weekCalendar(self, didChangeVisibleWeekCount: wanted)
     }
 
-    /// Row bands top to bottom: Mon–Fri at full height, then Sat and Sun each at
-    /// half height.
+    /// Seven equal row bands, top to bottom. Every day — weekend included — is
+    /// full size; the weekend's mark is its wash, not its height.
     static func rowFrames(in height: CGFloat) -> [NSRect] {
-        let weights = (0..<rowCount).map { $0 < weekdayRowCount ? 1 : weekendRowWeight }
-        let total = weights.reduce(0, +)
-        var y: CGFloat = 0
-        return weights.map { weight in
-            let rowHeight = height * (weight / total)
-            let frame = NSRect(x: 0, y: y, width: 0, height: rowHeight)
-            y += rowHeight
-            return frame
+        let rowHeight = height / CGFloat(rowCount)
+        return (0..<rowCount).map {
+            NSRect(x: 0, y: CGFloat($0) * rowHeight, width: 0, height: rowHeight)
         }
     }
 
@@ -258,73 +249,38 @@ final class WeekCalendarView: NSView {
         }
     }
 
-    /// Day columns inset past the weekday gutter.
-    static func dayColumnFrames(in totalWidth: CGFloat, count: Int) -> [NSRect] {
-        columnFrames(in: max(0, totalWidth - weekdayGutterWidth), count: count).map {
-            NSRect(x: $0.minX + weekdayGutterWidth, y: 0, width: $0.width, height: 0)
-        }
-    }
-
     private func layoutGrid() {
         let bounds = gridContainer.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         gridContainer.weekCount = visibleWeekCount
         gridContainer.needsDisplay = true
 
-        let columns = Self.dayColumnFrames(in: bounds.width, count: visibleWeekCount)
+        let columns = Self.columnFrames(in: bounds.width, count: visibleWeekCount)
         let rows = Self.rowFrames(in: bounds.height)
 
-        // Top-aligned, on the day number's baseline rather than floating in the
-        // middle of the row, so the marker reads as belonging to that day.
-        for (index, label) in weekdayLabels.enumerated() {
-            let row = rows[index]
-            label.frame = NSRect(
-                x: 0,
-                y: row.minY + DayCellView.dayNumberCenterY(isWeekend: index >= Self.weekdayRowCount) - 7,
-                width: Self.weekdayGutterWidth - 6,
-                height: 14
-            )
-        }
-
-        // Every day owns a full-width slot in its week's column; only the row
-        // height differs between weekdays and the weekend.
+        // Reading order: fill a row left to right, then start the next.
         for (index, cell) in dayCells.enumerated() {
-            let week = index / 7
-            let dayInWeek = index % 7
-            guard week < columns.count else { continue }
-            let column = columns[week]
-            let row = rows[dayInWeek]
-            cell.frame = NSRect(x: column.minX, y: row.minY, width: column.width, height: row.height)
+            let row = index / visibleWeekCount
+            let column = index % visibleWeekCount
+            guard row < rows.count, column < columns.count else { continue }
+            cell.frame = NSRect(
+                x: columns[column].minX,
+                y: rows[row].minY,
+                width: columns[column].width,
+                height: rows[row].height
+            )
         }
     }
 
     private func configure() {
         gridContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(gridContainer)
-        configureWeekdayGutter()
         NSLayoutConstraint.activate([
             gridContainer.topAnchor.constraint(equalTo: topAnchor),
             gridContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             gridContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             gridContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
-    }
-
-    /// One label per row, Monday first. `shortWeekdaySymbols` is Sunday-indexed,
-    /// so the Monday-first order is 2…7 then 1.
-    private func configureWeekdayGutter() {
-        let symbols = Calendar.current.shortWeekdaySymbols
-        weekdayLabels = (0..<Self.rowCount).map { row in
-            let weekdayIndex = (row + 1) % 7
-            let label = NSTextField(labelWithString: symbols[weekdayIndex].uppercased())
-            label.font = .systemFont(ofSize: 9, weight: .semibold)
-            label.textColor = row >= Self.weekdayRowCount ? .quaternaryLabelColor : .tertiaryLabelColor
-            label.alignment = .right
-            label.refusesFirstResponder = true
-            label.setAccessibilityElement(false)
-            gridContainer.addSubview(label)
-            return label
-        }
     }
 
     private func rebuildCells() {
@@ -345,20 +301,35 @@ final class WeekCalendarView: NSView {
         }
     }
 
+    /// The first visible day plus whole columns until `day` is on screen.
+    private func pagedStart(containing day: Date) -> Date {
+        let calendar = Calendar.current
+        let first = calendar.startOfDay(for: _visibleWeekStart)
+        let step = max(1, visibleWeekCount)
+        let span = visibleWeekCount * Self.rowCount
+        if day < first {
+            let daysBack = calendar.dateComponents([.day], from: day, to: first).day ?? 0
+            let steps = (daysBack + step - 1) / step
+            return calendar.date(byAdding: .day, value: -steps * step, to: first)!
+        }
+        let daysForward = calendar.dateComponents([.day], from: first, to: day).day ?? 0
+        let steps = (daysForward - span + step) / step
+        return calendar.date(byAdding: .day, value: steps * step, to: first)!
+    }
+
     private func applyVisibleWeeks() {
         let calendar = Calendar.current
-        let starts = calendar.weekStarts(from: _visibleWeekStart, count: visibleWeekCount)
-        for (week, start) in starts.enumerated() {
-            let days = calendar.days(inWeekStartingAt: start)
-            for dayInWeek in 0..<7 {
-                let index = week * 7 + dayInWeek
-                guard dayCells.indices.contains(index) else { continue }
-                dayCells[index].configure(
-                    day: days[dayInWeek],
-                    isWeekend: dayInWeek >= 5,
-                    selectedDay: _selectedDay
-                )
-            }
+        let days = calendar.visibleDays(
+            from: _visibleWeekStart,
+            count: visibleWeekCount * Self.rowCount
+        )
+        for (index, day) in days.enumerated() {
+            guard dayCells.indices.contains(index) else { continue }
+            dayCells[index].configure(
+                day: day,
+                isWeekend: calendar.isWeekend(day),
+                selectedDay: _selectedDay
+            )
         }
         applyChipsToCells()
         applyNoteMarkers()
@@ -455,9 +426,6 @@ extension WeekCalendarView {
     func test_monthHeaderFrame(at index: Int) -> NSRect? { dayCells[index].test_monthHeaderFrame }
     func test_noteDotFrame(at index: Int) -> NSRect { dayCells[index].test_noteDotFrame }
     func test_dayNumber(at index: Int) -> String { dayCells[index].test_dayNumberText }
-    /// The MON…SUN gutter, top to bottom.
-    var test_weekdayGutter: [String] { weekdayLabels.map(\.stringValue) }
-    func test_weekdayGutterFrame(at row: Int) -> NSRect { weekdayLabels[row].frame }
     func test_dayNumberFrame(at index: Int) -> NSRect { dayCells[index].test_dayNumberFrame }
 
     func test_visibleChips(at index: Int) -> [TaskDeadlineChip] { dayCells[index].visibleChips }
@@ -577,14 +545,12 @@ private final class GridContainer: NSView {
     override var isFlipped: Bool { true }
 
     /// Hairline rules under the cells; a cell only paints when it is today,
-    /// selected, or a weekend. Rules stop at the weekday gutter so the MON…SUN
-    /// labels sit on clean background.
+    /// selected, or a weekend.
     override func draw(_ dirtyRect: NSRect) {
         guard bounds.width > 0, bounds.height > 0 else { return }
 
         let rows = WeekCalendarView.rowFrames(in: bounds.height)
-        let columns = WeekCalendarView.dayColumnFrames(in: bounds.width, count: weekCount)
-        let gridLeft = WeekCalendarView.weekdayGutterWidth
+        let columns = WeekCalendarView.columnFrames(in: bounds.width, count: weekCount)
 
         NSColor.separatorColor.setStroke()
         let path = NSBezierPath()
@@ -592,11 +558,11 @@ private final class GridContainer: NSView {
 
         for row in rows {
             let y = row.minY.rounded() + 0.5
-            path.move(to: NSPoint(x: gridLeft, y: y))
+            path.move(to: NSPoint(x: 0, y: y))
             path.line(to: NSPoint(x: bounds.width, y: y))
         }
         let bottom = bounds.height.rounded() - 0.5
-        path.move(to: NSPoint(x: gridLeft, y: bottom))
+        path.move(to: NSPoint(x: 0, y: bottom))
         path.line(to: NSPoint(x: bounds.width, y: bottom))
 
         for column in columns.dropFirst() {
@@ -691,41 +657,23 @@ private final class DayCellView: NSView {
     /// Shorter than a task chip: an event is context, not a commitment.
     fileprivate static let eventHeight: CGFloat = 16
     fileprivate static let rowSpacing: CGFloat = 2
+    /// One set of metrics for every day: weekend cells are full size now, so
+    /// the shrunken weekend header and padding went with the half-height rows.
     private static let headerHeight: CGFloat = 18
-    /// A weekend row is half a weekday row, so a full-height header would eat
-    /// nearly 60% of it — the reason nothing used to fit there. The day number
-    /// is already a point smaller on weekends; the band shrinks to match.
-    private static let weekendHeaderHeight: CGFloat = 15
     private static let contentPadding: CGFloat = 4
-    private static let weekendContentPadding: CGFloat = 2
     /// Without this the day number's label ends exactly where the first row
     /// begins, so the two touch.
     private static let rowTopGap: CGFloat = 2
-    private static let weekendRowTopGap: CGFloat = 1
     private static let overflowHeight: CGFloat = 14
     /// Read by `WeekCalendarView.chipTextHorizontalInset`.
     fileprivate static let inset: CGFloat = 5
-    /// Vertical centre of the day number within the cell; the weekday gutter
-    /// and the month header line up with this.
+    /// Vertical centre of the day number within the cell; the month header
+    /// lines up with this.
     static let dayNumberCenterY: CGFloat = 10
-    static let weekendDayNumberCenterY: CGFloat = 8
 
-    /// The gutter labels align to the day number, so they need the same figure.
-    static func dayNumberCenterY(isWeekend: Bool) -> CGFloat {
-        isWeekend ? weekendDayNumberCenterY : dayNumberCenterY
-    }
-
-    private var headerHeight: CGFloat {
-        isWeekend ? Self.weekendHeaderHeight : Self.headerHeight
-    }
-
-    private var contentPadding: CGFloat {
-        isWeekend ? Self.weekendContentPadding : Self.contentPadding
-    }
-
-    private var rowTopGap: CGFloat {
-        isWeekend ? Self.weekendRowTopGap : Self.rowTopGap
-    }
+    private var headerHeight: CGFloat { Self.headerHeight }
+    private var contentPadding: CGFloat { Self.contentPadding }
+    private var rowTopGap: CGFloat { Self.rowTopGap }
 
     /// Where rows begin, below the header band and its gap.
     private var contentTop: CGFloat { headerHeight + rowTopGap }
@@ -759,9 +707,7 @@ private final class DayCellView: NSView {
         return baseline - font.capHeight / 2
     }
 
-    private var dayNumberCenterY: CGFloat {
-        Self.dayNumberCenterY(isWeekend: isWeekend)
-    }
+    private var dayNumberCenterY: CGFloat { Self.dayNumberCenterY }
     fileprivate static let noteDotSize: CGFloat = 5
     /// A row shorter than this is not worth drawing; hide it instead.
     private static let minimumRowHeight: CGFloat = 10
@@ -787,10 +733,10 @@ private final class DayCellView: NSView {
 
         let dayOfMonth = calendar.component(.day, from: day)
         dayNumberLabel.stringValue = String(dayOfMonth)
-        dayNumberLabel.font = .systemFont(ofSize: isWeekend ? 11 : 12, weight: .semibold)
-        dayNumberLabel.textColor = isToday
-            ? .alternateSelectedControlTextColor
-            : (isWeekend ? .secondaryLabelColor : .labelColor)
+        // Weekend cells draw exactly like weekdays; the gray wash in `draw` is
+        // what tells them apart.
+        dayNumberLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        dayNumberLabel.textColor = isToday ? .alternateSelectedControlTextColor : .labelColor
 
         monthBadgeText = dayOfMonth == 1 ? calendar.monthName(for: day) : nil
         monthLabel.stringValue = monthBadgeText?.uppercased() ?? ""
@@ -904,7 +850,7 @@ private final class DayCellView: NSView {
 
         dayNumberLabel.frame = NSRect(
             x: inset,
-            y: dayNumberCenterY - (isWeekend ? 7 : 8),
+            y: dayNumberCenterY - 8,
             width: min(dayNumberLabel.frame.width, width),
             height: 16
         )

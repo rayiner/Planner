@@ -22,6 +22,7 @@
     <entity name="SavedMessage" representedClassName="SavedMessage" syncable="YES">
         <attribute name="attachmentNames" optional="YES" attributeType="String"/>
         <attribute name="body" optional="YES" attributeType="String"/>
+        <attribute name="htmlBody" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="hasAttachments" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="inReplyTo" optional="YES" attributeType="String"/>

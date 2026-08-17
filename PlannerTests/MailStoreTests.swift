@@ -102,6 +102,7 @@ final class MailStoreTests: PersistenceTestCase {
         XCTAssertEqual(saved.senderAddress, "ada@example.com")
         XCTAssertEqual(saved.recipients, "you@example.com")
         XCTAssertEqual(saved.body, "Body text")
+        XCTAssertNil(saved.htmlBody)
         XCTAssertTrue(saved.hasAttachments)
         XCTAssertEqual(saved.attachmentNameList, ["brief.pdf", "exhibit.png"])
         XCTAssertEqual(saved.outlookID, 1)
@@ -137,6 +138,22 @@ final class MailStoreTests: PersistenceTestCase {
 
         try model.saveMessage(envelope(id: 77), detail: detail(id: 77, messageID: nil), into: folder)
         XCTAssertEqual(model.messages(in: folder).count, 1)
+    }
+
+    func testSaveCopiesHTMLWhenTheDetailHasIt() throws {
+        let folder = try model.createMailFolder()
+        let saved = try model.saveMessage(
+            envelope(),
+            detail: MailMessageDetail(
+                id: 1,
+                body: "Hello there",
+                html: "<p>Hello <b>there</b></p>",
+                messageID: "<a@example.com>"
+            ),
+            into: folder
+        )
+        XCTAssertEqual(saved.body, "Hello there")
+        XCTAssertEqual(saved.htmlBody, "<p>Hello <b>there</b></p>")
     }
 
     func testSavingWithNoDetailStillStoresTheEnvelope() throws {

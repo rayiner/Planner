@@ -82,7 +82,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         ])
 
         let backgroundMenu = outline.outlineView.menu(forRow: -1)
-        XCTAssertEqual(backgroundMenu.items.map(\.title), ["New Project"])
+        XCTAssertEqual(backgroundMenu.items.map(\.title), ["New Project", "New Folder"])
         XCTAssertEqual(backgroundMenu.items.first?.action, #selector(MainSplitViewController.newProject(_:)))
     }
 
@@ -510,7 +510,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         let task = try model.createTask(in: project)
         outline.test_simulateStaleEmptyProjectsCache()
         XCTAssertTrue(outline.test_isEmptyStateVisible)
-        XCTAssertEqual(outline.outlineView.numberOfRows, 0)
+        XCTAssertEqual(outline.outlineView.row(forItem: task), -1)
 
         selection.selectNode(uuid: task.uuid)
 
@@ -534,6 +534,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
             persistence: persistence,
             model: model,
             selection: selection,
+            mail: MailCoordinator(source: NullMailSource(), defaults: defaults),
             userDefaults: defaults
         )
         outline.loadViewIfNeeded()

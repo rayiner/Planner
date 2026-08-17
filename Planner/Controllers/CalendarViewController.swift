@@ -69,7 +69,7 @@ final class CalendarViewController: NSViewController {
         weekCount: Int,
         calendar: Calendar = .current
     ) -> NSFetchRequest<TaskItem> {
-        let start = calendar.startOfWeek(for: visibleWeekStart)
+        let start = calendar.startOfDay(for: visibleWeekStart)
         let end = calendar.endOfWeeks(from: start, count: weekCount)
         let request = TaskItem.fetchRequest()
         request.predicate = NSPredicate(
@@ -120,18 +120,16 @@ final class CalendarViewController: NSViewController {
     /// dictionary lookup rather than a refetch.
     private func applyEvents() {
         let calendar = Calendar.current
-        let starts = calendar.weekStarts(
+        let days = calendar.visibleDays(
             from: selection.visibleWeekStart,
-            count: weekView.visibleWeekCount
+            count: weekView.visibleWeekCount * WeekCalendarView.rowCount
         )
-        weekView.events = starts
-            .flatMap { calendar.days(inWeekStartingAt: $0) }
-            .flatMap { events.chips(forDay: $0) }
+        weekView.events = days.flatMap { events.chips(forDay: $0) }
     }
 
     private func applyDayNotes() {
         let calendar = Calendar.current
-        let start = calendar.startOfWeek(for: selection.visibleWeekStart)
+        let start = calendar.startOfDay(for: selection.visibleWeekStart)
         let end = calendar.endOfWeeks(from: start, count: weekView.visibleWeekCount)
         weekView.daysWithNotes = (try? model.daysWithNotes(from: start, to: end)) ?? []
     }

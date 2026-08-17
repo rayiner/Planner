@@ -6,10 +6,10 @@ enum SelectionField: String {
 
 /// Which of the two three-pane layouts the window is showing.
 ///
-/// A mode, not a window: the sidebar swaps its content the way Preview swaps
-/// Thumbnails for a Table of Contents, and the two trailing panes are replaced
-/// wholesale. Each mode keeps its own selection, so switching back lands
-/// exactly where it was left.
+/// A mode, not a window: the unified sidebar stays put and the two trailing
+/// panes are replaced wholesale. The mode is whichever sidebar row is
+/// selected — a project or task shows the calendar, a mailbox shows the
+/// reader. There is no separate Tasks / Mail command.
 enum PlannerMode: String {
     case tasks, mail
 }
@@ -52,7 +52,7 @@ final class SelectionModel {
     static let modeDefaultsKey = "planner.mode"
 
     private(set) var selection: PlannerSelection?
-    /// First visible Monday. The calendar pages a week at a time.
+    /// First visible day on the grid. The calendar pages by one column of days.
     private(set) var visibleWeekStart: Date
     private(set) var mode: PlannerMode
     private(set) var mailbox: MailboxSelection = .recent
@@ -81,17 +81,20 @@ final class SelectionModel {
     init(now: Date = Date(), calendar: Calendar = .current, defaults: UserDefaults = .standard) {
         self.calendar = calendar
         self.defaults = defaults
-        visibleWeekStart = calendar.startOfWeek(for: now)
+        visibleWeekStart = calendar.startOfDay(for: now)
         mode = defaults.string(forKey: Self.modeDefaultsKey)
             .flatMap(PlannerMode.init(rawValue:)) ?? .tasks
     }
 
     func selectNode(uuid: UUID?) {
-        apply(uuid.map { PlannerSelection.node($0) })
+        apply(uuid.map { PlannerSelection.node($0) }, adopting: uuid == nil ? nil : .tasks)
     }
 
     func selectDay(_ date: Date?) {
-        apply(date.map { PlannerSelection.day(calendar.startOfDay(for: $0)) })
+        apply(
+            date.map { PlannerSelection.day(calendar.startOfDay(for: $0)) },
+            adopting: date == nil ? nil : .tasks
+        )
     }
 
     func clearSelection() {
@@ -100,22 +103,25 @@ final class SelectionModel {
 
     /// Posts `.node` and/or `.day` according to which of the two derived values
     /// actually changed, so observers that only care about one keep working
-    /// even though a single write can move the selection between them.
-    private func apply(_ new: PlannerSelection?) {
-        guard selection != new else { return }
+    /// even though a single write can move the selection between them. A
+    /// concrete node or day also enters tasks mode in the same post: the
+    /// trailing panes follow the sidebar (or calendar) row, not a separate
+    /// mode command.
+    private func apply(_ new: PlannerSelection?, adopting mode: PlannerMode? = nil) {
         let previousNode = selectedNodeUUID
         let previousDay = selectedDay
-        selection = new
+        if selection != new { selection = new }
 
         var changed: Set<SelectionField> = []
         if selectedNodeUUID != previousNode { changed.insert(.node) }
         if selectedDay != previousDay { changed.insert(.day) }
+        if let mode, adoptMode(mode) { changed.insert(.mode) }
         guard !changed.isEmpty else { return }
         post(changed: changed)
     }
 
     func setVisibleWeekStart(_ date: Date) {
-        let normalized = calendar.startOfWeek(for: date)
+        let normalized = calendar.startOfDay(for: date)
         guard visibleWeekStart != normalized else { return }
         visibleWeekStart = normalized
         post(changed: [.visibleWeek])
@@ -123,33 +129,40 @@ final class SelectionModel {
 
     // MARK: - Mode
 
-    /// Switching modes posts **only** `.mode`. Neither mode's selection is
-    /// touched on the way through, which is what makes switching back land
-    /// where it was left — and what keeps every existing observer, all of
-    /// which inspect `changedFields`, correctly doing nothing.
+    /// Low-level pane swap. Callers that have a sidebar row should select
+    /// that row instead — `selectNode` / `selectMailbox` adopt the mode.
     func setMode(_ new: PlannerMode) {
-        guard mode != new else { return }
-        mode = new
-        defaults.set(new.rawValue, forKey: Self.modeDefaultsKey)
+        guard adoptMode(new) else { return }
         post(changed: [.mode])
     }
 
-    func toggleMode() {
-        setMode(mode == .tasks ? .mail : .tasks)
+    @discardableResult
+    private func adoptMode(_ new: PlannerMode) -> Bool {
+        guard mode != new else { return false }
+        mode = new
+        defaults.set(new.rawValue, forKey: Self.modeDefaultsKey)
+        return true
     }
 
     // MARK: - Mail
 
-    /// Selecting a different mailbox clears the open message: the reader would
-    /// otherwise keep showing something the list no longer contains.
+    /// Selecting a mailbox enters mail mode. The open message is cleared
+    /// when the mailbox itself changes, so the reader cannot keep showing
+    /// something the list no longer contains. Re-selecting the current
+    /// mailbox from tasks mode still enters mail — the mailbox field is
+    /// unchanged, but the sidebar row is.
     func selectMailbox(_ new: MailboxSelection) {
-        guard mailbox != new else { return }
-        mailbox = new
-        var changed: Set<SelectionField> = [.mailbox]
-        if message != nil {
-            message = nil
-            changed.insert(.message)
+        var changed: Set<SelectionField> = []
+        if mailbox != new {
+            mailbox = new
+            changed.insert(.mailbox)
+            if message != nil {
+                message = nil
+                changed.insert(.message)
+            }
         }
+        if adoptMode(.mail) { changed.insert(.mode) }
+        guard !changed.isEmpty else { return }
         post(changed: changed)
     }
 

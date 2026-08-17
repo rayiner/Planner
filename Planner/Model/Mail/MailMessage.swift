@@ -6,7 +6,9 @@ import Foundation
 /// is not: the store is CloudKit-bound with `ModelController` as its only
 /// writer, and mirroring a foreign feed into it would add a second writer and a
 /// delete-reconcile problem the moment a message ages out upstream. Recent Mail
-/// lives in memory for the window and is discarded on quit. Messages worth
+/// lives in memory for the window. A local sidecar remembers the last
+/// successful sweep so the next launch can paint before Outlook answers;
+/// that file is not CloudKit and is not `SavedMessage`. Messages worth
 /// keeping are *copied* into `SavedMessage`, which is Planner's own data.
 ///
 /// `Sendable` because it is the only thing that crosses back from the source's
@@ -17,7 +19,7 @@ import Foundation
 /// window costs a third again on top of the envelope sweep, while a per-id read
 /// costs ~10-100ms. So both are fetched lazily, one message at a time, through
 /// `MailSource`.
-nonisolated struct MailMessage: Hashable, Sendable, Identifiable {
+nonisolated struct MailMessage: Hashable, Sendable, Identifiable, Codable {
     /// Outlook's record id. Stable for the life of the message and the handle
     /// every lazy read (body, headers, reveal) is addressed by.
     let id: Int64
@@ -50,6 +52,18 @@ nonisolated struct MailMessage: Hashable, Sendable, Identifiable {
     var senderDisplayName: String {
         senderName.isEmpty ? senderAddress : senderName
     }
+
+    func with(isRead: Bool) -> MailMessage {
+        guard isRead != self.isRead else { return self }
+        return MailMessage(
+            id: id,
+            subject: subject,
+            senderName: senderName,
+            senderAddress: senderAddress,
+            receivedAt: receivedAt,
+            isRead: isRead
+        )
+    }
 }
 
 /// A message's body and threading headers, fetched one message at a time.
@@ -59,9 +73,11 @@ nonisolated struct MailMessage: Hashable, Sendable, Identifiable {
 /// minutes.
 nonisolated struct MailMessageDetail: Hashable, Sendable {
     let id: Int64
-    /// Plain text. Planner never renders message HTML — it is untrusted remote
-    /// content, and a reading pane is not a browser.
+    /// Plain text fallback. Prefer `html` in the reader when it is present.
     let body: String
+    /// Outlook's `content` — HTML. Optional because a message can refuse it
+    /// (partial download, rights-protected) the same way it can refuse a body.
+    let html: String?
     let messageID: String?
     let inReplyTo: String?
     /// Space-joined, oldest first, exactly as the header carries them.
@@ -73,6 +89,7 @@ nonisolated struct MailMessageDetail: Hashable, Sendable {
     init(
         id: Int64,
         body: String,
+        html: String? = nil,
         messageID: String? = nil,
         inReplyTo: String? = nil,
         references: String? = nil,
@@ -82,6 +99,7 @@ nonisolated struct MailMessageDetail: Hashable, Sendable {
     ) {
         self.id = id
         self.body = body
+        self.html = html
         self.messageID = messageID
         self.inReplyTo = inReplyTo
         self.references = references

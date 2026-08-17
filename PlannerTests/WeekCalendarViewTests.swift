@@ -50,6 +50,22 @@ final class CalendarWeekTests: XCTestCase {
             calendar.endOfWeeks(from: monday, count: 4),
             calendar.startOfDay(for: date(year: 2026, month: 9, day: 7, calendar: calendar))
         )
+        // A mid-week start is not snapped back to Monday.
+        let thursday = date(year: 2026, month: 8, day: 13, calendar: calendar)
+        XCTAssertEqual(
+            calendar.endOfWeeks(from: thursday, count: 4),
+            calendar.startOfDay(for: date(year: 2026, month: 9, day: 10, calendar: calendar))
+        )
+    }
+
+    func testVisibleDaysRunFromTheGivenStart() {
+        let calendar = utcCalendar
+        let thursday = date(year: 2026, month: 8, day: 13, calendar: calendar)
+        let days = calendar.visibleDays(from: thursday, count: 4)
+        XCTAssertEqual(days.map { calendar.component(.day, from: $0) }, [13, 14, 15, 16])
+        XCTAssertTrue(calendar.isWeekend(days[2]))
+        XCTAssertTrue(calendar.isWeekend(days[3]))
+        XCTAssertFalse(calendar.isWeekend(days[0]))
     }
 
     func testWeekRangeStringCollapsesTheMonthWhenItDoesNotChange() {
@@ -59,6 +75,13 @@ final class CalendarWeekTests: XCTestCase {
 
         XCTAssertEqual(calendar.weekRangeString(from: monday, count: 1), "Aug 10 – 16, 2026")
         XCTAssertEqual(calendar.weekRangeString(from: monday, count: 4), "Aug 10 – Sep 6, 2026")
+        XCTAssertEqual(
+            calendar.weekRangeString(
+                from: date(year: 2026, month: 8, day: 13, calendar: calendar),
+                count: 4
+            ),
+            "Aug 13 – Sep 9, 2026"
+        )
     }
 
     func testMonthName() {
@@ -114,52 +137,60 @@ final class CalendarWeekTests: XCTestCase {
 
 @MainActor
 final class WeekCalendarViewTests: XCTestCase {
-    func testColumnsAreWeeksRunningMondayToSundayVertically() {
+    func testDaysRunChronologicallyFromToday() {
         let view = makeView()
         let calendar = Calendar.current
 
         XCTAssertEqual(view.test_dayCount, view.test_weekCount * 7)
-        XCTAssertEqual(view.test_days[0], calendar.startOfWeek(for: view.visibleWeekStart))
-        XCTAssertEqual(calendar.component(.weekday, from: view.test_days[0]), 2, "Monday leads every column")
+        XCTAssertEqual(view.test_days[0], calendar.startOfDay(for: Date()))
+        XCTAssertEqual(view.visibleWeekStart, calendar.startOfDay(for: Date()))
 
-        // Within a column, days run consecutively top to bottom.
-        for dayInWeek in 1..<7 {
+        // Every slot is exactly one day after the slot before it.
+        for index in 1..<view.test_dayCount {
             XCTAssertEqual(
-                view.test_days[dayInWeek],
-                calendar.date(byAdding: .day, value: dayInWeek, to: view.test_days[0])!
+                view.test_days[index],
+                calendar.date(byAdding: .day, value: index, to: view.test_days[0])!
             )
         }
-        // The next column is the following week, not the following day.
-        XCTAssertEqual(
-            view.test_days[7],
-            calendar.date(byAdding: .day, value: 7, to: view.test_days[0])!
-        )
     }
 
-    func testWeekendIsTheLastRowAndOnlySaturdayAndSunday() {
+    /// Reading order: left to right along a row, then the next row down.
+    func testDaysFlowLeftToRightThenWrapToTheNextRow() {
         let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        let perRow = view.test_weekCount
+
+        let first = view.test_cellFrame(at: 0)
+        let second = view.test_cellFrame(at: 1)
+        XCTAssertGreaterThan(second.minX, first.minX, "the next day sits to the right")
+        XCTAssertEqual(second.minY, first.minY, accuracy: 0.001, "…on the same row")
+
+        let wrapped = view.test_cellFrame(at: perRow)
+        XCTAssertEqual(wrapped.minX, first.minX, accuracy: 0.001, "a new row starts at the left edge")
+        XCTAssertEqual(wrapped.minY, first.maxY, accuracy: 0.001, "…directly below the first")
+    }
+
+    func testWeekendFlagsOnlySaturdayAndSunday() {
+        let view = makeView()
+        let calendar = Calendar.current
         for index in 0..<view.test_dayCount {
             XCTAssertEqual(
                 view.test_isWeekend(at: index),
-                index % 7 >= 5,
-                "only the final two slots of a column are the weekend"
+                calendar.isWeekend(view.test_days[index]),
+                "only Saturday and Sunday carry the weekend wash"
             )
         }
     }
 
-    func testSaturdayAndSundayGetOwnRowsAtHalfHeight() {
-        let rows = WeekCalendarView.rowFrames(in: 480)
-        XCTAssertEqual(rows.count, 7, "every day owns a row; the weekend is not merged")
-        XCTAssertEqual(rows.map(\.height).reduce(0, +), 480, accuracy: 0.001)
+    func testRowsSplitTheHeightEvenly() {
+        let rows = WeekCalendarView.rowFrames(in: 490)
+        XCTAssertEqual(rows.count, 7, "the grid is always seven rows deep")
+        XCTAssertEqual(rows.map(\.height).reduce(0, +), 490, accuracy: 0.001)
 
-        for row in 1..<WeekCalendarView.weekdayRowCount {
+        // Every row — the weekend's included — is the same height.
+        for row in 1..<rows.count {
             XCTAssertEqual(rows[row].height, rows[0].height, accuracy: 0.001)
         }
-        // Saturday and Sunday are each exactly half a weekday row.
-        XCTAssertEqual(rows[5].height, rows[0].height / 2, accuracy: 0.001)
-        XCTAssertEqual(rows[6].height, rows[0].height / 2, accuracy: 0.001)
-        // Five full rows plus two halves is six rows of height in total.
-        XCTAssertEqual(rows[0].height * 6, 480, accuracy: 0.001)
 
         // Rows stack without gaps.
         for row in 1..<rows.count {
@@ -173,42 +204,6 @@ final class WeekCalendarViewTests: XCTestCase {
         XCTAssertEqual(columns.map(\.width).reduce(0, +), 700, accuracy: 0.001)
         for column in columns {
             XCTAssertEqual(column.width, 175, accuracy: 0.001)
-        }
-    }
-
-    func testDayColumnsStartAfterTheWeekdayGutter() {
-        let gutter = WeekCalendarView.weekdayGutterWidth
-        let columns = WeekCalendarView.dayColumnFrames(in: 700, count: 4)
-        XCTAssertEqual(columns.count, 4)
-        XCTAssertEqual(columns[0].minX, gutter, accuracy: 0.001)
-        XCTAssertEqual(columns.map(\.width).reduce(0, +), 700 - gutter, accuracy: 0.001)
-        XCTAssertEqual(columns.last!.maxX, 700, accuracy: 0.001)
-    }
-
-    func testWeekdayGutterLabelsEveryRowMondayFirst() {
-        let view = makeView()
-        let calendar = Calendar.current
-        let symbols = calendar.shortWeekdaySymbols
-        let expected = (0..<7).map { symbols[($0 + 1) % 7].uppercased() }
-
-        XCTAssertEqual(view.test_weekdayGutter, expected)
-        XCTAssertEqual(view.test_weekdayGutter.first, symbols[1].uppercased(), "Monday leads")
-        XCTAssertEqual(view.test_weekdayGutter.last, symbols[0].uppercased(), "Sunday trails")
-    }
-
-    func testWeekdayGutterSitsOnTheDayNumberBaseline() {
-        let view = makeView()
-        view.layoutSubtreeIfNeeded()
-        for row in 0..<7 {
-            let label = view.test_weekdayGutterFrame(at: row)
-            let cell = view.test_cellFrame(at: row)
-            // Inside the gutter, never overlapping the grid.
-            XCTAssertLessThanOrEqual(label.maxX, WeekCalendarView.weekdayGutterWidth)
-            // Vertically on the day number, not floating mid-row.
-            let dayNumberMidY = cell.minY + view.test_dayNumberFrame(at: row).midY
-            XCTAssertEqual(label.midY, dayNumberMidY, accuracy: 1)
-            XCTAssertGreaterThanOrEqual(label.minY, cell.minY - 1)
-            XCTAssertLessThanOrEqual(label.maxY, cell.maxY)
         }
     }
 
@@ -353,18 +348,19 @@ final class WeekCalendarViewTests: XCTestCase {
 
         view.visibleWeekStart = next
 
-        XCTAssertEqual(view.visibleWeekStart, Calendar.current.startOfWeek(for: next))
+        XCTAssertEqual(view.visibleWeekStart, Calendar.current.startOfDay(for: next))
         XCTAssertTrue(recorder.taskIDs.isEmpty)
         XCTAssertTrue(recorder.days.isEmpty)
         XCTAssertTrue(recorder.weekStarts.isEmpty)
     }
 
-    func testPrevNextAndTodayNavigateByWeekAndOnlyCallTheDelegate() {
+    func testPrevNextAndTodayNavigateByColumnAndOnlyCallTheDelegate() {
         let view = makeView()
         let recorder = RecordingDelegate()
         view.delegate = recorder
         let calendar = Calendar.current
         let original = view.visibleWeekStart
+        let step = view.test_weekCount
 
         view.test_clickNextWeek()
         view.test_clickPreviousWeek()
@@ -373,19 +369,19 @@ final class WeekCalendarViewTests: XCTestCase {
         XCTAssertEqual(view.visibleWeekStart, original, "gestures never mutate the view directly")
         XCTAssertEqual(recorder.weekStarts.count, 3)
         XCTAssertEqual(
-            calendar.startOfWeek(for: recorder.weekStarts[0]),
-            calendar.date(byAdding: .day, value: 7, to: original)!
+            calendar.startOfDay(for: recorder.weekStarts[0]),
+            calendar.date(byAdding: .day, value: step, to: original)!
         )
         XCTAssertEqual(
-            calendar.startOfWeek(for: recorder.weekStarts[1]),
-            calendar.date(byAdding: .day, value: -7, to: original)!
+            calendar.startOfDay(for: recorder.weekStarts[1]),
+            calendar.date(byAdding: .day, value: -step, to: original)!
         )
-        XCTAssertEqual(calendar.startOfWeek(for: recorder.weekStarts[2]), calendar.startOfWeek(for: Date()))
+        XCTAssertEqual(calendar.startOfDay(for: recorder.weekStarts[2]), calendar.startOfDay(for: Date()))
         XCTAssertTrue(recorder.taskIDs.isEmpty)
         XCTAssertTrue(recorder.days.isEmpty)
     }
 
-    func testArrowKeysWalkDaysVerticallyAndWeeksHorizontally() {
+    func testMoveSelectionWalksDaysAndPagesOnlyWhenLeavingTheScreen() {
         let view = makeView()
         let recorder = RecordingDelegate()
         view.delegate = recorder
@@ -393,7 +389,6 @@ final class WeekCalendarViewTests: XCTestCase {
         let anchor = view.test_days[0]
         view.selectedDay = anchor
 
-        // Down/up is the next/previous day; left/right is a whole week.
         view.moveSelection(byDays: 1)
         XCTAssertEqual(recorder.days.last, calendar.date(byAdding: .day, value: 1, to: anchor)!)
         XCTAssertTrue(recorder.weekStarts.isEmpty, "staying on screen must not page")
@@ -403,13 +398,13 @@ final class WeekCalendarViewTests: XCTestCase {
         XCTAssertEqual(recorder.days.last, calendar.date(byAdding: .day, value: 7, to: anchor)!)
         XCTAssertTrue(recorder.weekStarts.isEmpty)
 
-        // Stepping back off the first visible Monday pages one week earlier.
+        // Stepping back off the first visible day pages one column earlier.
         view.selectedDay = anchor
         view.moveSelection(byDays: -1)
         XCTAssertEqual(recorder.weekStarts.count, 1)
         XCTAssertEqual(
-            calendar.startOfWeek(for: recorder.weekStarts[0]),
-            calendar.date(byAdding: .day, value: -7, to: anchor)!
+            calendar.startOfDay(for: recorder.weekStarts[0]),
+            calendar.date(byAdding: .day, value: -view.test_weekCount, to: anchor)!
         )
     }
 
@@ -529,11 +524,7 @@ final class WeekCalendarViewTests: XCTestCase {
         // Page back so the visible weeks are entirely in the past.
         view.visibleWeekStart = calendar.date(byAdding: .day, value: -28, to: view.visibleWeekStart)!
         let today = calendar.startOfDay(for: Date())
-        // A full-height weekday: half-height weekend rows only fit one chip, and
-        // this test needs two visible on the same day.
-        let index = try XCTUnwrap(view.test_days.indices.last {
-            view.test_days[$0] < today && !view.test_isWeekend(at: $0)
-        })
+        let index = try XCTUnwrap(view.test_days.indices.last { view.test_days[$0] < today })
         let past = view.test_days[index]
 
         let late = TaskDeadlineChip(uuid: UUID(), title: "Late", day: past, isCompleted: false)
@@ -587,7 +578,7 @@ final class WeekCalendarViewTests: XCTestCase {
         let view = makeView()
         let recorder = RecordingDelegate()
         view.delegate = recorder
-        let index = 9   // second week column, Wednesday
+        let index = 9   // partway into the grid, off the first row
         let chip = TaskDeadlineChip(uuid: UUID(), title: "Chip", day: view.test_days[index], isCompleted: false)
         view.deadlines = [chip]
         view.layoutSubtreeIfNeeded()
@@ -603,35 +594,51 @@ final class WeekCalendarViewTests: XCTestCase {
         XCTAssertTrue(recorder.days.isEmpty)
     }
 
-    func testWeekendCellsStackInTheirOwnFullWidthHalfHeightRows() {
+    func testWeekendCellsAreFullSize() {
         let view = makeView()
         view.layoutSubtreeIfNeeded()
-        let friday = view.test_cellFrame(at: 4)
-        let saturday = view.test_cellFrame(at: 5)
-        let sunday = view.test_cellFrame(at: 6)
+        let weekday = view.test_days.indices.first { !view.test_isWeekend(at: $0) }!
+        let saturday = view.test_days.indices.first { view.test_isWeekend(at: $0) }!
+        let weekdayFrame = view.test_cellFrame(at: weekday)
+        let weekendFrame = view.test_cellFrame(at: saturday)
 
-        // Same column, stacked — not split side by side.
-        XCTAssertEqual(saturday.minX, friday.minX, accuracy: 0.001)
-        XCTAssertEqual(sunday.minX, friday.minX, accuracy: 0.001)
-        XCTAssertEqual(saturday.width, friday.width, accuracy: 0.001)
-        XCTAssertEqual(sunday.width, friday.width, accuracy: 0.001)
-        XCTAssertEqual(saturday.maxY, sunday.minY, accuracy: 0.001)
-
-        // Half height each.
-        XCTAssertEqual(saturday.height, friday.height / 2, accuracy: 0.001)
-        XCTAssertEqual(sunday.height, friday.height / 2, accuracy: 0.001)
+        XCTAssertTrue(view.test_isWeekend(at: saturday))
+        // The gray wash, not the size, is what marks the weekend now.
+        XCTAssertEqual(weekendFrame.height, weekdayFrame.height, accuracy: 0.001)
+        XCTAssertEqual(weekendFrame.width, weekdayFrame.width, accuracy: 0.001)
     }
 
-    func testCellsClearTheWeekdayGutter() {
+    /// The MON…SUN gutter is gone; the grid owns the full pane width.
+    func testTheGridFillsTheFullWidth() {
         let view = makeView()
         view.layoutSubtreeIfNeeded()
-        for index in 0..<view.test_dayCount {
-            XCTAssertGreaterThanOrEqual(
-                view.test_cellFrame(at: index).minX,
-                WeekCalendarView.weekdayGutterWidth,
-                "no day cell may overlap the weekday gutter"
-            )
+        XCTAssertEqual(view.test_cellFrame(at: 0).minX, 0, accuracy: 0.001)
+        let lastInRow = view.test_cellFrame(at: view.test_weekCount - 1)
+        XCTAssertEqual(lastInRow.maxX, 720, accuracy: 0.001)
+    }
+
+    /// Arrow keys follow reading order: ±1 day sideways, a whole row — one day
+    /// per visible week — vertically.
+    func testArrowKeyOffsetsFollowReadingOrder() throws {
+        func key(_ code: UInt16) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: " ",
+                charactersIgnoringModifiers: " ",
+                isARepeat: false,
+                keyCode: code
+            ))
         }
+        XCTAssertEqual(try WeekCalendarView.dayOffset(for: key(123), daysPerRow: 4), -1)
+        XCTAssertEqual(try WeekCalendarView.dayOffset(for: key(124), daysPerRow: 4), 1)
+        XCTAssertEqual(try WeekCalendarView.dayOffset(for: key(125), daysPerRow: 4), 4)
+        XCTAssertEqual(try WeekCalendarView.dayOffset(for: key(126), daysPerRow: 4), -4)
+        XCTAssertNil(try WeekCalendarView.dayOffset(for: key(36), daysPerRow: 4), "return is not navigation")
     }
 
     private func makeView() -> WeekCalendarView {
@@ -641,16 +648,11 @@ final class WeekCalendarViewTests: XCTestCase {
     }
 
     /// A visible day that is not already past, so appearance assertions are about
-    /// completion and selection rather than the overdue tint. Skips weekends:
-    /// their half-height cells only fit one chip, and the appearance tests need
-    /// two visible on the same day — picking a Saturday made them fail whenever
-    /// the suite ran on a weekend.
+    /// completion and selection rather than the overdue tint.
     private func futureDay(in view: WeekCalendarView) -> Date {
         let today = Calendar.current.startOfDay(for: Date())
         let days = view.test_days
-        return days.indices.first { days[$0] >= today && !view.test_isWeekend(at: $0) }
-            .map { days[$0] }
-            ?? days[0]
+        return days.first { $0 >= today } ?? days[0]
     }
 
     private func makeDate(_ year: Int, _ month: Int, _ day: Int) -> Date {
@@ -668,7 +670,7 @@ final class CalendarViewControllerTests: PersistenceTestCase {
 
         selection.setVisibleWeekStart(next)
 
-        XCTAssertEqual(calendarVC.weekView.visibleWeekStart, Calendar.current.startOfWeek(for: next))
+        XCTAssertEqual(calendarVC.weekView.visibleWeekStart, Calendar.current.startOfDay(for: next))
         XCTAssertNotEqual(calendarVC.test_title, originalTitle)
     }
 
@@ -680,7 +682,11 @@ final class CalendarViewControllerTests: PersistenceTestCase {
 
         calendarVC.weekView.test_clickNextWeek()
 
-        let expected = Calendar.current.date(byAdding: .day, value: 7, to: original)!
+        let expected = Calendar.current.date(
+            byAdding: .day,
+            value: calendarVC.weekView.visibleWeekCount,
+            to: original
+        )!
         XCTAssertEqual(selection.visibleWeekStart, expected)
         XCTAssertEqual(calendarVC.weekView.visibleWeekStart, expected)
         XCTAssertEqual(selection.selectedNodeUUID, originalNode)

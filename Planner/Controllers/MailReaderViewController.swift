@@ -1,8 +1,8 @@
 import AppKit
 import CoreData
 
-/// The reading pane: one message's envelope, body, and the actions that turn it
-/// into Planner data.
+/// The reading pane: one message's envelope and body. The actions that turn a
+/// message into Planner data live in the toolbar, over this pane.
 ///
 /// The envelope is drawn the moment a row is selected; the body arrives later,
 /// because the M0 spike put it behind a per-message fetch. That split is
@@ -35,13 +35,9 @@ final class MailReaderViewController: NSViewController {
     private let bodyStatusField = NSTextField(labelWithString: "")
     private let headerStack = NSStackView()
     private let emptyStateLabel = NSTextField(labelWithString: MailLabels.noMessageSelected)
-
-    private let saveButton = NSPopUpButton(frame: .zero, pullsDown: true)
-    private let moveButton = NSPopUpButton(frame: .zero, pullsDown: true)
-    private let removeButton = NSButton()
-    private let newTaskButton = NSButton()
-    private let openInOutlookButton = NSButton()
-    private let actionBar = NSStackView()
+    /// Leading/trailing inset of the header stack; wrap width is the pane
+    /// minus this on both sides.
+    private static let headerInset: CGFloat = 20
 
     /// What the reader is currently showing, so a late body can be matched
     /// against it rather than painted over whatever is on screen now.
@@ -84,7 +80,6 @@ final class MailReaderViewController: NSViewController {
         let root = NSView()
         buildHeader(in: root)
         buildBody(in: root)
-        buildActionBar(in: root)
 
         emptyStateLabel.font = .systemFont(ofSize: 13)
         emptyStateLabel.textColor = .secondaryLabelColor
@@ -95,13 +90,13 @@ final class MailReaderViewController: NSViewController {
 
         NSLayoutConstraint.activate([
             headerStack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
-            headerStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
-            headerStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            headerStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: Self.headerInset),
+            headerStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -Self.headerInset),
 
             bodyScrollView.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 12),
             bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            bodyScrollView.bottomAnchor.constraint(equalTo: actionBar.topAnchor, constant: -10),
+            bodyScrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
 
             bodySpinner.centerXAnchor.constraint(equalTo: bodyScrollView.centerXAnchor),
             bodySpinner.centerYAnchor.constraint(equalTo: bodyScrollView.centerYAnchor, constant: -14),
@@ -109,10 +104,6 @@ final class MailReaderViewController: NSViewController {
             bodyStatusField.centerXAnchor.constraint(equalTo: bodyScrollView.centerXAnchor),
             bodyStatusField.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 24),
             bodyStatusField.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
-
-            actionBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
-            actionBar.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -20),
-            actionBar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
 
             emptyStateLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             emptyStateLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
@@ -124,6 +115,7 @@ final class MailReaderViewController: NSViewController {
         subjectField.font = .systemFont(ofSize: 17, weight: .semibold)
         subjectField.lineBreakMode = .byWordWrapping
         subjectField.maximumNumberOfLines = 3
+        subjectField.cell?.truncatesLastVisibleLine = true
         subjectField.isSelectable = true
 
         for field in [senderField, recipientsField, dateField, attachmentsField] {
@@ -140,6 +132,7 @@ final class MailReaderViewController: NSViewController {
         expiryBanner.textColor = .secondaryLabelColor
         expiryBanner.lineBreakMode = .byWordWrapping
         expiryBanner.maximumNumberOfLines = 2
+        expiryBanner.cell?.truncatesLastVisibleLine = true
 
         conversationField.font = .systemFont(ofSize: 11)
         conversationField.textColor = .secondaryLabelColor
@@ -153,18 +146,25 @@ final class MailReaderViewController: NSViewController {
                      attachmentsField, conversationField, expiryBanner] {
             headerStack.addArrangedSubview(view)
             view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            // At or below the split items' holding priorities (240–260): a long
+            // subject or To: line truncates in the pane rather than shoving
+            // the sidebar. 490 was enough to spare the window (priority 500)
+            // but still beat every pane.
+            view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         root.addSubview(headerStack)
     }
 
     private func buildBody(in root: NSView) {
-        // Plain text, never HTML: message bodies are untrusted remote content,
-        // and a reading pane is not a browser. `plain text content` is what the
-        // source asks Outlook for.
+        // HTML is decoded to an attributed string and sanitised; the view
+        // itself never loads a URL. Graphics stay off so a stray attachment
+        // character cannot paint an image into the pane.
         bodyView.isEditable = false
         bodyView.isSelectable = true
+        bodyView.isRichText = true
+        bodyView.importsGraphics = false
         bodyView.drawsBackground = false
-        bodyView.font = .systemFont(ofSize: 13)
+        bodyView.font = NoteFormatting.bodyFont
         bodyView.textContainerInset = NSSize(width: 4, height: 4)
         bodyView.isAutomaticLinkDetectionEnabled = false
         bodyView.textContainer?.widthTracksTextView = true
@@ -193,50 +193,25 @@ final class MailReaderViewController: NSViewController {
         root.addSubview(bodyStatusField)
     }
 
-    private func buildActionBar(in root: NSView) {
-        saveButton.bezelStyle = .rounded
-        saveButton.title = "Save to Folder"
-        saveButton.target = self
-        saveButton.action = #selector(saveButtonClicked(_:))
-
-        moveButton.bezelStyle = .rounded
-        moveButton.title = "Move to Folder"
-        moveButton.target = self
-        moveButton.action = #selector(moveButtonClicked(_:))
-
-        removeButton.bezelStyle = .rounded
-        removeButton.title = "Remove"
-        removeButton.target = nil   // routed through the responder chain
-        removeButton.action = #selector(MainSplitViewController.removeSavedMessage(_:))
-
-        newTaskButton.bezelStyle = .rounded
-        newTaskButton.title = "New Task"
-        newTaskButton.target = nil
-        newTaskButton.action = #selector(MainSplitViewController.newTaskFromMessage(_:))
-
-        openInOutlookButton.bezelStyle = .rounded
-        openInOutlookButton.title = "Open in Outlook"
-        openInOutlookButton.target = nil
-        openInOutlookButton.action = #selector(MainSplitViewController.openMessageInOutlook(_:))
-
-        actionBar.orientation = .horizontal
-        actionBar.alignment = .centerY
-        actionBar.spacing = 8
-        actionBar.detachesHiddenViews = true
-        actionBar.translatesAutoresizingMaskIntoConstraints = false
-        for button in [saveButton, moveButton] {
-            actionBar.addArrangedSubview(button)
-        }
-        for button in [removeButton, newTaskButton, openInOutlookButton] {
-            actionBar.addArrangedSubview(button)
-        }
-        root.addSubview(actionBar)
-    }
-
     override func viewDidLoad() {
         super.viewDidLoad()
         startObserving()
         rebind()
+    }
+
+    /// Wrapping fields report their unwrapped single-line width until they
+    /// know the column they are in. Pin that before the next layout so a
+    /// long subject cannot advertise a several-thousand-point fitting size.
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        updateWrappingWidths()
+    }
+
+    private func updateWrappingWidths() {
+        let width = max(0, view.bounds.width - 2 * Self.headerInset)
+        guard subjectField.preferredMaxLayoutWidth != width else { return }
+        subjectField.preferredMaxLayoutWidth = width
+        expiryBanner.preferredMaxLayoutWidth = width
     }
 
     private func startObserving() {
@@ -259,12 +234,6 @@ final class MailReaderViewController: NSViewController {
             name: .plannerMailDidChange,
             object: mail
         )
-        center.addObserver(
-            self,
-            selector: #selector(contextDidSave(_:)),
-            name: .NSManagedObjectContextDidSave,
-            object: persistence.viewContext
-        )
     }
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
@@ -276,7 +245,6 @@ final class MailReaderViewController: NSViewController {
 
     /// A refresh can retire the message the reader is showing.
     @objc private func mailDidChange(_ notification: Notification) { rebind() }
-    @objc private func contextDidSave(_ notification: Notification) { updateActionBar() }
 
     @objc private func mailDetailDidChange(_ notification: Notification) {
         let id = notification.userInfo?[MailChangeUserInfoKey.messageID] as? Int64
@@ -305,7 +273,6 @@ final class MailReaderViewController: NSViewController {
         emptyStateLabel.isHidden = true
         headerStack.isHidden = false
         bodyScrollView.isHidden = false
-        actionBar.isHidden = false
     }
 
     private func bindRecent(_ message: MailMessage, id: Int64) {
@@ -327,7 +294,6 @@ final class MailReaderViewController: NSViewController {
         // for its body, and a failed one is retried by re-selecting it.
         _ = mail.detailState(for: id)
         updateBody()
-        updateActionBar()
     }
 
     /// A saved message needs no fetch: the copy in the store *is* the message,
@@ -352,7 +318,10 @@ final class MailReaderViewController: NSViewController {
         } else {
             recipientsField.isHidden = true
         }
-        if let line = MailLabels.attachmentsLine(names: message.attachmentNameList) {
+        if let line = MailLabels.attachmentsIndicator(
+            count: message.attachmentNameList.count,
+            hasAttachments: message.hasAttachments
+        ) {
             attachmentsField.stringValue = "📎 \(line)"
             attachmentsField.isHidden = false
         } else {
@@ -365,9 +334,7 @@ final class MailReaderViewController: NSViewController {
 
         setBodyLoading(false)
         bodyStatusField.isHidden = true
-        bodyView.string = message.body ?? ""
-        bodyView.scroll(.zero)
-        updateActionBar()
+        showBody(html: message.htmlBody, plain: message.body ?? "")
     }
 
     private func updateConversationPosition(for message: SavedMessage) {
@@ -391,7 +358,6 @@ final class MailReaderViewController: NSViewController {
         emptyStateLabel.isHidden = false
         headerStack.isHidden = true
         bodyScrollView.isHidden = true
-        actionBar.isHidden = true
         setBodyLoading(false)
         bodyStatusField.isHidden = true
     }
@@ -425,7 +391,10 @@ final class MailReaderViewController: NSViewController {
         let names = detail?.attachmentNames?
             .components(separatedBy: "\n")
             .filter { !$0.isEmpty } ?? []
-        if let line = MailLabels.attachmentsLine(names: names) {
+        if let line = MailLabels.attachmentsIndicator(
+            count: names.count,
+            hasAttachments: detail?.hasAttachments ?? false
+        ) {
             attachmentsField.stringValue = "📎 \(line)"
             attachmentsField.isHidden = false
         } else {
@@ -444,21 +413,26 @@ final class MailReaderViewController: NSViewController {
             setBodyLoading(false)
             bodyStatusField.isHidden = true
             bodyScrollView.isHidden = false
-            bodyView.string = detail.body
-            bodyView.scroll(.zero)
+            showBody(html: detail.html, plain: detail.body)
             updateRecipientsAndAttachments()
         case .loading, .idle:
             // Keep whatever is already on screen while a body loads: blanking
             // it makes re-selecting a message you have already read flicker.
             setBodyLoading(true)
             bodyStatusField.isHidden = true
-            if mail.cachedDetail(for: id) == nil { bodyView.string = "" }
+            if mail.cachedDetail(for: id) == nil { showBody(html: nil, plain: "") }
         case .failed(let message):
             setBodyLoading(false)
             bodyStatusField.stringValue = message
             bodyStatusField.isHidden = false
-            bodyView.string = ""
+            showBody(html: nil, plain: "")
         }
+    }
+
+    private func showBody(html: String?, plain: String) {
+        let attributed = MailBodyFormatting.attributedString(html: html, plain: plain)
+        bodyView.textStorage?.setAttributedString(attributed)
+        bodyView.scroll(.zero)
     }
 
     /// `NSProgressIndicator` manages its own visibility when stopped, but not
@@ -469,79 +443,6 @@ final class MailReaderViewController: NSViewController {
         if loading { bodySpinner.startAnimation(nil) } else { bodySpinner.stopAnimation(nil) }
     }
 
-    /// The bar says what the *open* message can have done to it, which is a
-    /// different set for a message passing through Recent Mail than for one the
-    /// user has already decided to keep.
-    private func updateActionBar() {
-        let isSaved = displayedSavedUUID != nil
-        saveButton.isHidden = isSaved
-        moveButton.isHidden = !isSaved
-        removeButton.isHidden = !isSaved
-
-        rebuildSaveMenu()
-        rebuildMoveMenu()
-        newTaskButton.isEnabled = displayedMessageID != nil || displayedSavedUUID != nil
-        openInOutlookButton.isEnabled = displayedMessageID != nil
-    }
-
-    /// The folder menu, rebuilt on every bind: folders are created, renamed and
-    /// deleted from the sidebar while the reader is open.
-    private func rebuildSaveMenu() {
-        guard !saveButton.isHidden else { return }
-        let menu = NSMenu()
-        // A pull-down takes its title from item zero, which is never chosen.
-        menu.addItem(withTitle: "Save to Folder", action: nil, keyEquivalent: "")
-        appendFolders(to: menu, action: #selector(MainSplitViewController.saveMessageToFolder(_:)))
-        saveButton.menu = menu
-        saveButton.isEnabled = displayedMessageID != nil
-    }
-
-    private func rebuildMoveMenu() {
-        guard !moveButton.isHidden else { return }
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Move to Folder", action: nil, keyEquivalent: "")
-        let current = displayedSavedUUID.flatMap { model.savedMessage(uuid: $0)?.folder }
-        appendFolders(
-            to: menu,
-            action: #selector(MainSplitViewController.moveMessageToFolder(_:)),
-            excluding: current
-        )
-        moveButton.menu = menu
-        // Nowhere to move it to is not an error; the button simply has nothing
-        // to offer.
-        moveButton.isEnabled = menu.items.count > 1
-    }
-
-    private func appendFolders(
-        to menu: NSMenu,
-        action: Selector,
-        excluding: MailFolder? = nil
-    ) {
-        for folder in model.mailFolders() where folder.objectID != excluding?.objectID {
-            menu.addItem(MainSplitViewController.folderMenuItem(
-                title: folder.name,
-                folder: folder,
-                action: action
-            ))
-        }
-        if menu.items.count > 1 { menu.addItem(.separator()) }
-        // Filing into a folder that does not exist yet is the common case the
-        // first few times, so it lives in the same menu rather than behind a
-        // trip to the sidebar.
-        menu.addItem(MainSplitViewController.folderMenuItem(
-            title: "New Folder…",
-            folder: nil,
-            action: action
-        ))
-    }
-
-    // MARK: - Actions
-
-    /// The pop-up's own action fires alongside the chosen item's; the item is
-    /// what carries the folder, so this one does nothing.
-    @objc private func saveButtonClicked(_ sender: Any?) {}
-    @objc private func moveButtonClicked(_ sender: Any?) {}
-
 }
 
 extension MailReaderViewController {
@@ -550,6 +451,28 @@ extension MailReaderViewController {
     var test_sender: String { senderField.stringValue }
     var test_date: String { dateField.stringValue }
     var test_body: String { bodyView.string }
+    var test_bodyHasBold: Bool {
+        var found = false
+        let storage = bodyView.textStorage
+        storage?.enumerateAttribute(.font, in: NSRange(location: 0, length: storage?.length ?? 0)) { value, _, stop in
+            if let font = value as? NSFont, font.fontDescriptor.symbolicTraits.contains(.bold) {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+    var test_bodyLink: URL? {
+        var found: URL?
+        let storage = bodyView.textStorage
+        storage?.enumerateAttribute(.link, in: NSRange(location: 0, length: storage?.length ?? 0)) { value, _, stop in
+            if let url = value as? URL {
+                found = url
+                stop.pointee = true
+            }
+        }
+        return found
+    }
     var test_expiryText: String? { expiryBanner.isHidden ? nil : expiryBanner.stringValue }
     var test_bodyStatus: String? { bodyStatusField.isHidden ? nil : bodyStatusField.stringValue }
     var test_isBodyLoading: Bool { isBodyLoading }
@@ -559,10 +482,12 @@ extension MailReaderViewController {
     var test_conversationPosition: String? {
         conversationField.isHidden ? nil : conversationField.stringValue
     }
-    var test_actionTitles: [String] {
-        actionBar.arrangedSubviews
-            .compactMap { $0 as? NSControl }
-            .filter { !$0.isHidden }
-            .map { ($0 as? NSButton)?.title ?? ($0 as? NSPopUpButton)?.title ?? "" }
+    var test_subjectTruncatesLastVisibleLine: Bool {
+        subjectField.cell?.truncatesLastVisibleLine ?? false
     }
+    var test_headerHorizontalCompressionResistance: CGFloat {
+        CGFloat(subjectField.contentCompressionResistancePriority(for: .horizontal).rawValue)
+    }
+    var test_subjectPreferredMaxLayoutWidth: CGFloat { subjectField.preferredMaxLayoutWidth }
+    var test_recipientsLineBreakMode: NSLineBreakMode { recipientsField.lineBreakMode }
 }

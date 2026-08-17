@@ -84,11 +84,11 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Outline items | Registered `Project`/`TaskItem` objects **after** first save (permanent `objectID`) | Never insert a row for a temporary ID. Restore selection/expansion by UUID after any `reloadData`. |
 | Rename | View-based `NSTableCellView` + `TitleTextField.acceptsFirstResponder` gate + `editColumn` | `shouldEdit` is cell-based and does not stop click-to-focus. No overlay field. `objectValueFor` / `setObjectValue` unused. |
 | Delayed click | Snapshot `clickedRow == selectedRow` in `mouseDown` **before** `super.mouseDown` | `selectionDidChange` runs before `action`, so a UUID-after-change test starts rename on the first click. |
-| Calendar | Custom `NSView` week grid: N week columns × 6 rows (Mon–Fri, then a collapsed weekend row) | No first-party AppKit calendar view; EventKit is the wrong domain; no third-party kit. Week columns give each day a full-width band, so chip titles stay readable. |
+| Calendar | Custom `NSView` day grid: days flow in reading order (left to right, wrapping), N columns × 7 rows, every day full size | No first-party AppKit calendar view; EventKit is the wrong domain; no third-party kit. Width-fitted columns give each day a full-width band, so chip titles stay readable. (Superseded the original weeks-as-columns layout with half-height weekend rows.) |
 | Calendar fetch | Closed-open range over the **visible whole weeks**, not the civil month | Every visible cell is inside the range, so no cell is ever chip-less by construction. The range grows with the pane, since the column count follows its width. |
-| Week start | Hardcoded **Monday**, not `Calendar.firstWeekday` | The layout collapses Sat+Sun into one row, which only holds when they are adjacent at the end of the week. A Sunday- or Saturday-start locale would put the weekend mid-column. |
-| Weekend emphasis | Sat and Sun keep their own rows in the same column, each at 0.5 the height of a weekday row | The product is for work-week deadlines. This replaces the narrowed weekend *columns* of the month grid; the intent is unchanged. A half-height row fits one chip, so a busy weekend shows `+K more`. |
-| Weekday markers | A single 34pt left gutter, one label per row | Repeating `MON`…`SUN` inside every cell multiplies the same seven strings by the column count; at 5–8 columns that is the loudest thing on screen. |
+| Week start | Hardcoded **Monday**, not `Calendar.firstWeekday` | Paging, the FRC window and the title all count whole Monday-first weeks; a locale-driven start would move the window under all three. |
+| Weekend emphasis | Full-size cells with a gray wash | Originally half-height rows; the reading-order layout made every cell uniform, so the wash is now the only weekend marker. |
+| Weekday markers | None — the gutter was dropped with the reading-order layout | Days no longer share a weekday per row, so a per-row label cannot exist; repeating `MON`…`SUN` in every cell would be the loudest thing on screen. The gray weekend wash carries the week rhythm instead. |
 | Visible week count | Derived from pane width (`targetColumnWidth`, clamped 2–8) | Columns stay readable at any window size. The fetch window follows the count, so widening the pane loads the extra weeks. |
 | Minimum column width | **Measured, not hardcoded**: the width of `chipWidthCalibrationTitle` in the chip font plus the chip's horizontal insets, rounded up (130pt today) | A magic number drifts the moment the chip font or padding changes. Deriving it means the narrowest column always shows a realistic longest task title whole. |
 | Calendar week source of truth | `SelectionModel.visibleWeekStart` only (always a Monday). Gestures call the view delegate; they do not mutate `WeekCalendarView.visibleWeekStart`. Programmatic set does **not** fire the delegate. | Prevents a gesture → SelectionModel → view → delegate loop. |
@@ -96,7 +96,7 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | App name | Planner (display name and product name) | User decision. App icon still TBD; that is assets, not architecture. |
 | Deadline | Optional `Date` on `Task` only, stored as start-of-day in `Calendar.current`. No `timeZone` attribute in v1. | Calendar requirement implies it. Multi-device day identity deferred. |
 | Completion | `isCompleted: Bool` on `Task` only, default `false`. Outline checkbox is primary; inspector mirrors it. No child/parent rollup. | User decision: in v1. Complete is a flag; delete remains the destructive path. |
-| Notes UI | Collapsible **trailing inspector** (`NSSplitViewItem(inspectorWithViewController:)`): has-deadline checkbox + date picker (no Clear button) + plain `NSTextView` (`String`, not rich text) | Attribute must not be dead. Unchecked ⇔ `deadline = nil`. Notes stay plain `String`. Trailing, not under the calendar: too little content to justify a full-width strip. |
+| Notes UI | **Trailing inspector** (`NSSplitViewItem(inspectorWithViewController:)`, not collapsible): has-deadline checkbox + date picker (no Clear button) + plain `NSTextView` (`String`, not rich text) | Attribute must not be dead. Unchecked ⇔ `deadline = nil`. Notes stay plain `String`. Trailing, not under the calendar: too little content to justify a full-width strip. |
 | Inspector undo | `windowWillReturnUndoManager` returns `viewContext.undoManager`. Notes view gets a dedicated `UndoManager` via `textView(_:undoManagerFor:)`. Do **not** assign `window.undoManager` (it is get-only). Title field editor may share the Core Data manager; one `Rename` group on commit. | `NSTextView.undoManager` walks to the window by default; a private manager is required to keep keystrokes off the Core Data stack. |
 | Drag-and-drop | Deferred | Not cheap enough with the manual data source to justify v1 scope. |
 | Delete | Confirm sheet; cascade children; ⌘⌫ disabled while a field editor / `NSTextView` is first responder | Prevents silent tree wipes and deleting a task while editing a note. |
@@ -358,8 +358,9 @@ Implementation:
 - One `NSSplitViewController` (horizontal), three items.
 - **Left item:** `NSSplitViewItem(sidebarWithViewController: outlineVC)` — source-list material and sidebar metrics. `minimumThickness = 240`, `maximumThickness = 480`, `preferredThicknessFraction` for ~260. **Collapsible on purpose only** (`canCollapse = true`, `canCollapseFromWindowResize = false`).
 - **Middle item:** the calendar, `minimumThickness = 420`.
-- **Right item:** `NSSplitViewItem(inspectorWithViewController: inspectorVC)` — a narrow trailing column (`minimumThickness = 260`, `maximumThickness = 380`, default ~300), **collapsible**. A full-width strip under the calendar was tried and rejected: the inspector holds a title, a date, and a note, which is far too little content for a 700pt-wide pane. Toggled by `NSSplitViewController.toggleInspector(_:)` from the trailing toolbar button and View → Show Inspector (⌥⌘I). File → Get Info (⌘I) uncollapses it and focuses the note, and stays selection-gated on tasks.
+- **Right item:** `NSSplitViewItem(inspectorWithViewController: inspectorVC)` — a narrow trailing column (`minimumThickness = 260`, `maximumThickness = 380`, default ~300), **not collapsible** (`canCollapse = false`, same bargain as the mail reader: notes are half the point of tasks mode, and the window simply refuses to shrink past the panes' minimum sum). A full-width strip under the calendar was tried and rejected: the inspector holds a title, a date, and a note, which is far too little content for a 700pt-wide pane. It was collapsible with a toolbar toggle and View → Show Inspector (⌥⌘I) until the mail-triage polish pass removed both. File → Get Info (⌘I) focuses the note, and stays selection-gated on tasks.
 - **Holding priorities must stay below `NSLayoutConstraint.Priority(500)`** (sidebar 260, calendar 240, inspector 260). At `.defaultHigh` a pane outranks the window's own resizing priority, so its restored thickness becomes a hard window minimum that the split autosave then feeds back — the window's minimum height grew on every launch until it could not be resized at all. Note this inverts the earlier "sidebar holding priority **low**" guidance: higher priority means *resists resizing*, so the sidebar needs the **higher** value to keep its width while the calendar absorbs slack.
+- **Compression resistance inside panes must also stay below 500** for anything that can outgrow its pane's minimum thickness (the mail reader's header fields sit at 490). The same 500 threshold applies: a label or button row at the default 750 makes its full intrinsic width part of the window's Auto Layout floor, and `makeKeyAndOrderFront` then grows the window past its restored frame — and the autosave keeps the grown frame. Hiding the view does not help; hidden views keep their constraints.
 - Autosave names: `MainHorizontalSplit.v3`. Bump the suffix whenever the item layout changes; a stored position from a different pane structure restores as a broken (or zero-width) pane.
 
 A thin `NSToolbar` on the window (icon-only, `.unifiedCompact` if available, else default). Toolbar items have the same selectors as the File menu; validation is `MainSplitViewController.validateToolbarItem`.
@@ -1080,7 +1081,7 @@ All of the following call `createProject()`:
 - File → New Project (**⌘N**)
 - Outline background context menu → New Project
 - Toolbar “Add Project”
-- Empty-state label in the outline when `projects.isEmpty`: “No Projects — ⌘N to add one.”
+- Empty-state hint when `projects.isEmpty`: a dimmed, unselectable “No Projects — ⌘N to add one.” row inside the Projects section (a row rather than an overlay, so it sits where the projects would and never collides with the Mail section below).
 
 #### 6.2 Task / subtask creation rules
 
@@ -1293,34 +1294,26 @@ There is no AppKit calendar grid. EventKit’s calendar UI is for calendar event
 `WeekCalendarView: NSView` draws **week columns**, not a month grid:
 
 ```
-        ┌──────────┬──────────┬──────────┐
-   MON  │  31      │   7      │  14      │
-        ├──────────┼──────────┼──────────┤
-   TUE  │   1  Sep │   8      │  15      │  ← month badge on the 1st
-        ├──────────┼──────────┼──────────┤
-   WED  │   2      │   9      │  16      │
-        ├──────────┼──────────┼──────────┤
-   THU  │   3      │  10      │  17      │
-        ├──────────┼──────────┼──────────┤
-   FRI  │   4      │  11      │  18      │
-        ├──────────┼──────────┼──────────┤
-   SAT  │   5      │  12      │  19      │  ← half height
-        ├──────────┼──────────┼──────────┤
-   SUN  │   6      │  13      │  20      │  ← half height
-        └──────────┴──────────┴──────────┘
-     ↑ weekday gutter (34pt)
+   ┌──────────┬──────────┬──────────┐
+   │  31      │   1  Sep │   2      │  ← month badge on the 1st
+   ├──────────┼──────────┼──────────┤
+   │   3      │   4      │   5 ▒▒▒▒ │  ← weekend: full size, gray wash
+   ├──────────┼──────────┼──────────┤
+   │   6 ▒▒▒▒ │   7      │   8      │
+   ├──────────┼──────────┼──────────┤
+   │   …      │   …      │   …      │      (7 rows in all)
+   └──────────┴──────────┴──────────┘
 ```
 
-- One column per week; **Monday at the top** down to Sunday. Every day owns a full-width row in its column.
-- Seven row bands: Mon–Fri at weight 1, Sat and Sun at weight `0.5` each. Five full rows plus two halves is exactly six rows of height — the weekend is present but costs half as much room, which is the work-week emphasis the month grid expressed by narrowing weekend *columns*.
-- A **34pt gutter** down the left carries one `MON`…`SUN` label per row, aligned to the day-number baseline. Printing the marker once per row instead of once per cell is what keeps a wide, many-column grid quiet.
-- Each cell carries its day number. The **first day of a month** additionally gets an accent-tinted badge with the abbreviated month (`Aug`), which is what supplies month context now that there is no month title.
+- Days flow in **reading order**: the first visible Monday at the top left, each row filling left to right before the next begins. A row holds one day per visible week — the column count the pane width allows — so the grid is always **seven uniform rows** and paging still moves by whole weeks.
+- Every cell is full size, weekends included; a **gray wash** on Saturday and Sunday is what marks the week rhythm. (This superseded the original weeks-as-columns layout, which gave the weekend half-height rows and a 34pt `MON`…`SUN` gutter — with days no longer sharing a weekday per row, a per-row label cannot exist, and the gutter went with it.)
+- Each cell carries its day number. The **first day of a month** additionally gets a small-caps month header, which is what supplies month context now that there is no month title.
 - Chips fill the remaining cell height; capacity is computed per cell, with a `+K more` row when it overflows.
 - No spillover concept: every visible cell is inside the fetched range by construction.
 
-Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility); frames come from `bounds`. `rowFrames(in:)`, `columnFrames(in:count:)` and `dayColumnFrames(in:count:)` (the gutter-inset variant) are static and unit-tested. Grid rules stop at the gutter so the weekday labels sit on clean background.
+Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility); frames come from `bounds`. `rowFrames(in:)` (seven equal bands) and `columnFrames(in:count:)` are static and unit-tested.
 
-**Header.** The range label and `‹ Today ›` navigation live in the **toolbar**, but positioned as if they were a header bar inside the calendar pane. Two `NSTrackingSeparatorToolbarItem`s do this: one at `dividerIndex: 0` (sidebar | calendar) and one at `dividerIndex: 1` (calendar | inspector). Items between them are confined to the calendar pane's width; a leading flexible space pushes the sidebar's own group up against divider 0 so it hugs the splitter the way the inspector toggle hugs divider 1:
+**Header.** The range label and `‹ Today ›` navigation live in the **toolbar**, but positioned as if they were a header bar inside the calendar pane. Two `NSTrackingSeparatorToolbarItem`s do this: one at `dividerIndex: 0` (sidebar | calendar) and one at `dividerIndex: 1` (calendar | inspector). Items between them are confined to the calendar pane's width; a leading flexible space pushes the sidebar's own group up against divider 0 so it hugs the splitter the way mail's reader actions hug divider 1:
 
 ```
 (flex) [Add Project][Add Task] [Sidebar] ┊ Aug 10 – 30 2026 (flex) ‹ Today › ┊ [Inspector]
@@ -1332,7 +1325,7 @@ The sidebar toggle is the **system `.toggleSidebar` item**: the delegate returns
 **Collapsing the sidebar rearranges the leading toolbar**, following Preview:
 
 - **New Project / New Task hide** (`NSToolbarItem.isHidden`, macOS 15+). They act on the outline, so they go away with it. ⌘N still works from the File menu.
-- **The leading flexible space is removed**, so the toggle sits beside the window buttons instead of floating where the divider used to be. Re-expanding re-inserts it and the group hugs the splitter again.
+- **The leading flexible space and divider 0's tracking separator are removed**, so the toggle sits beside the window buttons instead of floating where the divider used to be. The separator must go too: with its divider collapsed it has nothing to track, and AppKit parks it — and everything laid out against it (the title drifted to mid-toolbar, Refresh landed over the reader) — against the wrong divider. Re-expanding re-inserts both and the group hugs the splitter again.
 
 Both are driven by **KVO on `sidebarSplitItem.isCollapsed`**, not just the toggle action: the divider can be dragged shut and the split autosave can restore a collapsed sidebar at launch. Items are also created lazily by the toolbar, so `itemForItemIdentifier` stamps the current visibility on each one as it is built.
 
@@ -1342,7 +1335,7 @@ The label draws the span bold and the year in a lighter weight and secondary col
 
 Hosting these in the toolbar rather than a header view inside the pane keeps the grid flush under the title bar — an in-pane header left a dead horizontal band above the weeks. If a header view is ever reintroduced, its height constraint must be **exact**, not `>=`: the grid below has no intrinsic height, so an open-ended header absorbs the whole pane and collapses the weeks to nothing.
 
-**Visible week count** follows the pane: `weekCount(fittingWidth:)` divides by `targetColumnWidth` and clamps to 2…8. The gutter width is subtracted before the division, since it is not available to columns.
+**Visible week count** follows the pane: `weekCount(fittingWidth:)` divides the full grid width by `targetColumnWidth` and clamps to 2…8. The count is both the number of visible weeks and the number of day columns per row.
 
 Because `count = floor(available / target)`, the resulting `available / count` is always ≥ `target`: **`targetColumnWidth` is a floor on column width**, not just a hint. (The exception is the 2-column clamp, where a very narrow pane can go below it.) That floor is what guarantees chip titles fit, so it is derived rather than picked:
 
@@ -1403,7 +1396,7 @@ Projects never appear. Tasks with `deadline == nil` never appear. **Completed ta
 | Double-click empty day | No-op in v1. |
 | Prev/Next week | Gesture calls `delegate.weekCalendar(_:didChangeVisibleWeekStart:)` **only**. The view does **not** assign `self.visibleWeekStart`. |
 | Today | Same: delegate only (or toolbar `revealToday:` writes `SelectionModel` directly). |
-| Arrow keys | Up/Down walk a day within the column; Left/Right jump a whole week, matching the layout. Delegate `didSelectDay`, plus `didChangeVisibleWeekStart` only when the new day falls off screen. With nothing selected the first press lands on **today** rather than a day away from it. |
+| Arrow keys | Reading order, matching the layout: Left/Right walk a day along the row; Up/Down jump a whole row (one day per visible week). Delegate `didSelectDay`, plus `didChangeVisibleWeekStart` only when the new day falls off screen. With nothing selected the first press lands on **today** rather than a day away from it. |
 | Taking focus | **Never changes the selection.** The view deliberately does not select a day in `becomeFirstResponder`: collapsing a pane moves first responder into the calendar, and that must not silently retarget the inspector. Seeding a day is the first arrow press's job. |
 
 **`visibleWeekStart` source of truth and no-loop rule:**
@@ -1503,7 +1496,7 @@ The bound applies **asymmetrically by record kind**, which is the part that is e
 | Exceptions | **Unbounded** — an occurrence moved *out* of the window must still suppress the slot it vacated |
 | Expansion output | The window |
 
-**Outside the window the grid shows nothing, silently.** Marking every out-of-range cell would be the loudest thing on screen — the same argument §8.1 makes about the weekday gutter. The range is surfaced in the refresh control's tooltip instead.
+**Outside the window the grid shows nothing, silently.** Marking every out-of-range cell would be the loudest thing on screen — the same argument §8.1 makes about not repeating weekday markers in every cell. The range is surfaced in the refresh control's tooltip instead.
 
 No age cutoff on the master scan. CalendarList's `--max-age-months` defaults to 0 for a measured reason: cost tracks query count, so a cutoff buys ~0.2s of a ~1.9s run while silently dropping whole long-running series (38 of 70 events across four series at a six-month cutoff). Do not add the knob.
 
@@ -1618,7 +1611,7 @@ Ownership follows §2: `AppDelegate` constructs it and injects through `MainSpli
 
 `WeekCalendarView` gains `var events: [CalendarEventChip]` beside `deadlines`, feeding the same grouping. `DayCellView` composes **one ordered row list — task chips first, then event chips — sharing a single `+K more`**, so the existing `visibleChipCount` capacity math generalizes over rows rather than being duplicated.
 
-Tasks win the top slots deliberately: this is a task planner, and a meeting-heavy Tuesday must not push a deadline out of sight. Consequence to accept: a half-height weekend row fits ~1 row, so a weekend with a deadline *and* an event shows the deadline plus `+1 more` — consistent with the weekend de-emphasis decision.
+Tasks win the top slots deliberately: this is a task planner, and a meeting-heavy Tuesday must not push a deadline out of sight.
 
 | | Task chip | Event row |
 | --- | --- | --- |
@@ -1637,12 +1630,12 @@ The time is not lost, only relocated: the **tooltip** carries the full range on 
 
 **Capacity is a greedy top-down fill, not a slot count**, because task rows (18pt) and event rows (16pt) are different heights and a uniform divisor would either waste a row or overflow the cell. Rows are taken in order until the next would not fit; if anything is left over, trailing rows are dropped until `+K more` also fits.
 
-**Cells are short more often than the arithmetic suggests.** A weekend row is `gridHeight / 12` — half a weekday row — and a cell spends 22pt on chrome before any content. So `+K more` needs a **56pt** weekend row, i.e. a 672pt grid, i.e. roughly a 750pt window: taller than the 720pt the app opens at. Three rules keep that honest:
+**Cells are short more often than the arithmetic suggests.** A row is `gridHeight / 7` and a cell spends 22pt on chrome before any content, so a short window still leaves rows without room for `+K more`. These rules keep that honest:
 
 1. **Nothing is ever positioned past the cell.** `layout` clamps each row to the space remaining and hides it below 10pt, and `+K more` is only given a line when one fits. `DayCellView` also sets `clipsToBounds` as a backstop — before this, the overflow line escaped and drew through the following day's number.
-2. **Weekend cells get a shorter header** (15pt band, 2pt pad, day number centred at 8pt rather than 10). At minimum height that takes usable space from 15.5pt — which fits nothing — to 20.5pt, enough for a real task chip. The weekday gutter aligns to the day number, so `dayNumberCenterY(isWeekend:)` is shared by both.
-3. **The today marker is fitted to the header band, not to the day number.** A circle enclosing two digits needs ~21pt, which neither the 18pt weekday band nor the 15pt weekend band has — sizing it from the label box made it overhang the cell top by 1pt and the first row by 3pt. It is a capsule instead: `height = headerHeight − 4`, `width = max(height, dayNumberWidth + 6)`, corner radius half the height. It does **not** promise an exact circle for single digits: `NSTextField.sizeToFit` bakes in its own padding, so whether "1" comes out square depends on the font, and tuning the inset to force it would break at the next font change.
-4. **Rows start `rowTopGap` below the header band** (2pt, 1pt on weekends). Without it the day number's label ends exactly where the first chip begins and the two touch — `contentPadding` was only ever subtracted when computing capacity, so it acted as bottom padding and left no gap at the top.
+2. **One set of header metrics for every day** (18pt band, day number centred at 10pt). The shorter weekend header this replaced existed only because weekend rows were half height; full-size weekend cells removed the reason.
+3. **The today marker is fitted to the header band, not to the day number.** A circle enclosing two digits needs ~21pt, which the 18pt band does not have — sizing it from the label box made it overhang the cell top by 1pt and the first row by 3pt. It is a capsule instead: `height = headerHeight − 4`, `width = max(height, dayNumberWidth + 6)`, corner radius half the height. It does **not** promise an exact circle for single digits: `NSTextField.sizeToFit` bakes in its own padding, so whether "1" comes out square depends on the font, and tuning the inset to force it would break at the next font change.
+4. **Rows start `rowTopGap` below the header band** (2pt). Without it the day number's label ends exactly where the first chip begins and the two touch — `contentPadding` was only ever subtracted when computing capacity, so it acted as bottom padding and left no gap at the top.
 5. **When the `+K more` line will not fit, the count becomes a badge** beside the day number (`15 +1`). The header band always exists, and its leading zone is free: the month label is centred and only appears on the 1st, the note dot is trailing. The badge hides rather than colliding with either. The cell's accessibility label carries the count too — VoiceOver has no tooltip, and in badge form there is no button to focus.
 
 **Column width does not change.** `targetColumnWidth` stays calibrated on `chipWidthCalibrationTitle` in the *task* chip font (§8.1). Event labels carry a time prefix and truncate sooner; that is correct, because the derived floor exists to guarantee a realistic *task* title renders whole, and widening every column to fit an event label would cost a whole week column on a narrow pane for secondary content. Full text lives in the tooltip.

@@ -138,6 +138,7 @@ final class OutlookMailSourceTests: XCTestCase {
         let detail = OutlookMailDecoder.detail(payload, id: 7)
         XCTAssertEqual(detail.id, 7)
         XCTAssertEqual(detail.body, "The body\n\nwith blank lines")
+        XCTAssertNil(detail.html, "a three-element payload has no HTML slot")
         XCTAssertEqual(detail.messageID, "<a@x>")
         XCTAssertEqual(detail.recipients, "you@x")
         XCTAssertTrue(detail.hasAttachments)
@@ -172,6 +173,28 @@ final class OutlookMailSourceTests: XCTestCase {
             id: 1
         )
         XCTAssertEqual(detail.body, "  leading and trailing  ")
+    }
+
+    func testDecodesHTMLWhenTheFourthElementIsPresent() {
+        let payload = list([
+            .init(string: "Plain"),
+            .init(string: ""),
+            list([]),
+            .init(string: "<p>Hello <b>there</b></p>"),
+        ])
+        let detail = OutlookMailDecoder.detail(payload, id: 7)
+        XCTAssertEqual(detail.body, "Plain")
+        XCTAssertEqual(detail.html, "<p>Hello <b>there</b></p>")
+    }
+
+    func testBlankHTMLIsTreatedAsMissing() {
+        let payload = list([
+            .init(string: "Plain"),
+            .init(string: ""),
+            list([]),
+            .init(string: "   \n"),
+        ])
+        XCTAssertNil(OutlookMailDecoder.detail(payload, id: 7).html)
     }
 
     // MARK: - Script generation
@@ -227,12 +250,37 @@ final class OutlookMailSourceTests: XCTestCase {
         XCTAssertTrue(script.contains("return {theIDs, theSubjects, theTimes, theRead, theSenders}"), script)
     }
 
+    func testTheEnvelopeScriptCanReadASlice() {
+        let script = OutlookMailScripting.envelopes(accountIndex: 1, from: 41, through: 80)
+        XCTAssertTrue(script.contains("messages 41 thru 80"), script)
+    }
+
+    func testTheIndexScanScriptReadsOnlyIdAndRead() {
+        let script = OutlookMailScripting.indexScan(accountIndex: 1, count: 50)
+        XCTAssertTrue(script.contains("id of messages 1 thru 50"), script)
+        XCTAssertTrue(script.contains("is read of messages 1 thru 50"), script)
+        XCTAssertFalse(script.contains("subject"), script)
+        XCTAssertFalse(script.contains("sender"), script)
+        XCTAssertTrue(script.contains("return {theIDs, theRead}"), script)
+    }
+
+    func testDecodesAnIndexScan() throws {
+        let payload = list([
+            list([.init(int32: 9), .init(int32: 8)]),
+            list([.init(boolean: true), .init(boolean: false)]),
+        ])
+        let scan = try OutlookMailDecoder.indexScan(payload)
+        XCTAssertEqual(scan.map(\.id), [9, 8])
+        XCTAssertEqual(scan.map(\.isRead), [true, false])
+    }
+
     func testTheDetailScriptAddressesOneMessageByIdAndToleratesMissingParts() {
         let script = OutlookMailScripting.detail(messageID: 181_121)
         XCTAssertTrue(script.contains("message id 181121"), script)
         XCTAssertTrue(script.contains("plain text content of m"), script)
-        XCTAssertFalse(script.contains("to content of m"), "HTML content is never read")
-        XCTAssertEqual(script.components(separatedBy: "try").count - 1, 6, "each read is wrapped")
+        XCTAssertTrue(script.contains("to content of m"), script)
+        XCTAssertTrue(script.contains("return {theBody, theHeaders, theNames, theHTML}"), script)
+        XCTAssertEqual(script.components(separatedBy: "try").count - 1, 8, "each read is wrapped")
     }
 
     // MARK: - Configuration

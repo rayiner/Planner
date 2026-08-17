@@ -148,6 +148,19 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertTrue(list.outlineView(outline, shouldSelectItem: outline.item(atRow: 1)!))
     }
 
+    /// A day header is a pinned label: no disclosure triangle (at zero
+    /// indentation it draws over the title) and no way to collapse the day.
+    func testGroupRowsShowNoDisclosureAndCannotCollapse() async {
+        await load([message(id: 1, dayOffset: 0)])
+        let outline = list.outlineView
+        let group = outline.item(atRow: 0)!
+        XCTAssertFalse(list.outlineView(outline, shouldShowOutlineCellForItem: group))
+        XCTAssertFalse(list.outlineView(outline, shouldCollapseItem: group))
+        let row = outline.item(atRow: 1)!
+        XCTAssertTrue(list.outlineView(outline, shouldCollapseItem: row))
+        XCTAssertEqual(list.test_indentationPerLevel, 0, "a day is not a conversation")
+    }
+
     func testTheListIsNotThreaded() async {
         // Two messages in the same conversation stay two rows, in time order.
         await load([
@@ -171,6 +184,23 @@ final class MailListTests: PersistenceTestCase {
         selection.selectMessage(.recent(2))
         let selected = list.outlineView.item(atRow: list.outlineView.selectedRow) as? MailListRow
         XCTAssertEqual(selected?.message.id, 2)
+    }
+
+    /// Delete walks down the list, then up off the last row, then stops.
+    func testTheNeighbourAfterARemovedRowIsTheNextThenThePrevious() async {
+        await load([
+            message(id: 1, dayOffset: 0, hour: 14),
+            message(id: 2, dayOffset: 0, hour: 9),
+            message(id: 3, dayOffset: -1),
+        ])
+        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(1)), .recent(2))
+        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(2)), .recent(3))
+        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(3)), .recent(2))
+    }
+
+    func testTheNeighbourAfterTheOnlyRowIsNothing() async {
+        await load([message(id: 1, dayOffset: 0)])
+        XCTAssertNil(list.messageToSelectAfterRemoving(.recent(1)))
     }
 
     // MARK: - Empty states
@@ -228,6 +258,21 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertTrue(reader.test_isEmptyStateVisible)
     }
 
+    /// Compression at or below the split holding priorities is what keeps a
+    /// long subject from shoving the sidebar. The inspector title already
+    /// sits at `.defaultLow`; the reader header must match.
+    func testTheReaderHeaderDoesNotOutrankTheSplitHoldingPriorities() {
+        XCTAssertEqual(reader.test_headerHorizontalCompressionResistance, 250)
+        XCTAssertTrue(reader.test_subjectTruncatesLastVisibleLine)
+        XCTAssertEqual(reader.test_recipientsLineBreakMode, .byTruncatingTail)
+    }
+
+    func testALongSubjectWrapsAgainstThePaneWidthNotItsUnwrappedLength() {
+        reader.view.setFrameSize(NSSize(width: 400, height: 600))
+        reader.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(reader.test_subjectPreferredMaxLayoutWidth, 360, accuracy: 0.5)
+    }
+
     func testTheReaderShowsTheEnvelopeImmediately() async {
         await load([message(id: 3, dayOffset: 0, hour: 10, subject: "Deposition prep")])
         selection.selectMessage(.recent(3))
@@ -251,6 +296,61 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertEqual(reader.test_body, "The body")
         XCTAssertFalse(reader.test_isBodyLoading)
         XCTAssertEqual(reader.test_recipients, "To: you@example.com")
+    }
+
+    func testHTMLBodyIsRenderedAsBasicRichText() async {
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(
+            id: 3,
+            body: "Hello there",
+            html: #"<p>Hello <b>there</b>. <a href="https://example.com/path">site</a></p>"#
+        ))
+        await settle { self.reader.test_body.contains("Hello") }
+
+        XCTAssertTrue(reader.test_body.contains("Hello"))
+        XCTAssertTrue(reader.test_body.contains("there"))
+        XCTAssertTrue(reader.test_bodyHasBold)
+        XCTAssertEqual(reader.test_bodyLink, URL(string: "https://example.com/path"))
+    }
+
+    /// The header says *that* attachments exist, not what they are: Planner
+    /// never opens one, so the names are dead weight in the reader.
+    func testTheReaderCountsAttachmentsRatherThanNamingThem() async {
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(
+            id: 3,
+            hasAttachments: true,
+            attachmentNames: "brief.pdf\nexhibit.png"
+        ))
+        await settle { self.reader.test_attachments != nil }
+
+        XCTAssertEqual(reader.test_attachments, "📎 2 attachments")
+    }
+
+    /// A rights-protected message refuses its attachment list but still flags
+    /// the header; the indicator must not vanish with the names.
+    func testAnUnreadableAttachmentListStillShowsTheIndicator() async {
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(id: 3, hasAttachments: true, attachmentNames: nil))
+        await settle { self.reader.test_attachments != nil }
+
+        XCTAssertEqual(reader.test_attachments, "📎 Has attachments")
+    }
+
+    func testAMessageWithoutAttachmentsShowsNoIndicator() async {
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(id: 3))
+        await settle { !self.reader.test_body.isEmpty }
+
+        XCTAssertNil(reader.test_attachments)
     }
 
     /// A body that lands after the user has moved on must not paint over the

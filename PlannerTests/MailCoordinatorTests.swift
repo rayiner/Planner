@@ -227,6 +227,94 @@ final class MailCoordinatorTests: XCTestCase {
         coordinator.cancel()
     }
 
+    func testCachedEnvelopesAreVisibleBeforeTheSweepLands() async {
+        let store = MailEnvelopeStore.temporary()
+        let cached = message(id: 11, hoursAgo: 1)
+        store.save(
+            MailEnvelopeRecord(
+                sourceID: "stub",
+                windowDays: MailWindow.defaultDays,
+                fetchedAt: anchor,
+                messages: [cached]
+            )
+        )
+        let painted = MailCoordinator(
+            source: source,
+            calendar: calendar,
+            now: { self.anchor },
+            defaults: defaults,
+            envelopeStore: store
+        )
+        XCTAssertEqual(painted.messages.map(\.id), [11])
+        if case .loaded = painted.state { } else {
+            XCTFail("cached envelopes did not leave the coordinator loaded")
+        }
+
+        painted.refresh()
+        XCTAssertEqual(painted.state, .loading)
+        XCTAssertEqual(painted.messages.map(\.id), [11], "refresh blanked the painted cache")
+        painted.cancel()
+    }
+
+    func testASuccessfulSweepWritesTheEnvelopeCache() async {
+        let store = MailEnvelopeStore.temporary()
+        let writing = MailCoordinator(
+            source: source,
+            calendar: calendar,
+            now: { self.anchor },
+            defaults: defaults,
+            envelopeStore: store
+        )
+        writing.refresh()
+        await waitForRequests(1)
+        source.finish(with: [message(id: 5, hoursAgo: 1)])
+        await waitUntil("loaded", { if case .loaded = writing.state { return true }; return false })
+        XCTAssertEqual(store.load()?.messages.map(\.id), [5])
+        writing.cancel()
+    }
+
+    func testCachedEnvelopesFromAnotherSourceAreIgnored() {
+        let store = MailEnvelopeStore.temporary()
+        store.save(
+            MailEnvelopeRecord(
+                sourceID: "outlook",
+                windowDays: MailWindow.defaultDays,
+                fetchedAt: anchor,
+                messages: [message(id: 1, hoursAgo: 1)]
+            )
+        )
+        let painted = MailCoordinator(
+            source: source,
+            calendar: calendar,
+            now: { self.anchor },
+            defaults: defaults,
+            envelopeStore: store
+        )
+        XCTAssertTrue(painted.messages.isEmpty)
+        painted.cancel()
+    }
+
+    func testCachedEnvelopesOutsideTheWindowAreDropped() {
+        let store = MailEnvelopeStore.temporary()
+        store.save(
+            MailEnvelopeRecord(
+                sourceID: "stub",
+                windowDays: MailWindow.defaultDays,
+                fetchedAt: anchor,
+                messages: [message(id: 1, hoursAgo: 24 * 30)]
+            )
+        )
+        let painted = MailCoordinator(
+            source: source,
+            calendar: calendar,
+            now: { self.anchor },
+            defaults: defaults,
+            envelopeStore: store
+        )
+        XCTAssertTrue(painted.messages.isEmpty)
+        painted.cancel()
+    }
+
     func testChangingWindowDaysPersistsAndReSweeps() async {
         coordinator.setWindowDays(7)
         XCTAssertEqual(coordinator.windowDays, 7)

@@ -54,6 +54,9 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         // A day has a note and nothing else.
         XCTAssertTrue(inspector.test_completedHidden)
         XCTAssertTrue(inspector.test_deadlineRowHidden)
+        XCTAssertTrue(inspector.test_captionHidden, "Today / Tomorrow do not belong on the day")
+        XCTAssertNotEqual(inspector.test_title, "Today")
+        XCTAssertNotEqual(inspector.test_title, "Tomorrow")
     }
 
     func testDayWithNoNoteYetShowsAnEmptyEditableBuffer() {
@@ -187,6 +190,28 @@ final class InspectorViewControllerTests: PersistenceTestCase {
         XCTAssertNil(task.deadline)
         XCTAssertEqual(inspector.test_hasDeadlineState, .off)
         XCTAssertFalse(inspector.test_datePickerEnabled)
+    }
+
+    /// The picker already names the date. Today / Tomorrow next to it were
+    /// redundant; Overdue stays because a red field is easy to miss.
+    func testDueCaptionIsOnlyOverdue() throws {
+        let selection = SelectionModel()
+        let inspector = makeInspector(selection: selection)
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+
+        inspector.test_clickHasDeadline()
+        XCTAssertTrue(inspector.test_dueCaptionHidden, "today's due date must not say Today")
+
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        inspector.test_setDatePicker(tomorrow)
+        XCTAssertTrue(inspector.test_dueCaptionHidden, "tomorrow's due date must not say Tomorrow")
+
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        inspector.test_setDatePicker(yesterday)
+        XCTAssertFalse(inspector.test_dueCaptionHidden)
+        XCTAssertEqual(inspector.test_dueCaption, "Overdue")
     }
 
     func testSelectionChangeFlushesPreviousTaskThenBinds() throws {

@@ -2,6 +2,8 @@ import AppKit
 import XCTest
 @testable import Planner
 
+/// The Mail section of the unified sidebar: Recent Mail, then the folders —
+/// and the mode switching that selecting either performs.
 @MainActor
 final class MailboxListTests: PersistenceTestCase {
     private var defaults: UserDefaults!
@@ -19,9 +21,9 @@ final class MailboxListTests: PersistenceTestCase {
         super.tearDown()
     }
 
-    private func makeSplit() -> (MainSplitViewController, SelectionModel, MailboxListViewController) {
+    private func makeSplit(mode: PlannerMode = .mail) -> (MainSplitViewController, SelectionModel, OutlineViewController) {
         let selection = SelectionModel(defaults: defaults)
-        selection.setMode(.mail)
+        selection.setMode(mode)
         let split = MainSplitViewController(
             persistence: persistence,
             model: model,
@@ -39,94 +41,155 @@ final class MailboxListTests: PersistenceTestCase {
         window.contentViewController = split
         windows.append(window)
         split.loadViewIfNeeded()
-        let mailboxes = split.mailboxListViewController
-        mailboxes.loadViewIfNeeded()
-        return (split, selection, mailboxes)
+        let outline = split.outlineViewController
+        outline.loadViewIfNeeded()
+        return (split, selection, outline)
     }
 
-    private func names(_ mailboxes: MailboxListViewController) -> [String] {
-        let outline = mailboxes.outlineView
-        return (0..<outline.numberOfRows).map { row in
-            switch outline.item(atRow: row) {
-            case let folder as MailFolder: return folder.name
-            default: return MailLabels.recentMailName
-            }
+    private func mailItems(_ outline: OutlineViewController) -> [Any] {
+        let view = outline.outlineView
+        return (0..<view.numberOfChildren(ofItem: SidebarSection.mail)).compactMap {
+            view.child($0, ofItem: SidebarSection.mail)
         }
+    }
+
+    private func mailNames(_ outline: OutlineViewController) -> [String] {
+        mailItems(outline).map {
+            ($0 as? MailFolder)?.name ?? MailLabels.recentMailName
+        }
+    }
+
+    private func selectRow(for item: Any, in outline: OutlineViewController) {
+        let row = outline.outlineView.row(forItem: item)
+        XCTAssertGreaterThanOrEqual(row, 0, "\(item) has no row")
+        outline.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 
     // MARK: - Contents
 
-    func testRecentMailIsAlwaysTheFirstRow() {
-        let (_, _, mailboxes) = makeSplit()
-        XCTAssertEqual(names(mailboxes), [MailLabels.recentMailName])
-        XCTAssertTrue(mailboxes.outlineView.item(atRow: 0) is RecentMailbox)
+    func testTheMailSectionLeadsWithRecentMail() {
+        let (_, _, outline) = makeSplit()
+        XCTAssertEqual(mailNames(outline), [MailLabels.recentMailName])
+        XCTAssertTrue(mailItems(outline).first is RecentMailbox)
+        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: RecentMailbox.shared), 0)
     }
 
     func testFoldersFollowRecentMailInListOrder() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         try model.createMailFolder(name: "Celerity")
         try model.createMailFolder(name: "Paltalk")
-        XCTAssertEqual(names(mailboxes), [MailLabels.recentMailName, "Celerity", "Paltalk"])
+        XCTAssertEqual(mailNames(outline), [MailLabels.recentMailName, "Celerity", "Paltalk"])
     }
 
     /// The sidebar reacts to did-save, so a folder created anywhere shows up.
     func testANewFolderAppearsWithoutAnExplicitReload() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         try model.createMailFolder(name: "New")
-        XCTAssertEqual(mailboxes.outlineView.numberOfRows, 2)
+        XCTAssertEqual(mailNames(outline).count, 2)
     }
 
     func testDeletingAFolderRemovesItsRow() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Doomed")
         try model.deleteMailFolder(folder)
-        XCTAssertEqual(names(mailboxes), [MailLabels.recentMailName])
+        XCTAssertEqual(mailNames(outline), [MailLabels.recentMailName])
     }
 
-    func testEmptyStateShowsOnlyWhileThereAreNoFolders() throws {
-        let (_, _, mailboxes) = makeSplit()
-        XCTAssertTrue(mailboxes.test_isEmptyStateVisible)
-        try model.createMailFolder()
-        XCTAssertFalse(mailboxes.test_isEmptyStateVisible)
+    /// Both sections coexist: creating projects must not disturb the mail rows,
+    /// and vice versa.
+    func testProjectsAndMailboxesShareTheSidebar() throws {
+        let (_, _, outline) = makeSplit()
+        let project = try model.createProject()
+        let folder = try model.createMailFolder(name: "Celerity")
+        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: project), 0)
+        XCTAssertGreaterThanOrEqual(outline.outlineView.row(forItem: folder), 0)
+        XCTAssertLessThan(
+            outline.outlineView.row(forItem: project),
+            outline.outlineView.row(forItem: RecentMailbox.shared),
+            "Projects come before Mail"
+        )
     }
 
-    // MARK: - Selection
+    // MARK: - Selection and mode switching
 
     func testSelectingAFolderRowPublishesTheMailboxSelection() throws {
-        let (_, selection, mailboxes) = makeSplit()
+        let (_, selection, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Celerity")
-        let row = mailboxes.outlineView.row(forItem: folder)
-        XCTAssertGreaterThan(row, 0)
-
-        mailboxes.outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        selectRow(for: folder, in: outline)
         XCTAssertEqual(selection.selectedFolderUUID, folder.uuid)
     }
 
     func testSelectingRecentMailPublishesRecent() throws {
-        let (_, selection, mailboxes) = makeSplit()
+        let (_, selection, outline) = makeSplit()
         let folder = try model.createMailFolder()
         selection.selectMailbox(.folder(folder.uuid))
 
-        mailboxes.outlineView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        selectRow(for: RecentMailbox.shared, in: outline)
         XCTAssertTrue(selection.isRecentMailSelected)
     }
 
+    /// The point of the unified sidebar: a mailbox row switches the trailing
+    /// panes to mail, a project row switches them back to tasks.
+    func testSelectingAMailboxFromTasksModeSwitchesToMail() throws {
+        let (split, selection, outline) = makeSplit(mode: .tasks)
+        let folder = try model.createMailFolder(name: "Celerity")
+
+        selectRow(for: folder, in: outline)
+
+        XCTAssertEqual(selection.mode, .mail)
+        XCTAssertEqual(selection.selectedFolderUUID, folder.uuid)
+        XCTAssertTrue(split.splitViewItems[1].viewController is MailListViewController)
+    }
+
+    func testSelectingAProjectFromMailModeSwitchesToTasks() throws {
+        let (split, selection, outline) = makeSplit(mode: .mail)
+        let project = try model.createProject()
+
+        selectRow(for: project, in: outline)
+
+        XCTAssertEqual(selection.mode, .tasks)
+        XCTAssertEqual(selection.selectedNodeUUID, project.uuid)
+        XCTAssertTrue(split.splitViewItems[1].viewController is CalendarViewController)
+    }
+
     func testAModelSelectionRevealsTheRow() throws {
-        let (_, selection, mailboxes) = makeSplit()
+        let (_, selection, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Celerity")
         selection.selectMailbox(.folder(folder.uuid))
         XCTAssertEqual(
-            mailboxes.outlineView.item(atRow: mailboxes.outlineView.selectedRow) as? MailFolder,
+            outline.outlineView.item(atRow: outline.outlineView.selectedRow) as? MailFolder,
             folder
+        )
+    }
+
+    /// Each mode keeps its own selection, and the one highlight follows the
+    /// mode: switching re-reveals whichever row the new mode is showing.
+    func testTheHighlightFollowsTheModeAcrossSwitches() throws {
+        let (_, selection, outline) = makeSplit(mode: .tasks)
+        let project = try model.createProject()
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectNode(uuid: project.uuid)
+        selection.selectMailbox(.folder(folder.uuid))
+
+        selection.setMode(.mail)
+        XCTAssertEqual(
+            outline.outlineView.selectedRow,
+            outline.outlineView.row(forItem: folder)
+        )
+
+        selection.setMode(.tasks)
+        XCTAssertEqual(
+            outline.outlineView.selectedRow,
+            outline.outlineView.row(forItem: project)
         )
     }
 
     // MARK: - Creating
 
     func testNewFolderSelectsItAndStartsRenaming() async throws {
-        let (split, selection, mailboxes) = makeSplit()
+        let (split, selection, outline) = makeSplit()
         var began: UUID?
-        mailboxes.beginEditingNameHandler = { began = $0.uuid }
+        outline.beginEditingNameHandler = { began = $0.uuid }
 
         split.newMailFolder(nil)
 
@@ -159,11 +222,11 @@ final class MailboxListTests: PersistenceTestCase {
     // MARK: - Renaming
 
     func testRenameSelectedTargetsTheSelectedFolder() throws {
-        let (split, selection, mailboxes) = makeSplit()
+        let (split, selection, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Celerity")
         selection.selectMailbox(.folder(folder.uuid))
         var began: UUID?
-        mailboxes.beginEditingNameHandler = { began = $0.uuid }
+        outline.beginEditingNameHandler = { began = $0.uuid }
 
         split.renameSelected(nil)
         XCTAssertEqual(began, folder.uuid)
@@ -190,25 +253,26 @@ final class MailboxListTests: PersistenceTestCase {
     /// The delayed click is a rename gesture, and Recent Mail has no name to
     /// edit — so it must not arm one.
     func testTheDelayedClickRenameIgnoresRecentMail() {
-        let (_, _, mailboxes) = makeSplit()
-        mailboxes.outlineView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let (_, _, outline) = makeSplit()
+        selectRow(for: RecentMailbox.shared, in: outline)
         var began: UUID?
-        mailboxes.beginEditingNameHandler = { began = $0.uuid }
-        mailboxes.renameTimerFired(row: 0, generation: mailboxes.renameGeneration)
+        outline.beginEditingNameHandler = { began = $0.uuid }
+        let row = outline.outlineView.row(forItem: RecentMailbox.shared)
+        outline.renameTimerFired(row: row, generation: outline.renameGeneration)
         XCTAssertNil(began)
     }
 
     func testAPendingRenameIsDroppedWhenTheSelectionMoves() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Celerity")
-        let row = mailboxes.outlineView.row(forItem: folder)
+        let row = outline.outlineView.row(forItem: folder)
         var began: UUID?
-        mailboxes.beginEditingNameHandler = { began = $0.uuid }
+        outline.beginEditingNameHandler = { began = $0.uuid }
 
-        let generation = mailboxes.renameGeneration
-        mailboxes.scheduleDelayedRename(at: row)
-        mailboxes.cancelPendingRename()
-        mailboxes.renameTimerFired(row: row, generation: generation)
+        let generation = outline.renameGeneration
+        outline.scheduleDelayedRename(at: row)
+        outline.cancelPendingRename()
+        outline.renameTimerFired(row: row, generation: generation)
         XCTAssertNil(began, "a cancelled rename still fired")
     }
 
@@ -265,15 +329,15 @@ final class MailboxListTests: PersistenceTestCase {
     // MARK: - Counts
 
     func testAFolderRowCountsItsMessages() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         let folder = try model.createMailFolder(name: "Celerity")
         try model.saveMessage(
             MailMessage.fixture(id: 1),
             detail: .fixture(id: 1, messageID: "<a@x>"),
             into: folder
         )
-        let row = mailboxes.outlineView.row(forItem: folder)
-        let cell = mailboxes.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true)
+        let row = outline.outlineView.row(forItem: folder)
+        let cell = outline.outlineView.view(atColumn: 0, row: row, makeIfNecessary: true)
         XCTAssertEqual(cell?.accessibilityLabel(), "Celerity, 1 message")
     }
 
@@ -285,10 +349,10 @@ final class MailboxListTests: PersistenceTestCase {
     // MARK: - Context menu
 
     func testTheFolderContextMenuOffersRenameAndDelete() throws {
-        let (_, _, mailboxes) = makeSplit()
+        let (_, _, outline) = makeSplit()
         let folder = try model.createMailFolder()
-        let row = mailboxes.outlineView.row(forItem: folder)
-        let menu = mailboxes.outlineView.menu(forRow: row)
+        let row = outline.outlineView.row(forItem: folder)
+        let menu = outline.outlineView.menu(forRow: row)
         XCTAssertEqual(
             menu.items.map(\.action),
             [
@@ -299,15 +363,25 @@ final class MailboxListTests: PersistenceTestCase {
         )
     }
 
-    func testTheEmptyAreaAndRecentMailOfferOnlyNewFolder() {
-        let (_, _, mailboxes) = makeSplit()
-        for row in [-1, 0] {
-            XCTAssertEqual(
-                mailboxes.outlineView.menu(forRow: row).items.map(\.action),
-                [#selector(MainSplitViewController.newMailFolder(_:))],
-                "row \(row)"
-            )
-        }
+    func testRecentMailOffersOnlyNewFolder() {
+        let (_, _, outline) = makeSplit()
+        let row = outline.outlineView.row(forItem: RecentMailbox.shared)
+        XCTAssertEqual(
+            outline.outlineView.menu(forRow: row).items.map(\.action),
+            [#selector(MainSplitViewController.newMailFolder(_:))]
+        )
+    }
+
+    /// The empty area serves both sections, so it offers both creations.
+    func testTheEmptyAreaOffersNewProjectAndNewFolder() {
+        let (_, _, outline) = makeSplit()
+        XCTAssertEqual(
+            outline.outlineView.menu(forRow: -1).items.map(\.action),
+            [
+                #selector(MainSplitViewController.newProject(_:)),
+                #selector(MainSplitViewController.newMailFolder(_:)),
+            ]
+        )
     }
 
     // MARK: - Helpers

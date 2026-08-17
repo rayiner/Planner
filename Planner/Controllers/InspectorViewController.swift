@@ -8,13 +8,12 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     let model: ModelController
     let selection: SelectionModel
 
-    private let titleLabel = NSTextField(labelWithString: "Select a task to edit its note")
+    private let titleField = InspectorTitleField()
     private let captionLabel = NSTextField(labelWithString: "")
-    private let completedCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private var completedCheckbox: NSButton { titleField.completedButton }
     private let hasDeadlineCheckbox = NSButton(checkboxWithTitle: "Due date", target: nil, action: nil)
     private let datePicker = NSDatePicker()
     private let dueCaptionLabel = NSTextField(labelWithString: "")
-    private let titleRow = NSStackView()
     private let deadlineRow = NSStackView()
     /// "From: <subject>" on a task made from a message. A button rather than a
     /// label because it is also the way back to the message it came from.
@@ -106,6 +105,18 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         bindToCurrentSelection()
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        titleField.preferredToolbarWidth = max(120, view.bounds.width - 20)
+    }
+
+    /// Hosted in the inspector's toolbar slot. Not in the pane: the name
+    /// belongs with the chrome, the way the calendar title sits over the grid.
+    var titleToolbarView: NSView {
+        loadViewIfNeeded()
+        return titleField
+    }
+
     override func viewWillDisappear() {
         super.viewWillDisappear()
         flushPendingNote()
@@ -119,14 +130,8 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     }
 
     private func configureControls() {
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 2
-        titleLabel.cell?.truncatesLastVisibleLine = true
-        titleLabel.alignment = .left
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.isEnabled = false
+        titleField.completedButton.target = self
+        titleField.completedButton.action = #selector(completedChanged(_:))
 
         captionLabel.lineBreakMode = .byTruncatingTail
         captionLabel.maximumNumberOfLines = 1
@@ -134,30 +139,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         captionLabel.font = .systemFont(ofSize: 13)
         captionLabel.textColor = .secondaryLabelColor
         captionLabel.isHidden = true
-
-        // Same circle/check control the outline row uses, so the two places you
-        // can complete a task look like the same affordance.
-        let symbol = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        completedCheckbox.setButtonType(.toggle)
-        completedCheckbox.isBordered = false
-        completedCheckbox.title = ""
-        completedCheckbox.imagePosition = .imageOnly
-        completedCheckbox.imageScaling = .scaleProportionallyDown
-        completedCheckbox.image = NSImage(systemSymbolName: "circle", accessibilityDescription: "Mark complete")?
-            .withSymbolConfiguration(symbol)
-        completedCheckbox.alternateImage = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Completed")?
-            .withSymbolConfiguration(symbol)
-        completedCheckbox.contentTintColor = .tertiaryLabelColor
-        completedCheckbox.setAccessibilityLabel("Completed")
-        completedCheckbox.target = self
-        completedCheckbox.action = #selector(completedChanged(_:))
-        completedCheckbox.isEnabled = false
-        completedCheckbox.isHidden = true
-        completedCheckbox.setContentHuggingPriority(.required, for: .horizontal)
-        NSLayoutConstraint.activate([
-            completedCheckbox.widthAnchor.constraint(equalToConstant: 17),
-            completedCheckbox.heightAnchor.constraint(equalToConstant: 17),
-        ])
 
         hasDeadlineCheckbox.font = .systemFont(ofSize: 13)
         hasDeadlineCheckbox.target = self
@@ -184,7 +165,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         dueCaptionLabel.isHidden = true
         dueCaptionLabel.lineBreakMode = .byTruncatingTail
         dueCaptionLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        // In a narrow inspector the caption yields before the date field does.
         dueCaptionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // Bold / italic / underline. `refusesFirstResponder` keeps the caret in
@@ -263,7 +243,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
     private func layoutContent() {
         // Stack rows with detachesHiddenViews so a hidden checkbox leaves no gap.
-        configureRow(titleRow, views: [completedCheckbox, titleLabel], spacing: 6)
         configureRow(deadlineRow, views: [hasDeadlineCheckbox, datePicker, dueCaptionLabel], spacing: 8)
         deadlineRow.isHidden = true
 
@@ -285,7 +264,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         sourceMessageButton.action = #selector(MainSplitViewController.revealSourceMessage(_:))
 
         let stack = NSStackView(views: [
-            titleRow,
             captionLabel,
             sourceMessageButton,
             deadlineRow,
@@ -303,8 +281,8 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         view.addSubview(stack)
 
         // The notes field absorbs slack when it is showing; otherwise the spacer
-        // does, so a project's title stays pinned to the top of the pane instead
-        // of drifting to the middle.
+        // does, so a project's caption stays pinned to the top of the pane
+        // instead of drifting to the middle.
         notesScrollView.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
         notesScrollView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         bottomSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(100), for: .vertical)
@@ -315,7 +293,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            titleRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
             captionLabel.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
             deadlineRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
             notesScrollView.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
@@ -429,11 +406,14 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
     private func pushEmpty() {
         isUpdatingUI = true
-        defer { isUpdatingUI = false }
+        defer {
+            titleField.refreshTitleInset()
+            isUpdatingUI = false
+        }
 
-        titleLabel.stringValue = "Select a task to edit its note"
-        titleLabel.isEnabled = false
-        titleLabel.textColor = .secondaryLabelColor
+        titleField.stringValue = "Select a task to edit its note"
+        titleField.isEnabled = false
+        titleField.textColor = .secondaryLabelColor
         captionLabel.isHidden = true
         sourceMessageButton.isHidden = true
         completedCheckbox.isHidden = true
@@ -453,11 +433,14 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
     private func pushProject(_ project: Project) {
         isUpdatingUI = true
-        defer { isUpdatingUI = false }
+        defer {
+            titleField.refreshTitleInset()
+            isUpdatingUI = false
+        }
 
-        titleLabel.stringValue = project.title
-        titleLabel.isEnabled = true
-        titleLabel.textColor = .labelColor
+        titleField.stringValue = project.title
+        titleField.isEnabled = true
+        titleField.textColor = .labelColor
         let count = descendantTaskCount(of: project)
         captionLabel.stringValue = count == 1 ? "1 task" : "\(count) tasks"
         captionLabel.isHidden = false
@@ -479,11 +462,14 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
     private func pushTask(_ task: TaskItem, replaceNotes: Bool) {
         isUpdatingUI = true
-        defer { isUpdatingUI = false }
+        defer {
+            titleField.refreshTitleInset()
+            isUpdatingUI = false
+        }
 
-        titleLabel.stringValue = task.title
-        titleLabel.isEnabled = true
-        titleLabel.textColor = .labelColor
+        titleField.stringValue = task.title
+        titleField.isEnabled = true
+        titleField.textColor = .labelColor
         captionLabel.isHidden = true
         updateSourceMessageChip(for: task)
         completedCheckbox.isHidden = false
@@ -499,9 +485,11 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             datePicker.isEnabled = true
             let overdue = !task.isCompleted && calendar.isOverdue(deadline)
             datePicker.textColor = overdue ? .systemRed : .labelColor
-            if let caption = task.isCompleted ? nil : calendar.relativeDeadlineLabel(for: deadline) {
-                dueCaptionLabel.stringValue = caption
-                dueCaptionLabel.textColor = overdue ? .systemRed : .secondaryLabelColor
+            // Today / Tomorrow were noise next to a date the picker already
+            // shows. Overdue stays: the picker going red is easy to miss.
+            if overdue {
+                dueCaptionLabel.stringValue = "Overdue"
+                dueCaptionLabel.textColor = .systemRed
                 dueCaptionLabel.isHidden = false
             } else {
                 dueCaptionLabel.isHidden = true
@@ -541,22 +529,19 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     /// A day has a note and nothing else: no completion flag, no due date.
     private func pushDay(_ day: Date, replaceNotes: Bool) {
         isUpdatingUI = true
-        defer { isUpdatingUI = false }
+        defer {
+            titleField.refreshTitleInset()
+            isUpdatingUI = false
+        }
 
         let formatter = DateFormatter()
         formatter.calendar = Calendar.current
         sourceMessageButton.isHidden = true
         formatter.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
-        titleLabel.stringValue = formatter.string(from: day)
-        titleLabel.isEnabled = true
-        titleLabel.textColor = .labelColor
-
-        if let caption = Calendar.current.relativeDeadlineLabel(for: day), caption != "Overdue" {
-            captionLabel.stringValue = caption
-            captionLabel.isHidden = false
-        } else {
-            captionLabel.isHidden = true
-        }
+        titleField.stringValue = formatter.string(from: day)
+        titleField.isEnabled = true
+        titleField.textColor = .labelColor
+        captionLabel.isHidden = true
 
         completedCheckbox.isHidden = true
         completedCheckbox.isEnabled = false
@@ -877,10 +862,12 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 }
 
 extension InspectorViewController {
-    var test_title: String { titleLabel.stringValue }
-    var test_titleEnabled: Bool { titleLabel.isEnabled }
+    var test_title: String { titleField.stringValue }
+    var test_titleEnabled: Bool { titleField.isEnabled }
     var test_caption: String { captionLabel.stringValue }
     var test_captionHidden: Bool { captionLabel.isHidden }
+    var test_dueCaption: String { dueCaptionLabel.stringValue }
+    var test_dueCaptionHidden: Bool { dueCaptionLabel.isHidden }
     var test_completedHidden: Bool { completedCheckbox.isHidden }
     var test_completedState: NSControl.StateValue { completedCheckbox.state }
     var test_deadlineRowHidden: Bool { deadlineRow.isHidden }
@@ -927,5 +914,107 @@ extension InspectorViewController {
 extension InspectorViewController {
     var test_sourceMessageChip: String? {
         sourceMessageButton.isHidden ? nil : sourceMessageButton.title
+    }
+}
+
+/// Name + optional completion circle, hosted as a toolbar text field so the
+/// unified toolbar does not draw a control capsule around it — the same
+/// reason `TitleStatusField` is a text field rather than a stack.
+private final class InspectorTitleField: NSTextField {
+    let completedButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private static let buttonSize: CGFloat = 17
+    private static let spacing: CGFloat = 6
+    private static let barHeight: CGFloat = 22
+
+    /// Width the toolbar should give this field: the inspector pane, so the
+    /// name sits over the note rather than hugging the string. Constraints,
+    /// not `NSToolbarItem.minSize` — that API is deprecated and the item
+    /// measures its view from these.
+    var preferredToolbarWidth: CGFloat = 220 {
+        didSet {
+            guard abs(preferredToolbarWidth - oldValue) > 0.5 else { return }
+            widthConstraint.constant = preferredToolbarWidth
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    private var widthConstraint: NSLayoutConstraint!
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 220, height: Self.barHeight))
+        cell = InspectorTitleCell(textCell: "")
+        isEditable = false
+        isSelectable = false
+        isBezeled = false
+        drawsBackground = false
+        refusesFirstResponder = true
+        lineBreakMode = .byTruncatingTail
+        maximumNumberOfLines = 1
+        cell?.truncatesLastVisibleLine = true
+        alignment = .left
+        font = .systemFont(ofSize: 13, weight: .semibold)
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        stringValue = "Select a task to edit its note"
+        isEnabled = false
+
+        let symbol = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        completedButton.setButtonType(.toggle)
+        completedButton.isBordered = false
+        completedButton.title = ""
+        completedButton.imagePosition = .imageOnly
+        completedButton.imageScaling = .scaleProportionallyDown
+        completedButton.image = NSImage(systemSymbolName: "circle", accessibilityDescription: "Mark complete")?
+            .withSymbolConfiguration(symbol)
+        completedButton.alternateImage = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Completed")?
+            .withSymbolConfiguration(symbol)
+        completedButton.contentTintColor = .tertiaryLabelColor
+        completedButton.setAccessibilityLabel("Completed")
+        completedButton.isEnabled = false
+        completedButton.isHidden = true
+        completedButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(completedButton)
+
+        widthConstraint = widthAnchor.constraint(equalToConstant: 220)
+        NSLayoutConstraint.activate([
+            widthConstraint,
+            heightAnchor.constraint(equalToConstant: Self.barHeight),
+            completedButton.widthAnchor.constraint(equalToConstant: Self.buttonSize),
+            completedButton.heightAnchor.constraint(equalToConstant: Self.buttonSize),
+            completedButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            completedButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    fileprivate func refreshTitleInset() {
+        (cell as? InspectorTitleCell)?.leadingInset = completedButton.isHidden
+            ? 0 : Self.buttonSize + Self.spacing
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: preferredToolbarWidth, height: Self.barHeight)
+    }
+}
+
+private final class InspectorTitleCell: NSTextFieldCell {
+    var leadingInset: CGFloat = 0
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        var inset = super.titleRect(forBounds: rect)
+        inset.origin.x += leadingInset
+        inset.size.width = max(0, inset.size.width - leadingInset)
+        return inset
+    }
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        titleRect(forBounds: rect)
     }
 }

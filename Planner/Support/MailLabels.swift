@@ -97,9 +97,18 @@ enum MailLabels {
         return trimmed.isEmpty ? nil : "To: \(trimmed)"
     }
 
-    static func attachmentsLine(names: [String]) -> String? {
-        guard !names.isEmpty else { return nil }
-        return names.joined(separator: ", ")
+    /// Says *that* a message carries attachments, not what they are: Planner
+    /// never opens one, so a list of names is dead weight in the header. The
+    /// count is kept when the source could read the list; a rights-protected
+    /// message refuses its list but still flags the header, and gets the
+    /// uncounted line.
+    static func attachmentsIndicator(count: Int, hasAttachments: Bool) -> String? {
+        guard hasAttachments || count > 0 else { return nil }
+        switch count {
+        case 0: return "Has attachments"
+        case 1: return "1 attachment"
+        default: return "\(count) attachments"
+        }
     }
 
     /// The banner that says a message is on its way out of the window.
