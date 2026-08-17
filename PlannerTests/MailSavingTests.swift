@@ -898,6 +898,213 @@ final class MailSavingTests: PersistenceTestCase {
         XCTAssertEqual(menu?.items.last?.title, "Remove from Recent Mail")
     }
 
+    // MARK: - Find, Escape, and list focus
+
+    func testFindShowPanelFocusesTheFieldInAFolderAndIsANoOpOnRecentMail() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        try model.saveMessage(
+            recentMessage(id: 5),
+            detail: .fixture(id: 5, messageID: "<five@x>"),
+            into: folder
+        )
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        let window = try XCTUnwrap(windows.first)
+        window.makeKeyAndOrderFront(nil)
+        list.view.layoutSubtreeIfNeeded()
+
+        let show = findItem(.showFindPanel)
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(
+            split.test_isCommandEnabled(for: #selector(NSTextView.performFindPanelAction(_:))),
+            "Find is validated by tag, not isCommandEnabled"
+        )
+        split.performFindPanelAction(show)
+        let responder = window.firstResponder
+        XCTAssertTrue(
+            responder === list.test_searchField
+                || responder === list.test_searchField.currentEditor()
+                || responder is MailSearchFieldEditor,
+            "⌘F should focus the search field, got \(String(describing: responder))"
+        )
+
+        selection.selectMailbox(.recent)
+        list.reload()
+        XCTAssertFalse(split.validateMenuItem(show))
+        split.performFindPanelAction(show)
+        let after = window.firstResponder
+        XCTAssertFalse(
+            after === list.test_searchField || after is MailSearchFieldEditor
+        )
+    }
+
+    func testFindIsEnabledOverTheReaderBodyEvenInRecentMail() {
+        selection.selectMailbox(.recent)
+        split.firstResponderForValidation = list.outlineView
+        XCTAssertFalse(split.validateMenuItem(findItem(.showFindPanel)))
+        XCTAssertFalse(split.validateMenuItem(findItem(.next)))
+
+        split.firstResponderForValidation = reader.test_bodyView
+        XCTAssertTrue(split.validateMenuItem(findItem(.showFindPanel)))
+        XCTAssertTrue(split.validateMenuItem(findItem(.next)))
+        XCTAssertTrue(split.validateMenuItem(findItem(.previous)))
+        XCTAssertTrue(split.validateMenuItem(findItem(.setFindString)))
+    }
+
+    func testFindNextPreviousAndUseSelectionValidateOnlyOverAFindBarTextView() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+
+        let show = findItem(.showFindPanel)
+        let next = findItem(.next)
+        let previous = findItem(.previous)
+        let useSelection = findItem(.setFindString)
+
+        split.firstResponderForValidation = list.outlineView
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+        XCTAssertFalse(split.validateMenuItem(previous))
+        XCTAssertFalse(split.validateMenuItem(useSelection))
+
+        split.firstResponderForValidation = list.test_searchField
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+        XCTAssertFalse(split.validateMenuItem(previous))
+        XCTAssertFalse(split.validateMenuItem(useSelection))
+
+        split.firstResponderForValidation = list.test_searchField.searchEditor
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+        XCTAssertFalse(split.validateMenuItem(previous))
+        XCTAssertFalse(split.validateMenuItem(useSelection))
+
+        split.firstResponderForValidation = reader.test_bodyView
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertTrue(split.validateMenuItem(next))
+        XCTAssertTrue(split.validateMenuItem(previous))
+        XCTAssertTrue(split.validateMenuItem(useSelection))
+    }
+
+    func testTheSearchFieldEditorIsAFieldEditorAndSwallowsFindAsSelectAll() {
+        let editor = list.test_searchField.searchEditor
+        XCTAssertTrue(editor.isFieldEditor)
+        XCTAssertFalse(editor.isRichText)
+
+        editor.string = "ada report"
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.performFindPanelAction(findItem(.showFindPanel))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: editor.string.utf16.count))
+
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.performFindPanelAction(findItem(.next))
+        XCTAssertEqual(editor.selectedRange().length, 0)
+    }
+
+    func testTheReaderBodyAndNotesUseTheFindBar() {
+        XCTAssertTrue(reader.test_bodyView.usesFindBar)
+        XCTAssertTrue(reader.test_bodyView.isIncrementalSearchingEnabled)
+        let notes = NoteTextView(frame: .zero)
+        XCTAssertTrue(notes.usesFindBar)
+        XCTAssertTrue(notes.isIncrementalSearchingEnabled)
+    }
+
+    func testRemoveIsGatedWhileTheSearchFieldIsEditing() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        let saved = try model.saveMessage(
+            recentMessage(id: 5),
+            detail: .fixture(id: 5, messageID: "<five@x>"),
+            into: folder
+        )
+        selection.selectMailbox(.folder(folder.uuid))
+        selection.selectMessage(.saved(saved.uuid))
+
+        XCTAssertTrue(split.validateMenuItem(item(#selector(MainSplitViewController.removeSelectedMessage(_:)))))
+
+        split.firstResponderForValidation = list.test_searchField.searchEditor
+        XCTAssertFalse(split.validateMenuItem(item(#selector(MainSplitViewController.removeSelectedMessage(_:)))))
+        XCTAssertFalse(split.validateMenuItem(item(#selector(MainSplitViewController.deleteSelected(_:)))))
+
+        split.removeSelectedMessage(nil)
+        XCTAssertEqual(model.messages(in: folder).map(\.uuid), [saved.uuid])
+
+        split.firstResponderForValidation = nil
+        split.removeSelectedMessage(confirmed: true)
+        XCTAssertTrue(model.messages(in: folder).isEmpty)
+    }
+
+    func testEscapeInTheEmptySearchFieldResignsToTheList() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        windows.first?.makeFirstResponder(list.test_searchField)
+
+        let handled = list.control(
+            list.test_searchField,
+            textView: list.test_searchField.searchEditor,
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertTrue(windows.first?.firstResponder === list.outlineView)
+    }
+
+    func testEscapeInTheSearchFieldWithAQueryDoesNotStealCancel() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.test_searchField.stringValue = "ada"
+        let handled = list.control(
+            list.test_searchField,
+            textView: list.test_searchField.searchEditor,
+            doCommandBy: #selector(NSResponder.cancelOperation(_:))
+        )
+        XCTAssertFalse(handled)
+        XCTAssertEqual(list.test_searchField.stringValue, "ada")
+    }
+
+    func testEscapeInTheOutlineClearsAnActiveQueryAndLeavesAnEmptyOne() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        try model.saveMessage(
+            recentMessage(id: 5),
+            detail: .fixture(id: 5, body: "ada report", messageID: "<five@x>"),
+            into: folder
+        )
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        list.test_applySearch("ada")
+        XCTAssertEqual(list.test_searchQuery, "ada")
+
+        list.outlineView.keyDown(with: Self.escapeKeyEvent())
+        XCTAssertEqual(list.test_searchQuery, "")
+        XCTAssertEqual(list.test_searchField.stringValue, "")
+
+        list.outlineView.keyDown(with: Self.escapeKeyEvent())
+        XCTAssertEqual(list.test_searchQuery, "")
+    }
+
+    private func findItem(_ action: NSFindPanelAction) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "",
+            action: #selector(NSTextView.performFindPanelAction(_:)),
+            keyEquivalent: ""
+        )
+        item.tag = Int(action.rawValue)
+        return item
+    }
+
+    private static func escapeKeyEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false,
+            keyCode: 53
+        )!
+    }
+
     private func prepareListForScrollAssertions() {
         windows.first?.setFrame(NSRect(x: 0, y: 0, width: 1100, height: 400), display: true)
         windows.first?.layoutIfNeeded()

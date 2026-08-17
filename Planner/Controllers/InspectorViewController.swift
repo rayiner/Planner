@@ -20,7 +20,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private let sourceMessageButton = NSButton()
     private let formatBar = NSSegmentedControl()
     private let notesScrollView = NSScrollView()
-    private let notesTextView = NoteTextView()
+    private let notesTextView = NoteTextView(frame: .zero)
 
     private enum FormatSegment: Int, CaseIterable {
         case bold, italic, underline, bulletList, numberedList

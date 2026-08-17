@@ -168,6 +168,8 @@ final class MailReaderViewController: NSViewController {
         bodyView.textContainerInset = NSSize(width: 4, height: 4)
         bodyView.isAutomaticLinkDetectionEnabled = false
         bodyView.textContainer?.widthTracksTextView = true
+        bodyView.usesFindBar = true
+        bodyView.isIncrementalSearchingEnabled = true
 
         bodyScrollView.documentView = bodyView
         bodyScrollView.hasVerticalScroller = true
@@ -459,6 +461,7 @@ extension MailReaderViewController {
     var test_sender: String { senderField.stringValue }
     var test_date: String { dateField.stringValue }
     var test_body: String { bodyView.string }
+    var test_bodyView: NSTextView { bodyView }
     var test_bodyHasBold: Bool {
         var found = false
         let storage = bodyView.textStorage

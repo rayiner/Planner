@@ -736,6 +736,7 @@ final class MainSplitViewController: NSSplitViewController {
     /// them without ceremony. Dismissing destroys nothing at all, so it never
     /// asks.
     @objc func removeSelectedMessage(_ sender: Any?) {
+        if isFirstResponderTextInput { return }
         if let envelope = dismissableRecentMessage {
             dismiss(envelope)
             return
@@ -986,6 +987,10 @@ final class MainSplitViewController: NSSplitViewController {
 
     /// Tests assign a responder so validation/actions see a text input without hosting the split in a window.
     var firstResponderForValidation: NSResponder?
+
+    func test_isCommandEnabled(for action: Selector?) -> Bool {
+        isCommandEnabled(for: action)
+    }
 
     /// Tests pass a result to skip the confirmation sheet.
     func deleteSelected(confirmed: Bool) {
@@ -1306,7 +1311,7 @@ final class MainSplitViewController: NSSplitViewController {
             // and this gate has to agree with the dispatch about which half.
             // Over Recent Mail that is only an *unsaved* message: a filed one
             // keeps its row so the "Saved to …" chip stays visible.
-            guard isMailMode else { return false }
+            guard isMailMode, !isFirstResponderTextInput else { return false }
             return dismissableRecentMessage != nil || selectedSavedMessage != nil
         case #selector(fileMessageToFolder(_:)):
             // Enabled whenever either half would be: the dispatch above and
@@ -1383,11 +1388,44 @@ final class MainSplitViewController: NSSplitViewController {
     /// submenu's entries do the work — but it needs a selector so validation
     /// can populate it and gate it on Recent Mail being open.
     @objc func showMailWindowMenu(_ sender: Any?) {}
+
+    @objc func performFindPanelAction(_ sender: Any?) {
+        let tag = (sender as? NSMenuItem)?.tag ?? Int(NSFindPanelAction.showFindPanel.rawValue)
+        guard tag == Int(NSFindPanelAction.showFindPanel.rawValue) else { return }
+        mailListViewController.focusSearchField()
+    }
+
+    private func isFindPanelActionEnabled(tag: Int) -> Bool {
+        if isEditingMailSearchField { return tag == Int(NSFindPanelAction.showFindPanel.rawValue) }
+        if isFindBarTextViewFirstResponder { return true }
+        if isMailMode, selection.selectedFolderUUID != nil {
+            return tag == Int(NSFindPanelAction.showFindPanel.rawValue)
+        }
+        return false
+    }
+
+    /// The field editor, not the field, is first responder while typing.
+    private var isEditingMailSearchField: Bool {
+        let responder = firstResponderForValidation ?? view.window?.firstResponder
+        return responder is MailSearchField || responder is MailSearchFieldEditor
+    }
+
+    /// Reader body / inspector note. Checked after the search editor so it cannot pass.
+    private var isFindBarTextViewFirstResponder: Bool {
+        guard !isEditingMailSearchField else { return false }
+        let responder = firstResponderForValidation ?? view.window?.firstResponder
+        return responder is NSTextView
+    }
 }
 
 extension MainSplitViewController: NSMenuItemValidation, NSToolbarItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         updateModeMenuItemState(item)
+        // Same ObjC selector the xib wires (`performFindPanelAction:`). Do not
+        // fold this into `isCommandEnabled` — that helper cannot see `item.tag`.
+        if item.action == #selector(NSTextView.performFindPanelAction(_:)) {
+            return isFindPanelActionEnabled(tag: item.tag)
+        }
         return isCommandEnabled(for: item.action)
     }
 

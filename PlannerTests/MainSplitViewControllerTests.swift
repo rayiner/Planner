@@ -493,6 +493,48 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(getInfo))
     }
 
+    func testFindPanelActionsValidateByTagNotIsCommandEnabled() throws {
+        let selection = SelectionModel(defaults: isolatedDefaults())
+        selection.setMode(.mail)
+        let (split, _) = makeSplit(selection: selection)
+        split.mailListViewController.loadViewIfNeeded()
+        split.mailReaderViewController.loadViewIfNeeded()
+
+        let show = findItem(.showFindPanel)
+        let next = findItem(.next)
+        XCTAssertFalse(split.test_isCommandEnabled(for: show.action))
+
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        split.firstResponderForValidation = split.mailListViewController.outlineView
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+
+        split.firstResponderForValidation = split.mailListViewController.test_searchField
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+
+        split.firstResponderForValidation = split.mailListViewController.test_searchField.searchEditor
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertFalse(split.validateMenuItem(next))
+
+        split.firstResponderForValidation = split.mailReaderViewController.test_bodyView
+        XCTAssertTrue(split.validateMenuItem(show))
+        XCTAssertTrue(split.validateMenuItem(next))
+        XCTAssertTrue(split.validateMenuItem(findItem(.previous)))
+        XCTAssertTrue(split.validateMenuItem(findItem(.setFindString)))
+    }
+
+    private func findItem(_ action: NSFindPanelAction) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "",
+            action: #selector(NSTextView.performFindPanelAction(_:)),
+            keyEquivalent: ""
+        )
+        item.tag = Int(action.rawValue)
+        return item
+    }
+
     private func makeSplit(
         selection: SelectionModel? = nil
     ) -> (MainSplitViewController, OutlineViewController) {

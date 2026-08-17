@@ -9,6 +9,22 @@ final class NoteTextView: NSTextView {
     /// re-sync. Selection alone does not go through `textDidChange`.
     var onFormattingStateChange: (() -> Void)?
 
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        usesFindBar = true
+        isIncrementalSearchingEnabled = true
+    }
+
+    convenience override init(frame frameRect: NSRect) {
+        self.init(frame: frameRect, textContainer: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        usesFindBar = true
+        isIncrementalSearchingEnabled = true
+    }
+
     // MARK: - Formatting commands
 
     @objc func toggleBold(_ sender: Any?) {

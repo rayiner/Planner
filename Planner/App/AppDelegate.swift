@@ -102,4 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         persistence?.viewContext.undoManager
     }
+
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        // TitleTextField and the inspector keep the window’s default editor.
+        (client as? MailSearchField)?.searchEditor
+    }
 }

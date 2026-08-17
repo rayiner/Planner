@@ -104,6 +104,7 @@
 		A400000000000000000000001A /* MailHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001A /* MailHeaderTests.swift */; };
 		A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001B /* OutlookMailSourceTests.swift */; };
 		A400000000000000000000001C /* MailListOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001C /* MailListOutlineView.swift */; };
+		A4000000000000000000000034 /* MailSearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000034 /* MailSearchField.swift */; };
 		A400000000000000000000001D /* MailSavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001D /* MailSavingTests.swift */; };
 		A400000000000000000000001E /* MailTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001E /* MailTaskTests.swift */; };
 		A400000000000000000000001F /* MailStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001F /* MailStatusTests.swift */; };
@@ -221,6 +222,7 @@
 		A300000000000000000000001A /* MailHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaderTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001B /* OutlookMailSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSourceTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001C /* MailListOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListOutlineView.swift; sourceTree = "<group>"; };
+		A3000000000000000000000034 /* MailSearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSearchField.swift; sourceTree = "<group>"; };
 		A300000000000000000000001D /* MailSavingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSavingTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001E /* MailTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailTaskTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001F /* MailStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStatusTests.swift; sourceTree = "<group>"; };
@@ -418,6 +420,7 @@
 			isa = PBXGroup;
 			children = (
 				A300000000000000000000001C /* MailListOutlineView.swift */,
+				A3000000000000000000000034 /* MailSearchField.swift */,
 				A30000000000000000000019 /* PlannerOutlineView.swift */,
 				A30000000000000000000023 /* NoteTextView.swift */,
 				A3000000000000000000001D /* TitleTextField.swift */,
@@ -542,6 +545,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A400000000000000000000001C /* MailListOutlineView.swift in Sources */,
+				A4000000000000000000000034 /* MailSearchField.swift in Sources */,
 				A4000000000000000000000019 /* OutlookMailSource.swift in Sources */,
 				A4000000000000000000000018 /* OutlookMailDecoder.swift in Sources */,
 				A4000000000000000000000017 /* OutlookMailScripting.swift in Sources */,

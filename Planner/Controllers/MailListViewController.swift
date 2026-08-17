@@ -76,7 +76,7 @@ final class MailListViewController: NSViewController {
     private let calendar: Calendar
     private let now: () -> Date
     private let emptyStateLabel = NSTextField(labelWithString: "")
-    private let searchField = NSSearchField()
+    private let searchField = MailSearchField()
     private let searchHeader = NSView()
     private var groups: [MailDateGroup] = []
     /// Top-level rows in folder mode: thread parents and lone messages, mixed,
@@ -577,12 +577,34 @@ final class MailListViewController: NSViewController {
             view.window?.makeFirstResponder(outlineView)
         }
     }
+
+    func focusSearchField() {
+        guard isShowingFolder else { return }
+        view.window?.makeFirstResponder(searchField)
+        searchField.currentEditor()?.selectAll(nil)
+    }
+
+    /// Outline Escape. Returns false so an empty query still reaches `super.keyDown`.
+    func clearSearchFromOutline() -> Bool {
+        guard isSearching else { return false }
+        clearSearch(resigning: false)
+        return true
+    }
 }
 
 extension MailListViewController: NSSearchFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
         guard obj.object as? NSSearchField === searchField else { return }
         scheduleSearchApply(searchField.stringValue)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === searchField,
+              commandSelector == #selector(cancelOperation(_:)),
+              SavedMessageSearch.tokens(in: searchField.stringValue).isEmpty
+        else { return false }
+        clearSearch(resigning: true)
+        return true
     }
 }
 
@@ -956,6 +978,8 @@ extension MailListViewController {
     var test_searchQuery: String { searchQuery }
     var test_searchFetchFailed: Bool { searchFetchFailed }
     var test_searchFieldMaximumRecents: Int { searchField.maximumRecents }
+    var test_searchField: MailSearchField { searchField }
     func test_applySearch(_ raw: String) { applySearch(raw) }
     func test_clearSearch(resigning: Bool) { clearSearch(resigning: resigning) }
+    func test_focusSearchField() { focusSearchField() }
 }

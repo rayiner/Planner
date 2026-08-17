@@ -222,6 +222,31 @@ final class MailStatusTests: PersistenceTestCase {
         NSMenuItem(title: "", action: action, keyEquivalent: "")
     }
 
+    func testTheFindSubmenuSitsBetweenSelectAllAndSpelling() throws {
+        let menu = try XCTUnwrap(loadMainMenu())
+        let edit = try XCTUnwrap(menu.items.first { $0.title == "Edit" }?.submenu)
+        let titles = edit.items.map(\.title)
+        let selectAll = try XCTUnwrap(titles.firstIndex(of: "Select All"))
+        let find = try XCTUnwrap(titles.firstIndex(of: "Find"))
+        let spelling = try XCTUnwrap(titles.firstIndex(of: "Spelling and Grammar"))
+        XCTAssertLessThan(selectAll, find)
+        XCTAssertLessThan(find, spelling)
+
+        let items = try XCTUnwrap(edit.items[find].submenu).items
+        XCTAssertEqual(
+            items.map(\.title),
+            ["Find…", "Find Next", "Find Previous", "Use Selection for Find"]
+        )
+        XCTAssertEqual(items.map(\.keyEquivalent), ["f", "g", "G", "e"])
+        XCTAssertEqual(items.map(\.tag), [
+            Int(NSFindPanelAction.showFindPanel.rawValue),
+            Int(NSFindPanelAction.next.rawValue),
+            Int(NSFindPanelAction.previous.rawValue),
+            Int(NSFindPanelAction.setFindString.rawValue),
+        ])
+        XCTAssertTrue(items.allSatisfy { $0.action == #selector(NSTextView.performFindPanelAction(_:)) })
+    }
+
     /// Two items sharing a key equivalent means one of them silently never
     /// fires.
     func testNoTwoMenuItemsShareAKeyEquivalent() throws {

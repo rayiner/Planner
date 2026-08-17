@@ -30,6 +30,11 @@ final class MailListOutlineView: NSOutlineView {
         if isDelete, isBare, selectedRow >= 0, sendToResponderChain(Self.removeSelector) {
             return
         }
+        // Escape clears an active folder search; an empty query falls through.
+        let isEscape = event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}"
+        if isEscape, isBare, sendClearSearchIfActive() {
+            return
+        }
         super.keyDown(with: event)
     }
 
@@ -44,6 +49,18 @@ final class MailListOutlineView: NSOutlineView {
             if current !== self, current.responds(to: selector) {
                 current.perform(selector, with: self)
                 return true
+            }
+            responder = current.nextResponder
+        }
+        return false
+    }
+
+    /// Same walk as Delete, but typed so an empty query can fall through to `super`.
+    private func sendClearSearchIfActive() -> Bool {
+        var responder: NSResponder? = self
+        while let current = responder {
+            if let list = current as? MailListViewController {
+                return list.clearSearchFromOutline()
             }
             responder = current.nextResponder
         }
