@@ -92,6 +92,9 @@ final class MainSplitViewController: NSSplitViewController {
         mailReaderViewController.conversationProvider = { [weak self] uuid in
             self?.mailListViewController.conversation(containing: uuid) ?? []
         }
+        mailListViewController.conversationChromeNeedsRefresh = { [weak self] in
+            self?.mailReaderViewController.refreshConversationPosition()
+        }
     }
 
     @available(*, unavailable)
@@ -1148,7 +1151,9 @@ final class MainSplitViewController: NSSplitViewController {
         case .tasks:
             window.makeFirstResponder(outlineViewController.outlineView)
         case .mail:
-            window.makeFirstResponder(mailListViewController.view)
+            // The search field is the first descendant of the list pane; focusing
+            // the pane itself would land the caret in Search after Tasks → folder.
+            window.makeFirstResponder(mailListViewController.outlineView)
         }
     }
 

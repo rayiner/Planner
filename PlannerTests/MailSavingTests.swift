@@ -307,6 +307,42 @@ final class MailSavingTests: PersistenceTestCase {
         XCTAssertEqual(reader.test_conversationPosition, "Message 1 of 2 in this conversation")
     }
 
+    func testSearchingAThreadFlattensItAndClearingRestoresTheConversation() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        _ = try saveThread(into: folder)
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        XCTAssertEqual(list.test_threadSubjects, ["Expert report"])
+
+        list.test_applySearch("expert")
+        XCTAssertTrue(list.test_threadSubjects.isEmpty)
+        XCTAssertEqual(list.test_folderRows.count, 2)
+        XCTAssertTrue(list.test_folderRows.allSatisfy { $0 is SavedMessageRow })
+        XCTAssertEqual(list.test_indentationPerLevel, 0)
+
+        list.test_clearSearch(resigning: false)
+        XCTAssertEqual(list.test_threadSubjects, ["Expert report"])
+        XCTAssertEqual(list.test_folderRows.count, 1)
+        XCTAssertEqual(list.test_indentationPerLevel, MailListViewController.conversationIndent)
+    }
+
+    /// Flattening keeps the same `.saved` uuid, so rebind never runs; the
+    /// list has to tell the reader the conversation is gone.
+    func testSearchingHidesConversationChromeAndClearingRestoresIt() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        let messages = try saveThread(into: folder)
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        selection.selectMessage(.saved(messages[1].uuid))
+        XCTAssertEqual(reader.test_conversationPosition, "Message 1 of 2 in this conversation")
+
+        list.test_applySearch("expert")
+        XCTAssertNil(reader.test_conversationPosition)
+
+        list.test_clearSearch(resigning: false)
+        XCTAssertEqual(reader.test_conversationPosition, "Message 1 of 2 in this conversation")
+    }
+
     func testALoneMessageHasNoConversationLine() throws {
         let folder = try model.createMailFolder(name: "Celerity")
         let saved = try model.saveMessage(
@@ -558,6 +594,67 @@ final class MailSavingTests: PersistenceTestCase {
         XCTAssertNil(list.outlineView.menu(forRow: -1), "the empty area offered a menu")
     }
 
+    // MARK: - Folder search
+
+    /// reloadData jumps to the top; a query edit is a new list, a did-save
+    /// with the same query is not.
+    func testChangingTheQueryResetsScrollAndASaveWithTheSameQueryDoesNot() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        for index in 1...24 {
+            try model.saveMessage(
+                message(id: Int64(index), minutesAgo: index),
+                detail: .fixture(id: Int64(index), messageID: "<\(index)@x>"),
+                into: folder
+            )
+        }
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        prepareListForScrollAssertions()
+
+        list.test_applySearch("ada")
+        scrollFolderListToLastRow()
+        let originBefore = list.test_scrollOrigin
+        XCTAssertGreaterThan(originBefore.y, 0, "the list never left the top, so this is not a scroll test")
+
+        list.test_applySearch("deposition")
+        XCTAssertEqual(list.test_scrollOrigin.y, 0, accuracy: 1)
+
+        scrollFolderListToLastRow()
+        let originAfterScroll = list.test_scrollOrigin
+        XCTAssertGreaterThan(originAfterScroll.y, 0)
+
+        try model.saveMessage(
+            message(id: 100, minutesAgo: 0),
+            detail: .fixture(id: 100, messageID: "<hundred@x>"),
+            into: folder
+        )
+        XCTAssertEqual(list.test_searchQuery, "deposition")
+        XCTAssertEqual(list.test_scrollOrigin.y, originAfterScroll.y, accuracy: 1)
+    }
+
+    func testATrailingSpaceDoesNotReloadOrJumpScroll() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        for index in 1...24 {
+            try model.saveMessage(
+                message(id: Int64(index), minutesAgo: index),
+                detail: .fixture(id: Int64(index), messageID: "<\(index)@x>"),
+                into: folder
+            )
+        }
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        prepareListForScrollAssertions()
+
+        list.test_applySearch("ada")
+        scrollFolderListToLastRow()
+        let originBefore = list.test_scrollOrigin
+        XCTAssertGreaterThan(originBefore.y, 0, "the list never left the top, so this is not a scroll test")
+
+        list.test_applySearch("ada ")
+        XCTAssertEqual(list.test_searchQuery, "ada ")
+        XCTAssertEqual(list.test_scrollOrigin.y, originBefore.y, accuracy: 1)
+    }
+
     // MARK: - Participants
 
     func testThreadParticipantsAreDeduplicatedAndTruncated() {
@@ -799,6 +896,17 @@ final class MailSavingTests: PersistenceTestCase {
             #selector(MainSplitViewController.removeSelectedMessage(_:))
         )
         XCTAssertEqual(menu?.items.last?.title, "Remove from Recent Mail")
+    }
+
+    private func prepareListForScrollAssertions() {
+        windows.first?.setFrame(NSRect(x: 0, y: 0, width: 1100, height: 400), display: true)
+        windows.first?.layoutIfNeeded()
+        list.view.layoutSubtreeIfNeeded()
+    }
+
+    private func scrollFolderListToLastRow() {
+        guard let last = list.test_folderRows.last else { return }
+        list.outlineView.scrollRowToVisible(list.outlineView.row(forItem: last))
     }
 
     private func item(_ action: Selector) -> NSMenuItem {

@@ -337,6 +337,14 @@ final class MailReaderViewController: NSViewController {
         showBody(html: message.htmlBody, plain: message.body ?? "")
     }
 
+    /// Search flattens the list without changing `.message`, so rebind never runs.
+    func refreshConversationPosition() {
+        guard let uuid = displayedSavedUUID,
+              let message = model.savedMessage(uuid: uuid)
+        else { return }
+        updateConversationPosition(for: message)
+    }
+
     private func updateConversationPosition(for message: SavedMessage) {
         let conversation = conversationProvider?(message.uuid) ?? []
         guard conversation.count > 1,

@@ -75,13 +75,14 @@ final class MailListTests: PersistenceTestCase {
         hour: Int = 9,
         subject: String = "Subject",
         sender: String = "Ada Lovelace",
+        address: String = "ada@example.com",
         isRead: Bool = false
     ) -> MailMessage {
         MailMessage(
             id: id,
             subject: subject,
             senderName: sender,
-            senderAddress: "ada@example.com",
+            senderAddress: address,
             receivedAt: listCalendar.date(byAdding: .hour, value: hour, to: day(dayOffset))!,
             isRead: isRead
         )
@@ -400,5 +401,91 @@ final class MailListTests: PersistenceTestCase {
         await load([message(id: 1, dayOffset: 0, hour: 9)])
         selection.selectMessage(.recent(1))
         XCTAssertNil(reader.test_expiryText)
+    }
+
+    // MARK: - Folder search
+
+    func testTheSearchFieldIsHiddenOnRecentMailAndShownInAFolder() throws {
+        XCTAssertTrue(list.test_searchFieldIsHidden)
+        XCTAssertEqual(list.test_searchFieldMaximumRecents, 0)
+
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        XCTAssertFalse(list.test_searchFieldIsHidden)
+
+        selection.selectMailbox(.recent)
+        XCTAssertTrue(list.test_searchFieldIsHidden)
+    }
+
+    func testSearchEmptyStatesDistinguishAMissFromAnEmptyFolder() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        XCTAssertTrue(list.test_isEmptyStateVisible)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptyFolder(name: "Celerity"))
+
+        try model.saveMessage(
+            message(id: 9, dayOffset: 0, subject: "Deposition prep"),
+            detail: .fixture(id: 9, messageID: "<nine@x>"),
+            into: folder
+        )
+        list.test_applySearch("no-such-token")
+        XCTAssertTrue(list.test_isEmptyStateVisible)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptySearch)
+
+        list.test_applySearch("deposition")
+        XCTAssertFalse(list.test_isEmptyStateVisible)
+    }
+
+    /// Reloads must not wipe the query; a save is the reload that happens
+    /// while the user is still looking at these results.
+    func testASaveKeepsTheAppliedSearchQuery() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        try model.saveMessage(
+            message(id: 1, dayOffset: 0, subject: "Ada report"),
+            detail: .fixture(id: 1, messageID: "<one@x>"),
+            into: folder
+        )
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        list.test_applySearch("ada")
+        XCTAssertEqual(list.test_searchQuery, "ada")
+
+        try model.saveMessage(
+            message(id: 2, dayOffset: 0, subject: "Ada again"),
+            detail: .fixture(id: 2, messageID: "<two@x>"),
+            into: folder
+        )
+        XCTAssertEqual(list.test_searchQuery, "ada")
+    }
+
+    func testAQueryThatDropsTheOpenMessageClearsSelectionAndAHitKeepsIt() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        let ada = try model.saveMessage(
+            message(id: 1, dayOffset: 0, subject: "Ada report"),
+            detail: .fixture(id: 1, messageID: "<one@x>"),
+            into: folder
+        )
+        let grace = try model.saveMessage(
+            message(
+                id: 2,
+                dayOffset: 0,
+                subject: "Grace notes",
+                sender: "Grace Hopper",
+                address: "grace@example.com"
+            ),
+            detail: .fixture(id: 2, messageID: "<two@x>"),
+            into: folder
+        )
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+
+        selection.selectMessage(.saved(grace.uuid))
+        list.test_applySearch("ada")
+        XCTAssertNil(selection.message)
+
+        selection.selectMessage(.saved(ada.uuid))
+        list.test_applySearch("report")
+        XCTAssertEqual(selection.message, .saved(ada.uuid))
     }
 }

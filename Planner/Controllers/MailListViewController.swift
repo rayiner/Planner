@@ -76,6 +76,8 @@ final class MailListViewController: NSViewController {
     private let calendar: Calendar
     private let now: () -> Date
     private let emptyStateLabel = NSTextField(labelWithString: "")
+    private let searchField = NSSearchField()
+    private let searchHeader = NSView()
     private var groups: [MailDateGroup] = []
     /// Top-level rows in folder mode: thread parents and lone messages, mixed,
     /// ordered by their newest message.
@@ -86,6 +88,16 @@ final class MailListViewController: NSViewController {
     static let conversationIndent: CGFloat = 16
 
     private var isShowingFolder: Bool { !selection.isRecentMailSelected }
+
+    private var searchQuery = ""
+    private var searchDebounce: Task<Void, Never>?
+    /// Distinct from an empty hit set so the empty state can name a failed fetch.
+    private var searchFetchFailed = false
+    var conversationChromeNeedsRefresh: (() -> Void)?
+
+    private var isSearching: Bool {
+        isShowingFolder && !SavedMessageSearch.tokens(in: searchQuery).isEmpty
+    }
 
     init(
         persistence: PersistenceController,
@@ -110,6 +122,7 @@ final class MailListViewController: NSViewController {
     }
 
     deinit {
+        searchDebounce?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -122,6 +135,26 @@ final class MailListViewController: NSViewController {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        searchField.controlSize = .small
+        searchField.sendsWholeSearchString = true
+        searchField.sendsSearchStringImmediately = false
+        searchField.placeholderString = MailLabels.searchPlaceholder
+        searchField.maximumRecents = 0
+        searchField.target = self
+        searchField.action = #selector(searchFieldAction)
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+
+        searchHeader.translatesAutoresizingMaskIntoConstraints = false
+        searchHeader.addSubview(searchField)
+        searchHeader.addSubview(separator)
+        searchHeader.setContentHuggingPriority(.required, for: .vertical)
+        searchHeader.setContentCompressionResistancePriority(.required, for: .vertical)
+
         emptyStateLabel.font = .systemFont(ofSize: 13, weight: .regular)
         emptyStateLabel.textColor = .secondaryLabelColor
         emptyStateLabel.alignment = .center
@@ -130,21 +163,36 @@ final class MailListViewController: NSViewController {
         emptyStateLabel.refusesFirstResponder = true
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        let stack = NSStackView(views: [searchHeader, scrollView])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 0
+        stack.detachesHiddenViews = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
         let root = NSView()
-        root.addSubview(scrollView)
+        root.addSubview(stack)
         root.addSubview(emptyStateLabel)
         view = root
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            emptyStateLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            emptyStateLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: -20),
-            emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 24),
-            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
+            searchField.leadingAnchor.constraint(equalTo: searchHeader.leadingAnchor, constant: 8),
+            searchField.trailingAnchor.constraint(equalTo: searchHeader.trailingAnchor, constant: -8),
+            searchField.topAnchor.constraint(equalTo: searchHeader.topAnchor, constant: 6),
+            searchField.bottomAnchor.constraint(equalTo: separator.topAnchor, constant: -6),
+            separator.leadingAnchor.constraint(equalTo: searchHeader.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: searchHeader.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: searchHeader.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: root.safeAreaLayoutGuide.bottomAnchor),
+            emptyStateLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+            emptyStateLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor, constant: -20),
+            emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 24),
+            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -24),
         ])
+        updateSearchHeaderVisibility()
     }
 
     override func viewDidLoad() {
@@ -219,6 +267,7 @@ final class MailListViewController: NSViewController {
             // A different mailbox is a different list. Keeping the previous
             // clip origin would land in the middle of the new one.
             reload(preservingScroll: false)
+            updateSearchHeaderVisibility()
             return
         }
         guard fields.contains(SelectionField.message.rawValue) else { return }
@@ -231,7 +280,8 @@ final class MailListViewController: NSViewController {
         // Days in Recent Mail are outline parents only so they can float;
         // indenting them would look like a hierarchy the timeline is not.
         // A conversation *is* a hierarchy, so folder mode turns indent on.
-        outlineView.indentationPerLevel = isShowingFolder ? Self.conversationIndent : 0
+        outlineView.indentationPerLevel = (isShowingFolder && !isSearching) ? Self.conversationIndent : 0
+        updateSearchHeaderVisibility()
         // Which conversations were open, so a reload — one arrives on every
         // save — does not collapse the thread the user is reading.
         let expanded = Set(folderRows.compactMap { row -> String? in
@@ -264,8 +314,15 @@ final class MailListViewController: NSViewController {
         if let clipView, let savedOrigin {
             clipView.scroll(to: savedOrigin)
             outlineView.enclosingScrollView?.reflectScrolledClipView(clipView)
+        } else if !preservingScroll, let clipView {
+            // reloadData keeps the origin when the row count does not change.
+            clipView.scroll(to: .zero)
+            outlineView.enclosingScrollView?.reflectScrolledClipView(clipView)
         }
         updateEmptyState()
+        if isShowingFolder {
+            conversationChromeNeedsRefresh?()
+        }
     }
 
     /// A folder's messages, threaded. Recomputed on every reload rather than
@@ -276,7 +333,18 @@ final class MailListViewController: NSViewController {
               let folder = model.mailFolders().first(where: { $0.uuid == uuid })
         else { return [] }
 
-        let messages = model.messages(in: folder)
+        let messages: [SavedMessage]
+        do {
+            messages = try model.messages(in: folder, matching: searchQuery)
+            searchFetchFailed = false
+        } catch {
+            searchFetchFailed = true
+            return []
+        }
+        if isSearching {
+            return messages.map(SavedMessageRow.init)
+        }
+
         let byUUID = Dictionary(uniqueKeysWithValues: messages.map { ($0.uuid, $0) })
         let threads = MailThreading.threads(messages.map(\.threadingMessage))
 
@@ -345,6 +413,10 @@ final class MailListViewController: NSViewController {
                 days: mail.windowDays,
                 hasSource: mail.sourceID != NullMailSource().sourceID
             )
+        case .folder where searchFetchFailed:
+            emptyStateLabel.stringValue = MailLabels.searchFailed
+        case .folder where isSearching:
+            emptyStateLabel.stringValue = MailLabels.emptySearch
         case .folder:
             emptyStateLabel.stringValue = MailLabels.emptyFolder(name: selectedFolderName ?? "")
         }
@@ -451,6 +523,64 @@ final class MailListViewController: NSViewController {
         guard let row = savedRow(uuid: uuid) else { return [] }
         guard let thread = thread(containing: row) else { return [row.message] }
         return thread.rows.map(\.message)
+    }
+
+    // MARK: - Search
+
+    private func updateSearchHeaderVisibility() {
+        searchHeader.isHidden = selection.isRecentMailSelected
+    }
+
+    @objc private func searchFieldAction(_ sender: NSSearchField) {
+        // Return / search button / cancel only — sendsWholeSearchString is true,
+        // so this is not a keystroke.
+        searchDebounce?.cancel()
+        applySearch(sender.stringValue)
+    }
+
+    private func scheduleSearchApply(_ raw: String) {
+        searchDebounce?.cancel()
+        if SavedMessageSearch.tokens(in: raw).isEmpty {
+            applySearch(raw)
+            return
+        }
+        searchDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.applySearch(raw)
+        }
+    }
+
+    private func applySearch(_ raw: String) {
+        let nextTokens = SavedMessageSearch.tokens(in: raw)
+        let currentTokens = SavedMessageSearch.tokens(in: searchQuery)
+        // Raw `"ada"` → `"ada "` is the same predicate. Comparing strings would
+        // still reload(preservingScroll: false) and jump the clip view.
+        guard nextTokens != currentTokens else {
+            searchQuery = raw
+            return
+        }
+        searchQuery = raw
+        reload(preservingScroll: false)
+        if isSearching, case let .saved(uuid)? = selection.message, savedRow(uuid: uuid) == nil {
+            selection.selectMessage(nil)
+        }
+    }
+
+    func clearSearch(resigning: Bool) {
+        searchDebounce?.cancel()
+        searchField.stringValue = ""
+        applySearch("")
+        if resigning {
+            view.window?.makeFirstResponder(outlineView)
+        }
+    }
+}
+
+extension MailListViewController: NSSearchFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        guard obj.object as? NSSearchField === searchField else { return }
+        scheduleSearchApply(searchField.stringValue)
     }
 }
 
@@ -820,4 +950,10 @@ extension MailListViewController {
         else { return false }
         return cell.test_showsConversationTick
     }
+    var test_searchFieldIsHidden: Bool { searchHeader.isHidden }
+    var test_searchQuery: String { searchQuery }
+    var test_searchFetchFailed: Bool { searchFetchFailed }
+    var test_searchFieldMaximumRecents: Int { searchField.maximumRecents }
+    func test_applySearch(_ raw: String) { applySearch(raw) }
+    func test_clearSearch(resigning: Bool) { clearSearch(resigning: resigning) }
 }

@@ -186,6 +186,13 @@ enum MailLabels {
         "Nothing saved in “\(name)” yet."
     }
 
+    static let searchPlaceholder = "Search"
+
+    /// The field already shows what the user typed. Echoing it here turns a
+    /// pasted paragraph into a wrapping manifesto in a 300-pt pane.
+    static let emptySearch = "No messages match this search."
+    static let searchFailed = "Couldn’t search this folder."
+
     static let noMessageSelected = "Select a message to read it."
 
     // MARK: - Accessibility

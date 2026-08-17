@@ -745,6 +745,21 @@ final class ModeSwitchTests: PersistenceTestCase {
 
     // MARK: - Titles
 
+    /// The search field is the first descendant of the list pane. Landing
+    /// there after Tasks → folder would steal the keyboard from the outline.
+    func testSelectingAFolderFromTasksFocusesTheOutlineNotTheSearchField() throws {
+        let (split, selection) = makeSplit()
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        split.view.layoutSubtreeIfNeeded()
+
+        let window = try XCTUnwrap(split.view.window)
+        XCTAssertTrue(
+            window.firstResponder === split.mailListViewController.outlineView,
+            "mode switch landed focus on \(String(describing: window.firstResponder))"
+        )
+    }
+
     func testTheWindowTitleFollowsTheMode() {
         let (split, selection) = makeSplit()
         let tasksTitle = split.test_windowTitle
