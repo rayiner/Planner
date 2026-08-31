@@ -9,21 +9,17 @@ final class NoteTextView: NSTextView {
     /// re-sync. Selection alone does not go through `textDidChange`.
     var onFormattingStateChange: (() -> Void)?
 
-    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: container)
-        usesFindBar = true
-        isIncrementalSearchingEnabled = true
-    }
-
-    convenience override init(frame frameRect: NSRect) {
-        self.init(frame: frameRect, textContainer: nil)
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        usesFindBar = true
-        isIncrementalSearchingEnabled = true
-    }
+    // No initialisers: every one of `NSTextView`'s is inherited, so the view is
+    // always built by AppKit's own path, which is what creates the TextKit 2
+    // stack — and the only path that creates a stack at all. Overriding
+    // `init(frame:textContainer:)` to pass a nil container left text storage,
+    // container and layout all nil: the note drew nothing and swallowed every
+    // click. Per-view policy such as `usesFindBar` belongs with the owner's
+    // other configuration, not in an initialiser here.
+    //
+    // Note for future work: reading `layoutManager` anywhere on this view drops
+    // it to TextKit 1 for good. `textStorage` and `textContainer`, which the
+    // formatting code below uses throughout, are safe in either mode.
 
     // MARK: - Formatting commands
 

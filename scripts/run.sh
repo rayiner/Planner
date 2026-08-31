@@ -55,8 +55,13 @@ if [[ ! -d "$PROJECT" ]]; then
     exit 1
 fi
 
+# -allowProvisioningUpdates: every build signs for real now (the iCloud
+# entitlements make a development certificate mandatory, not optional), so a
+# fresh checkout needs Xcode to fetch or renew the provisioning profile rather
+# than failing with "No profiles for 'com.rihscb.Planner' were found".
 xcode() {
-    xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION" "$@"
+    xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION" \
+        -allowProvisioningUpdates "$@"
 }
 
 # Ask xcodebuild where the product lands rather than hardcoding a DerivedData

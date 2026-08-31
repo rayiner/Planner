@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var selection: SelectionModel?
     private var events: EventCoordinator?
     private var mail: MailCoordinator?
+    private var sync: CloudSyncController?
 
     override init() {
         super.init()
@@ -19,7 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let persistence = PersistenceController()
+        // The one place the real preference is read. Everywhere else — tests
+        // included — gets `.disabled` unless it asks otherwise, so nothing
+        // starts talking to iCloud by default.
+        let persistence = PersistenceController(syncSettings: CloudSyncSettings(defaults: .standard))
         if let error = persistence.storeLoadError {
             let alert = NSAlert()
             alert.messageText = "Planner couldn’t open its library."
@@ -41,7 +45,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             envelopeStore: .live,
             dismissalStore: .live
         )
+        // Mirroring, the history drain behind it, and the repair pass that
+        // follows an import. Inert when sync is off.
+        let sync = CloudSyncController(persistence: persistence)
+        sync.start()
+        #if DEBUG
+        persistence.initializeCloudKitSchemaIfRequested()
+        #endif
+
         self.persistence = persistence
+        self.sync = sync
         self.model = model
         self.selection = selection
         self.events = events
@@ -102,9 +115,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         persistence?.viewContext.undoManager
     }
+}
 
-    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-        // TitleTextField and the inspector keep the window’s default editor.
-        (client as? MailSearchField)?.searchEditor
+// MARK: - iCloud sync menu
+
+extension AppDelegate: NSMenuItemValidation {
+    /// Flips the preference and says when it takes effect.
+    ///
+    /// It genuinely cannot take effect now: a loaded store cannot be re-pointed
+    /// at a CloudKit container, and tearing the coordinator down mid-session
+    /// would invalidate every managed object the outline, calendar, inspector
+    /// and mail list are holding. Telling the user "next launch" is the honest
+    /// version of that; silently doing nothing is not.
+    @IBAction func toggleCloudSync(_ sender: Any?) {
+        let settings = CloudSyncSettings(defaults: .standard)
+        let enabling = !settings.isEnabled
+        CloudSyncSettings.setEnabled(enabling, in: .standard)
+
+        let alert = NSAlert()
+        alert.messageText = enabling
+            ? "Planner will sync with iCloud the next time it opens."
+            : "Planner will stop syncing with iCloud the next time it opens."
+        alert.informativeText = enabling
+            ? """
+            Your projects, tasks, day notes and saved mail will be mirrored to \
+            your private iCloud database and kept in step on every Mac signed \
+            in to the same account. Nothing is uploaded until Planner reopens.
+            """
+            : """
+            Everything stays on this Mac. What is already in iCloud is left \
+            there; other Macs keep their copies.
+            """
+        alert.addButton(withTitle: "OK")
+        if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+    }
+
+    /// The status line. Disabled on purpose — it is a readout, not a command —
+    /// but it still needs an action so that `validateMenuItem` is asked about
+    /// it and can refresh the title on the way to returning false.
+    @IBAction func showCloudSyncStatus(_ sender: Any?) {}
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(toggleCloudSync(_:)):
+            // The checkmark tracks the *preference*, not the running state:
+            // between switching it on and relaunching, the answer to "is
+            // Planner set to sync?" is yes even though nothing is mirroring
+            // yet. The status line below carries the running state.
+            item.state = CloudSyncSettings(defaults: .standard).isEnabled ? .on : .off
+            return true
+        case #selector(showCloudSyncStatus(_:)):
+            item.title = sync?.status.menuDescription ?? CloudSyncStatus.off.menuDescription
+            return false
+        default:
+            return true
+        }
     }
 }

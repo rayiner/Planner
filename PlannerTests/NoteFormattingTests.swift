@@ -179,6 +179,22 @@ final class NoteFormattingTests: XCTestCase {
 
 @MainActor
 final class NoteTextViewFormattingTests: XCTestCase {
+    /// A text view built without a text container has no storage or layout
+    /// manager: it draws nothing and refuses every click and keystroke, which
+    /// reads as "the note field cannot be edited".
+    func testTheViewIsBuiltWithAWorkingTextKitStack() {
+        let view = NoteTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+
+        XCTAssertNotNil(view.textContainer)
+        XCTAssertNotNil(view.textStorage)
+        // Not `layoutManager`: reading it is what drops the view to TextKit 1.
+        XCTAssertNotNil(view.textLayoutManager, "AppKit's own initialiser gives TextKit 2")
+
+        view.isEditable = true
+        view.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(view.string, "typed")
+    }
+
     func testTogglingBoldOnASelectionAffectsOnlyThatRange() {
         let view = makeView("hello world")
         view.setSelectedRange(NSRange(location: 0, length: 5))

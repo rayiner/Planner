@@ -514,10 +514,6 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(show))
         XCTAssertFalse(split.validateMenuItem(next))
 
-        split.firstResponderForValidation = split.mailListViewController.test_searchField.searchEditor
-        XCTAssertTrue(split.validateMenuItem(show))
-        XCTAssertFalse(split.validateMenuItem(next))
-
         split.firstResponderForValidation = split.mailReaderViewController.test_bodyView
         XCTAssertTrue(split.validateMenuItem(show))
         XCTAssertTrue(split.validateMenuItem(next))

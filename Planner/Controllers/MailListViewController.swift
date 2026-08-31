@@ -76,7 +76,7 @@ final class MailListViewController: NSViewController {
     private let calendar: Calendar
     private let now: () -> Date
     private let emptyStateLabel = NSTextField(labelWithString: "")
-    private let searchField = MailSearchField()
+    private let searchField = NSSearchField()
     private let searchHeader = NSView()
     private var groups: [MailDateGroup] = []
     /// Top-level rows in folder mode: thread parents and lone messages, mixed,
@@ -172,7 +172,8 @@ final class MailListViewController: NSViewController {
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let root = NSView()
+        let root = MailListPaneView()
+        root.list = self
         root.addSubview(stack)
         root.addSubview(emptyStateLabel)
         view = root
@@ -257,6 +258,15 @@ final class MailListViewController: NSViewController {
             selector: #selector(contextDidSave(_:)),
             name: .NSManagedObjectContextDidSave,
             object: persistence.viewContext
+        )
+        // A CloudKit import is merged into the view context, and a merge is not
+        // a save — so the notification above never fires for mail that arrived
+        // from another Mac.
+        center.addObserver(
+            self,
+            selector: #selector(contextDidSave(_:)),
+            name: .plannerStoreDidChangeRemotely,
+            object: nil
         )
     }
 
@@ -582,6 +592,22 @@ final class MailListViewController: NSViewController {
         guard isShowingFolder else { return }
         view.window?.makeFirstResponder(searchField)
         searchField.currentEditor()?.selectAll(nil)
+    }
+
+    /// The field itself or its (stock) field editor. Used so Find / Remove
+    /// validation can see that Search is focused without a custom editor class.
+    func isSearchFieldResponder(_ responder: NSResponder?) -> Bool {
+        responder === searchField || responder === searchField.currentEditor()
+    }
+
+    /// ⌘F while the field is editing selects all. The window’s field editor
+    /// would otherwise open Find on this one-line field.
+    func handleFindKeyEquivalent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == .command, event.charactersIgnoringModifiers == "f" else { return false }
+        guard searchField.currentEditor() != nil else { return false }
+        searchField.currentEditor()?.selectAll(nil)
+        return true
     }
 
     /// Outline Escape. Returns false so an empty query still reaches `super.keyDown`.
@@ -978,8 +1004,18 @@ extension MailListViewController {
     var test_searchQuery: String { searchQuery }
     var test_searchFetchFailed: Bool { searchFetchFailed }
     var test_searchFieldMaximumRecents: Int { searchField.maximumRecents }
-    var test_searchField: MailSearchField { searchField }
+    var test_searchField: NSSearchField { searchField }
     func test_applySearch(_ raw: String) { applySearch(raw) }
     func test_clearSearch(resigning: Bool) { clearSearch(resigning: resigning) }
     func test_focusSearchField() { focusSearchField() }
+}
+
+/// Intercepts ⌘F before the stock field editor can open Find on the search field.
+private final class MailListPaneView: NSView {
+    weak var list: MailListViewController?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if list?.handleFindKeyEquivalent(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }

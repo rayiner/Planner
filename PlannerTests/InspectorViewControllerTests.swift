@@ -420,6 +420,14 @@ final class InspectorNotesLayoutTests: PersistenceTestCase {
         XCTAssertEqual(inspector.test_notesContainerHeight, .greatestFiniteMagnitude)
     }
 
+    func testTheNoteUsesTheFindBarAndTextKit2() {
+        let inspector = makeLayoutInspector()
+        XCTAssertTrue(inspector.test_notesUsesFindBar)
+        // A note built without AppKit's own initialiser has no text stack at
+        // all and cannot be edited; TextKit 2 is the proof it went the right way.
+        XCTAssertTrue(inspector.test_notesUsesTextKit2)
+    }
+
     func testNotesTakeTheAvailableHeightWhenShownAndYieldItWhenHidden() throws {
         let selection = SelectionModel()
         let inspector = makeLayoutInspector(selection: selection)
@@ -447,5 +455,41 @@ final class InspectorNotesLayoutTests: PersistenceTestCase {
         )
         inspector.loadViewIfNeeded()
         return inspector
+    }
+}
+
+
+@MainActor
+final class InspectorNoteClickTests: PersistenceTestCase {
+    /// Clicking an empty note has to reach the text view. The placeholder sits
+    /// on top of it, at exactly the spot anyone clicks to start typing.
+    func testClickingWhereThePlaceholderDrawsReachesTheNote() throws {
+        let selection = SelectionModel()
+        let inspector = InspectorViewController(persistence: persistence, model: model, selection: selection)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = inspector
+        defer { window.contentViewController = nil }
+
+        let project = try model.createProject()
+        let task = try model.createTask(in: project)
+        selection.selectNode(uuid: task.uuid)
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(inspector.test_notesEditable)
+        XCTAssertTrue(
+            inspector.test_viewHitWhereThePlaceholderDraws() is NoteTextView,
+            "the placeholder must not swallow the click that starts editing"
+        )
+
+        // And the focused view really takes text, end to end into the store.
+        XCTAssertTrue(window.makeFirstResponder(inspector.test_viewHitWhereThePlaceholderDraws()))
+        inspector.test_setNotes("typed by hand")
+        XCTAssertTrue(inspector.flushPendingNote())
+        XCTAssertEqual(model.noteText(of: task).string, "typed by hand")
     }
 }

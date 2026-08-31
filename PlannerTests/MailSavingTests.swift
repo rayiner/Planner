@@ -10,7 +10,6 @@ final class MailSavingTests: PersistenceTestCase {
     private var selection: SelectionModel!
     private var windows: [NSWindow] = []
     private var undoVendor: UndoManagerVendor?
-    private var fieldEditorVendor: FieldEditorVendor?
 
     private var coordinator: MailCoordinator { split.mail }
     private var list: MailListViewController { split.mailListViewController }
@@ -49,7 +48,6 @@ final class MailSavingTests: PersistenceTestCase {
         for window in windows { window.contentViewController = nil }
         windows = []
         undoVendor = nil
-        fieldEditorVendor = nil
         split = nil
         selection = nil
         source = nil
@@ -912,9 +910,6 @@ final class MailSavingTests: PersistenceTestCase {
         selection.selectMailbox(.folder(folder.uuid))
         list.reload()
         let window = try XCTUnwrap(windows.first)
-        let vendor = FieldEditorVendor()
-        fieldEditorVendor = vendor
-        window.delegate = vendor
         window.makeKeyAndOrderFront(nil)
         list.view.layoutSubtreeIfNeeded()
 
@@ -926,11 +921,11 @@ final class MailSavingTests: PersistenceTestCase {
         )
         split.performFindPanelAction(show)
         XCTAssertTrue(
-            list.test_searchField.currentEditor() === list.test_searchField.searchEditor,
-            "focusSearchField should install MailSearchFieldEditor"
+            list.test_searchField.currentEditor() != nil,
+            "⌘F should focus the search field, got \(String(describing: window.firstResponder))"
         )
         XCTAssertTrue(
-            window.firstResponder is MailSearchFieldEditor,
+            list.isSearchFieldResponder(window.firstResponder),
             "⌘F should focus the search field, got \(String(describing: window.firstResponder))"
         )
 
@@ -938,10 +933,7 @@ final class MailSavingTests: PersistenceTestCase {
         list.reload()
         XCTAssertFalse(split.validateMenuItem(show))
         split.performFindPanelAction(show)
-        let after = window.firstResponder
-        XCTAssertFalse(
-            after === list.test_searchField || after is MailSearchFieldEditor
-        )
+        XCTAssertFalse(list.isSearchFieldResponder(window.firstResponder))
     }
 
     func testFindIsEnabledOverTheReaderBodyEvenInRecentMail() {
@@ -978,7 +970,8 @@ final class MailSavingTests: PersistenceTestCase {
         XCTAssertFalse(split.validateMenuItem(previous))
         XCTAssertFalse(split.validateMenuItem(useSelection))
 
-        split.firstResponderForValidation = list.test_searchField.searchEditor
+        XCTAssertTrue(windows.first?.makeFirstResponder(list.test_searchField) == true)
+        split.firstResponderForValidation = list.test_searchField.currentEditor()
         XCTAssertTrue(split.validateMenuItem(show))
         XCTAssertFalse(split.validateMenuItem(next))
         XCTAssertFalse(split.validateMenuItem(previous))
@@ -991,33 +984,48 @@ final class MailSavingTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(useSelection))
     }
 
-    func testTheSearchFieldEditorIsAFieldEditorAndSwallowsFindAsSelectAll() {
-        let editor = list.test_searchField.searchEditor
-        XCTAssertTrue(editor.isFieldEditor)
-        XCTAssertFalse(editor.isRichText)
+    func testTheSearchFieldAcceptsTyping() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        let window = try XCTUnwrap(windows.first)
+        window.makeKeyAndOrderFront(nil)
+        list.view.layoutSubtreeIfNeeded()
 
-        editor.string = "ada report"
-        editor.setSelectedRange(NSRange(location: 0, length: 0))
-        editor.performFindPanelAction(findItem(.showFindPanel))
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: editor.string.utf16.count))
-
-        editor.setSelectedRange(NSRange(location: 0, length: 0))
-        editor.performFindPanelAction(findItem(.next))
-        XCTAssertEqual(editor.selectedRange().length, 0)
-
-        // The live menu target is the editor, not the split.
-        XCTAssertTrue(editor.validateUserInterfaceItem(findItem(.showFindPanel)))
-        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.next)))
-        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.previous)))
-        XCTAssertFalse(editor.validateUserInterfaceItem(findItem(.setFindString)))
+        XCTAssertTrue(window.makeFirstResponder(list.test_searchField))
+        let editor = try XCTUnwrap(list.test_searchField.currentEditor() as? NSText)
+        editor.insertText("ada")
+        XCTAssertEqual(list.test_searchField.stringValue, "ada")
     }
 
-    func testTheReaderBodyAndNotesUseTheFindBar() {
+    func testCommandFInTheSearchFieldSelectsAll() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        let window = try XCTUnwrap(windows.first)
+        window.makeKeyAndOrderFront(nil)
+        list.view.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(window.makeFirstResponder(list.test_searchField))
+        let editor = try XCTUnwrap(list.test_searchField.currentEditor() as? NSTextView)
+        editor.string = "ada report"
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+
+        XCTAssertTrue(list.view.performKeyEquivalent(with: Self.commandFKeyEvent()))
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: editor.string.utf16.count))
+    }
+
+    func testCommandFOverTheListIsNotSwallowedByThePane() throws {
+        let folder = try model.createMailFolder(name: "Celerity")
+        selection.selectMailbox(.folder(folder.uuid))
+        list.reload()
+        windows.first?.makeFirstResponder(list.outlineView)
+        XCTAssertFalse(list.view.performKeyEquivalent(with: Self.commandFKeyEvent()))
+    }
+
+    func testTheReaderBodyUsesTheFindBar() {
         XCTAssertTrue(reader.test_bodyView.usesFindBar)
         XCTAssertTrue(reader.test_bodyView.isIncrementalSearchingEnabled)
-        let notes = NoteTextView(frame: .zero)
-        XCTAssertTrue(notes.usesFindBar)
-        XCTAssertTrue(notes.isIncrementalSearchingEnabled)
     }
 
     func testRemoveIsGatedWhileTheSearchFieldIsEditing() throws {
@@ -1032,7 +1040,9 @@ final class MailSavingTests: PersistenceTestCase {
 
         XCTAssertTrue(split.validateMenuItem(item(#selector(MainSplitViewController.removeSelectedMessage(_:)))))
 
-        split.firstResponderForValidation = list.test_searchField.searchEditor
+        let window = try XCTUnwrap(windows.first)
+        XCTAssertTrue(window.makeFirstResponder(list.test_searchField))
+        split.firstResponderForValidation = nil
         XCTAssertFalse(split.validateMenuItem(item(#selector(MainSplitViewController.removeSelectedMessage(_:)))))
         XCTAssertFalse(split.validateMenuItem(item(#selector(MainSplitViewController.deleteSelected(_:)))))
 
@@ -1049,10 +1059,11 @@ final class MailSavingTests: PersistenceTestCase {
         selection.selectMailbox(.folder(folder.uuid))
         list.reload()
         windows.first?.makeFirstResponder(list.test_searchField)
+        let editor = try XCTUnwrap(list.test_searchField.currentEditor() as? NSTextView)
 
         let handled = list.control(
             list.test_searchField,
-            textView: list.test_searchField.searchEditor,
+            textView: editor,
             doCommandBy: #selector(NSResponder.cancelOperation(_:))
         )
         XCTAssertTrue(handled)
@@ -1065,7 +1076,7 @@ final class MailSavingTests: PersistenceTestCase {
         list.test_searchField.stringValue = "ada"
         let handled = list.control(
             list.test_searchField,
-            textView: list.test_searchField.searchEditor,
+            textView: NSTextView(),
             doCommandBy: #selector(NSResponder.cancelOperation(_:))
         )
         XCTAssertFalse(handled)
@@ -1100,6 +1111,21 @@ final class MailSavingTests: PersistenceTestCase {
         )
         item.tag = Int(action.rawValue)
         return item
+    }
+
+    private static func commandFKeyEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "f",
+            charactersIgnoringModifiers: "f",
+            isARepeat: false,
+            keyCode: 3
+        )!
     }
 
     private static func escapeKeyEvent() -> NSEvent {
@@ -1155,9 +1181,4 @@ private final class UndoManagerVendor: NSObject, NSWindowDelegate {
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undoManager }
 }
 
-/// Stands in for `AppDelegate.windowWillReturnFieldEditor`.
-private final class FieldEditorVendor: NSObject, NSWindowDelegate {
-    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-        (client as? MailSearchField)?.searchEditor
-    }
-}
+

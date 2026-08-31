@@ -26,6 +26,19 @@
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
                             <menuItem title="Settings…" keyEquivalent="," id="BOF-NM-1cW"/>
+                            <menuItem isSeparatorItem="YES" id="iCl-sp-sep0"/>
+                            <menuItem title="Sync with iCloud" id="iCl-sy-togl">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="toggleCloudSync:" target="-1" id="iCl-sy-act0"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Not syncing" enabled="NO" id="iCl-st-atus">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="showCloudSyncStatus:" target="-1" id="iCl-st-act0"/>
+                                </connections>
+                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="wFC-TO-SCJ"/>
                             <menuItem title="Services" id="NMo-om-nkz">
                                 <modifierMask key="keyEquivalentModifierMask"/>

@@ -45,7 +45,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             }
         }
     }
-    private let notesPlaceholder = NSTextField(labelWithString: "Add a note…")
+    private let notesPlaceholder = PlaceholderLabel(labelWithString: "Add a note…")
     /// Shown when a note save fails. Without it a failed flush is silent — the
     /// selection snapping back after a failed switch looked like a UI glitch.
     private let noteSaveErrorLabel = NSTextField(wrappingLabelWithString: "")
@@ -225,6 +225,11 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         // Typed URLs become live links; pasted ones keep theirs through the
         // sanitiser, which whitelists `.link`.
         notesTextView.isAutomaticLinkDetectionEnabled = true
+        // Same as the reader body: command-F over the note means find-in-note,
+        // and the Find submenu routes it here, so give it the in-pane bar
+        // rather than the floating Find panel.
+        notesTextView.usesFindBar = true
+        notesTextView.isIncrementalSearchingEnabled = true
         notesTextView.onFormattingStateChange = { [weak self] in
             self?.updateFormatBar()
         }
@@ -880,6 +885,20 @@ extension InspectorViewController {
     var test_notes: String { notesTextView.string }
     var test_notesAttributed: NSAttributedString { notesContent }
     var test_notesContainerHeight: CGFloat { notesTextView.textContainer?.containerSize.height ?? 0 }
+    /// What a click where the "Add a note…" placeholder draws actually lands on.
+    /// The placeholder overlays the note, so if it hit-tests it swallows the one
+    /// click that should start editing an empty note.
+    func test_viewHitWhereThePlaceholderDraws() -> NSView? {
+        guard let content = view.window?.contentView, let root = content.superview else { return nil }
+        let inPlaceholder = NSPoint(x: 5, y: notesPlaceholder.bounds.midY)
+        let inWindow = notesPlaceholder.convert(inPlaceholder, to: nil)
+        return content.hitTest(root.convert(inWindow, from: nil))
+    }
+
+    var test_notesUsesFindBar: Bool { notesTextView.usesFindBar && notesTextView.isIncrementalSearchingEnabled }
+    /// Deliberately never reads `layoutManager`: that call is what would drop
+    /// the view to TextKit 1, which is the thing this asserts against.
+    var test_notesUsesTextKit2: Bool { notesTextView.textLayoutManager != nil }
     var test_bottomSpacerHidden: Bool { bottomSpacer.isHidden }
     var test_notesSelectedRange: NSRange {
         get { notesTextView.selectedRange() }
@@ -1002,6 +1021,15 @@ private final class InspectorTitleField: NSTextField {
     override var intrinsicContentSize: NSSize {
         NSSize(width: preferredToolbarWidth, height: Self.barHeight)
     }
+}
+
+/// A label that overlays an editable view, so it must never take the mouse:
+/// `NSTextField` swallows `mouseDown` even when it is neither editable nor
+/// selectable, and `refusesFirstResponder` does not stop that — it only keeps
+/// the label out of the key-view loop. Without this, clicking the placeholder
+/// of an empty note did nothing at all.
+private final class PlaceholderLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private final class InspectorTitleCell: NSTextFieldCell {

@@ -1407,7 +1407,7 @@ final class MainSplitViewController: NSSplitViewController {
     /// The field editor, not the field, is first responder while typing.
     private var isEditingMailSearchField: Bool {
         let responder = firstResponderForValidation ?? view.window?.firstResponder
-        return responder is MailSearchField || responder is MailSearchFieldEditor
+        return mailListViewController.isSearchFieldResponder(responder)
     }
 
     /// Reader body / inspector note. Checked after the search editor so it cannot pass.

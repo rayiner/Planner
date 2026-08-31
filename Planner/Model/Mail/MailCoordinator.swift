@@ -127,7 +127,7 @@ final class MailCoordinator {
 
         // Recent Mail is anchored on *today*, so at midnight yesterday's window
         // is one day stale. See `EventCoordinator` for why this is the
-        // selector form rather than the block form.
+        // selector form, and why the @objc entry hops to the main actor.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(dayDidChange),
@@ -143,7 +143,13 @@ final class MailCoordinator {
         NotificationCenter.default.removeObserver(self)
     }
 
-    @objc private func dayDidChange() {
+    @objc nonisolated private func dayDidChange() {
+        Task { @MainActor [weak self] in
+            self?.handleDayRollover()
+        }
+    }
+
+    private func handleDayRollover() {
         PlannerLog.mail.debug("Day rolled over; sliding the mail window")
         refresh()
     }
@@ -463,7 +469,7 @@ final class MailCoordinator {
     // MARK: - Test hooks
 
     /// `NSCalendarDayChanged` cannot be provoked on demand.
-    func test_dayDidChange() { dayDidChange() }
+    func test_dayDidChange() { handleDayRollover() }
     /// A hung source can then be observed without waiting a minute.
     func test_timeoutSeconds(_ seconds: Int) { timeoutSeconds = seconds }
     func test_detailTimeoutSeconds(_ seconds: Int) { detailTimeoutSeconds = seconds }

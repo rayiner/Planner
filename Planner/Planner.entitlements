@@ -1,13 +1,50 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Planner's only entitlements file. There is no local-only variant: every
+	build signs with a real development certificate and carries the iCloud keys.
+
+	That means a checkout does not build without signing set up. Concretely, a
+	developer needs an Apple Developer Program membership, an Apple Development
+	certificate in the login keychain, and DEVELOPMENT_TEAM set on the target.
+	Codesign refuses the iCloud keys below without a development certificate,
+	and it fails the *build*, not the run — "has entitlements that require
+	signing with a development certificate" is what a missing certificate looks
+	like, however unrelated it sounds.
+
+	One gotcha worth knowing, because the error is silent: an Apple Development
+	certificate is issued by WWDR G3, and if only the older (expired) WWDR
+	intermediate is in the keychain the certificate is inert —
+	`security find-identity -v -p codesigning` reports no valid identities and
+	codesign says "unable to build chain to self-signed root". The fix is to
+	install AppleWWDRCAG3.cer from apple.com/certificateauthority.
+-->
 <plist version="1.0">
 <dict>
 	<!-- The App Sandbox key is deliberately absent, not false: reading Outlook
 	     over Apple events needs it off, and the sanctioned scripting-targets
 	     route requires the target app to publish scripting access groups, which
 	     Outlook does not. See DESIGN.md sections 1 and 8.6. -->
-	<!-- Hardened Runtime (not the sandbox) is what gates sending Apple events. -->
+	<!-- Hardened Runtime (not the sandbox) is what gates sending Apple events.
+	     Note that it is genuinely on now: ad-hoc builds used to disable it. -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+
+	<!-- iCloud sync (DESIGN.md, CloudKit appendix). The container identifier
+	     must match CloudSyncSettings.defaultContainerIdentifier; the entitlement
+	     gate refuses to mirror if they ever drift apart. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.rihscb.Planner</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<!-- Push is what makes another Mac's change arrive without a relaunch.
+	     Mirroring still works without it, just lazily. Change to "production"
+	     for a Developer ID or App Store build. -->
+	<key>com.apple.developer.aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

@@ -45,7 +45,7 @@ Pain points a naïve implementation would hit, and that this design exists to av
 - Optional deadline on tasks only; the week grid shows those deadlines; user can set and clear them.
 - Optional `isCompleted` flag on tasks (not projects). Outline checkbox is the primary control; no parent/child rollup. Completed tasks stay on the calendar, dimmed.
 - **Read-only Outlook events** on the week grid, fetched asynchronously and rendered so they cannot be mistaken for tasks (§8.6).
-- Local Core Data store that is CloudKit-ready but does **not** use `NSPersistentCloudKitContainer`.
+- Local Core Data store that is CloudKit-ready but does **not** use `NSPersistentCloudKitContainer`. *(Superseded: mirroring shipped later; see the CloudKit appendix.)*
 - Cascade delete with a confirmation alert.
 - Unit tests for model invariants and month/grid deadline fetches, using an ephemeral SQLite store (`NSSQLiteStoreType` at `/dev/null`), not `NSInMemoryStoreType`.
 
@@ -377,7 +377,7 @@ Toolbar is how a first-run empty store is obviously usable, in addition to File 
 
 ---
 
-### 3. Core Data model (CloudKit-ready, not CloudKit-enabled)
+### 3. Core Data model (CloudKit-ready; mirroring added later — see the CloudKit appendix)
 
 #### 3.1 Entity choice
 
@@ -2053,22 +2053,129 @@ See §13. Incremental PRs below. No flags. Store is disposable during developmen
 - Delete rules are Cascade/Nullify. Avoid Deny later.
 - Duplicate `sortIndex` is legal; `(sortIndex, uuid)` orders siblings after a two-device insert collision.
 
-### What will still have to change later
+### What changed when CloudKit was enabled
 
-1. Capabilities: iCloud + CloudKit entitlements; `com.apple.developer.icloud-container-identifiers`.
-2. Subclass swap: `NSPersistentCloudKitContainer(name: "Planner")`.
-3. `NSPersistentCloudKitContainerOptions` on the store description; `NSPersistentStoreRemoteChangeNotification` handling on a private history queue.
-4. A history consumer that pinches `NSPersistentHistoryToken` in UserDefaults or a local-only entity (non-CloudKit configuration).
-5. Merge policy revisit. Conflict UX.
-6. Initialize schema (`initializeCloudKitSchema`) in a debug-only tool.
-7. iCloud container identifier and entitlements (bundle id is already `com.rihscb.Planner`).
-8. Background context for import; `viewContext` stays main-queue.
-9. Import **repair** (not validation): if both parents set, keep `parentTask` and nil `project`; if neither, delete or attach to a recovery project; break cycles; fill empty titles. Dual-parent xor cannot be a CloudKit constraint.
-10. If any `willSave` is added, skip when `transactionAuthor` is the CloudKit importer.
-11. Testing against two devices / two stores.
-12. Optional later: a `timeZone` attribute next to `deadline` if multi-device day-identity becomes a product issue.
+Everything the appendix above predicted held: `uuid`, `sortIndex`, relationship
+cardinality and the Project/Task split were untouched, and no create-path
+default moved out of `ModelController`. What the work actually took:
 
-Enabling CloudKit should **not** require changing `uuid`, `sortIndex`, relationship cardinality, or splitting Project/Task. It should **not** require rewriting create-path defaults if those stay in `ModelController`.
+1. **Model version `Planner 3`.** Every attribute that was `optional="NO"` with
+   no default became optional — CloudKit records arrive with fields absent, so
+   an attribute the store insists on cannot be filled from a mirrored record.
+   Attributes that already carried a `defaultValueString` were left required.
+   A `uuid` fetch index was added to every entity in the same bump (the
+   `IMPROVEMENTS.md` §169 item, which asked for it "in the CloudKit PR at the
+   latest"). Lightweight migration from both v1 and v2 is covered by tests.
+2. **`@NSManaged` accessors stayed non-optional.** The model is permissive; the
+   code is not. Reading a nil through a non-optional accessor traps, so the one
+   place that expects nil — `StoreRepair` — reads through `value(forKey:)` and
+   fetches on `NSManagedObject` rather than the typed subclasses.
+3. **`NSPersistentCloudKitContainer` unconditionally**, with
+   `cloudKitContainerOptions` attached only when sync is on. Without the options
+   it behaves exactly like `NSPersistentContainer`, so there is one class, one
+   store file and one code path either way.
+4. **Sync is opt-in** (`CloudSyncEnabled` in `UserDefaults`, Planner ▸ Sync with
+   iCloud) and takes effect at the next launch. A loaded store cannot be
+   re-pointed at a CloudKit container, and tearing the coordinator down
+   mid-session would invalidate every managed object the four panes hold.
+5. **The entitlement is checked before CloudKit is touched at all**
+   (`CloudSyncEntitlement`). This is not defensive padding. Mirroring without
+   the entitlement does not error — it silently never syncs — and
+   `CKContainer(identifier:)` on an unentitled container raises an Objective-C
+   exception that ends the process. Checking the code signature first turns both
+   into one honest sentence in the menu and a local store.
+6. **History drain, not history merge.** `viewContext.automaticallyMergesChangesFromParent`
+   already folds in the mirroring delegate's saves. `PersistentHistoryDrain`
+   exists for the two things that flag cannot give: a signal that a change came
+   from outside this process (`.plannerStoreDidChangeRemotely`, because the
+   calendar and mail list only listen for did-save and a merge is not a save),
+   and a point at which to run repair. History is deliberately **not** purged:
+   the CloudKit delegate is a second consumer of the same history.
+7. **Import repair, as planned in item 9 of the old list** — `StoreRepair`, run
+   on the drain's background context under author `planner.repair`, which the
+   drain skips so it cannot chase its own tail. It fills missing identity and
+   timestamps, fills empty titles, resolves the project/parentTask xor in favour
+   of `parentTask`, cuts parent cycles, adopts orphan tasks into a *Recovered
+   Items* project, and refiles folderless messages into *Recovered Mail*.
+   Nothing is deleted; every pass is idempotent.
+8. **Merge policy unchanged.** `mergeByPropertyObjectTrump` is last-writer-wins
+   per attribute, which is why `ModelController` guarding `updatedAt` bumps
+   matters: a meaningless bump is a meaningless conflict.
+9. **`initializeCloudKitSchema` is a DEBUG-only, environment-gated one-off**
+   (`PLANNER_INIT_CLOUDKIT_SCHEMA=1`), not a menu item: running it writes to the
+   developer's CloudKit dashboard.
+
+### Signing is mandatory
+
+There is no local-only build. `Planner/Planner.entitlements` is the only
+entitlements file, it carries the iCloud keys, and codesign refuses those
+without a development certificate — it fails the **build**, not the run. So a
+checkout does not compile until a developer has:
+
+1. An Apple Developer Program membership (iCloud is not available to a free
+   personal team) and an Apple ID added in Xcode ▸ Settings ▸ Accounts.
+2. An **Apple Development** certificate in the login keychain, *plus* the
+   **WWDR G3** intermediate. Without G3 the certificate is inert in a way
+   nothing explains: `security find-identity -v -p codesigning` reports no valid
+   identities and codesign says "unable to build chain to self-signed root".
+   Install `AppleWWDRCAG3.cer` from apple.com/certificateauthority.
+3. `DEVELOPMENT_TEAM` set on the Planner target.
+4. **Their Mac registered as a device.** Mac App Development profiles are
+   device-limited, so an unregistered Mac fails with "Device … isn't registered
+   in your developer account". Building once from Xcode.app with automatic
+   signing registers it and creates the profile; `xcodebuild` cannot, because it
+   has no interactive account session ("No Accounts: Add a new account in
+   Accounts settings") — see below.
+
+`scripts/run.sh` and `scripts/package.sh` pass `-allowProvisioningUpdates` so a
+profile that merely needs fetching or renewing does not stop a command-line
+build. That flag is not enough for the *first* build on a new Mac: registering
+the device and minting the initial profile needs Xcode.app, or an App Store
+Connect API key passed to `xcodebuild`.
+
+The entitlement gate in `CloudSyncEntitlement` survives this change and is still
+load-bearing. It no longer guards "a build with no iCloud entitlement at all",
+which can no longer exist, but it still catches the container identifier
+drifting from what the build is signed for — via the `CloudKitContainerIdentifier`
+override, or a build signed by a different team — and that is the case that
+would otherwise crash in `CKContainer(identifier:)`.
+
+### Two things signing changed that had nothing to do with iCloud
+
+Turning on real signing turned on hardened runtime, which had been silently
+disabled under ad-hoc signing all along ("Disabling hardened runtime with ad-hoc
+codesigning" in every previous build log). Two unrelated-looking breakages fell
+out of that, and both are worth knowing before someone "fixes" them again:
+
+- **Hardened runtime is off in Debug, on in Release.** Hardened runtime strips
+  the `DYLD_*` variables Xcode uses to inject its toolchain's Swift runtime into
+  the test host. The host then loads a mismatched `libswift_Concurrency` and
+  aborts inside `XCTSwiftErrorObservation`, failing a shifting subset of tests
+  per run. The alternative fix — `com.apple.security.cs.allow-dyld-environment-variables`
+  — was rejected because it would weaken the shipping binary to serve the tests.
+  Release still builds hardened, which is what gets notarized.
+- **The in-memory test store is a throwaway file, not `/dev/null`.** Pointing a
+  SQLite store at `/dev/null` worked only while the binary was unsigned; signed,
+  Core Data's connection manager throws `NSInternalInconsistencyException`
+  ("No eligible connection available") on the first fetch, taking down every
+  test class that uses `PersistenceController(inMemory:)`. It cannot be
+  `NSInMemoryStoreType` either, because history tracking requires SQLite. So it
+  is a per-controller file under the temporary directory, named with the owning
+  pid, removed in `deinit` and swept on the next run for pids that are gone —
+  `deinit` alone leaks a few hundred files per run, because a view controller
+  built in a UI test holds its controller to process exit.
+
+### Known limits
+
+- **A saved message larger than a CloudKit record cannot export.** `body` and
+  `htmlBody` are Strings, not external binary storage, so a very large HTML mail
+  counts against the ~1 MB record limit. It fails as an export error in the sync
+  status, not as data loss — the row stays local and legible.
+- **No conflict UX.** Property-level last-writer-wins is the whole story; there
+  is no merge sheet and no version history.
+- **Not tested against two live devices.** Item 11 of the old list stands: the
+  test suite covers the model rules, the migration, the entitlement gate, the
+  drain and every repair, but two Macs and one iCloud account is a manual check.
 
 ---
 

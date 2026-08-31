@@ -62,7 +62,8 @@ final class EventCoordinator {
         //
         // Selector-based rather than a block with an explicit queue: the token
         // form returns a non-`Sendable` observer that a nonisolated `deinit`
-        // cannot release. Foundation posts this one on the main thread.
+        // cannot release. CF posts this from `__postAndResetMidnight` on a
+        // root GCD queue, so the @objc entry is nonisolated and hops here.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(dayDidChange),
@@ -77,7 +78,13 @@ final class EventCoordinator {
         NotificationCenter.default.removeObserver(self)
     }
 
-    @objc private func dayDidChange() {
+    @objc nonisolated private func dayDidChange() {
+        Task { @MainActor [weak self] in
+            self?.handleDayRollover()
+        }
+    }
+
+    private func handleDayRollover() {
         PlannerLog.events.debug("Day rolled over; sliding the event window")
         refresh()
     }
@@ -133,7 +140,7 @@ final class EventCoordinator {
     }
 
     /// Test hook: `NSCalendarDayChanged` cannot be provoked on demand.
-    func test_dayDidChange() { dayDidChange() }
+    func test_dayDidChange() { handleDayRollover() }
 
     /// Test hook: a hung source can be observed without waiting 30s.
     func test_timeoutSeconds(_ seconds: Int) { timeoutSeconds = seconds }

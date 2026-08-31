@@ -105,6 +105,13 @@ final class CalendarViewController: NSViewController {
             name: .NSManagedObjectContextDidSave,
             object: persistence.viewContext
         )
+        // An import merges rather than saves, so it needs its own hook.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(contextDidSave(_:)),
+            name: .plannerStoreDidChangeRemotely,
+            object: nil
+        )
     }
 
     @objc private func contextDidSave(_ notification: Notification) {
