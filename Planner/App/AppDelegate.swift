@@ -38,12 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Outlook is read over Apple events, so a Mac without it (or without
         // consent) simply shows no events rather than failing to launch.
         let events = EventCoordinator(source: OutlookEventSource())
-        // Same reasoning for mail: no Outlook, or no consent, simply means an
-        // empty Recent Mail rather than a failure to launch.
+        // Same reasoning for mail: no Outlook profile, or no Full Disk Access,
+        // simply means an empty Recent Mail rather than a failure to launch.
+        // The summarizer is Apple's on-device model. A Mac without Apple
+        // Intelligence reports it unavailable and the list keeps its two-line
+        // rows; nothing else changes.
         let mail = MailCoordinator(
             source: OutlookMailSource(),
             envelopeStore: .live,
-            dismissalStore: .live
+            dismissalStore: .live,
+            summaryModel: SystemOnDeviceLanguageModel(),
+            summaryStore: .live
         )
         // Mirroring, the history drain behind it, and the repair pass that
         // follows an import. Inert when sync is off.

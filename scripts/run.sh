@@ -55,6 +55,13 @@ if [[ ! -d "$PROJECT" ]]; then
     exit 1
 fi
 
+# Recent Mail shells out to olsyncmail, which a build phase copies into the
+# bundle. Build the crate first so the copy picks up this revision.
+source scripts/olsyncmail.sh
+if [[ $BUILD -eq 1 ]]; then
+    build_olsyncmail
+fi
+
 # -allowProvisioningUpdates: every build signs for real now (the iCloud
 # entitlements make a development certificate mandatory, not optional), so a
 # fresh checkout needs Xcode to fetch or renew the provisioning profile rather

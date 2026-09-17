@@ -1,286 +1,169 @@
 import XCTest
 @testable import Planner
 
-/// Exercises the decode and script-generation halves of the Outlook mail
-/// source, which is everything that does not require Outlook to be running.
-///
-/// The descriptors here are built the way `NSAppleScript` builds them, so the
-/// tests fail for the same reasons a real reply would.
 final class OutlookMailSourceTests: XCTestCase {
-    private var calendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York")!
-        calendar.locale = Locale(identifier: "en_US_POSIX")
-        return calendar
+    // MARK: - Paths and queries
+
+    func testTheIndexLivesInApplicationSupport() {
+        let url = OlSyncMailProtocol.databaseURL()
+        XCTAssertEqual(url.lastPathComponent, "olsyncmail.sqlite")
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, "Planner")
+        XCTAssertTrue(url.path.contains("Application Support"))
     }
 
-    // MARK: - Descriptor fixtures
-
-    private func list(_ items: [NSAppleEventDescriptor]) -> NSAppleEventDescriptor {
-        let descriptor = NSAppleEventDescriptor.list()
-        for (index, item) in items.enumerated() {
-            descriptor.insert(item, at: index + 1)
-        }
-        return descriptor
-    }
-
-    private func sender(name: String?, address: String?) -> NSAppleEventDescriptor {
-        let record = NSAppleEventDescriptor.record()
-        if let name {
-            record.setDescriptor(.init(string: name), forKeyword: OutlookMailScripting.SenderKey.name)
-        }
-        if let address {
-            record.setDescriptor(.init(string: address), forKeyword: OutlookMailScripting.SenderKey.address)
-        }
-        return record
-    }
-
-    private func envelopePayload(
-        ids: [NSAppleEventDescriptor],
-        subjects: [NSAppleEventDescriptor],
-        times: [NSAppleEventDescriptor],
-        read: [NSAppleEventDescriptor],
-        senders: [NSAppleEventDescriptor]
-    ) -> NSAppleEventDescriptor {
-        list([list(ids), list(subjects), list(times), list(read), list(senders)])
-    }
-
-    private func date(_ day: Int) -> Date {
-        calendar.date(from: DateComponents(year: 2026, month: 8, day: day, hour: 9))!
-    }
-
-    // MARK: - Envelopes
-
-    func testDecodesTheFiveColumns() throws {
-        let payload = envelopePayload(
-            ids: [.init(int32: 101), .init(int32: 102)],
-            subjects: [.init(string: "First"), .init(string: "Second")],
-            times: [.init(date: date(15)), .init(date: date(14))],
-            read: [.init(boolean: false), .init(boolean: true)],
-            senders: [
-                sender(name: "Ada Lovelace", address: "ada@example.com"),
-                sender(name: nil, address: "grace@example.com"),
-            ]
+    func testWindowQueryUsesUnixBoundsAndInbox() {
+        let start = Date(timeIntervalSince1970: 1_786_100_000)
+        let end = start.addingTimeInterval(86_400)
+        XCTAssertEqual(
+            OlSyncMailProtocol.windowQuery(in: start..<end),
+            "folder:Inbox after:1786100000 before:1786186400"
         )
-
-        let messages = try OutlookMailDecoder.envelopes(payload)
-        XCTAssertEqual(messages.count, 2)
-        XCTAssertEqual(messages[0].id, 101)
-        XCTAssertEqual(messages[0].subject, "First")
-        XCTAssertEqual(messages[0].senderName, "Ada Lovelace")
-        XCTAssertEqual(messages[0].senderAddress, "ada@example.com")
-        XCTAssertEqual(messages[0].receivedAt, date(15))
-        XCTAssertFalse(messages[0].isRead)
-        XCTAssertTrue(messages[1].isRead)
-        // A sender with no display name falls back to the address, so a row
-        // never reads as blank.
-        XCTAssertEqual(messages[1].senderDisplayName, "grace@example.com")
     }
 
-    /// The whole reason parallel columns are safe here is that AppleScript
-    /// keeps them aligned. If that ever stops being true, every row after the
-    /// first gap is attributed to the wrong message — so it fails loudly.
-    func testMismatchedColumnLengthsFailRatherThanShuffleRows() {
-        let payload = envelopePayload(
-            ids: [.init(int32: 1), .init(int32: 2)],
-            subjects: [.init(string: "Only one")],
-            times: [.init(date: date(15)), .init(date: date(14))],
-            read: [.init(boolean: false), .init(boolean: false)],
-            senders: [sender(name: "A", address: "a@x"), sender(name: "B", address: "b@x")]
+    // MARK: - Protocol lines
+
+    func testHelloHasNoParams() throws {
+        let data = try OlSyncMailProtocol.requestLine(id: 1, method: "hello")
+        XCTAssertEqual(data.last, 0x0A)
+        let object = try JSONSerialization.jsonObject(with: data.dropLast()) as! [String: Any]
+        XCTAssertEqual(object["id"] as? Int, 1)
+        XCTAssertEqual(object["method"] as? String, "hello")
+        XCTAssertNil(object["params"])
+    }
+
+    func testOpenNamesTheDatabase() throws {
+        let line = try OlSyncMailProtocol.requestLine(
+            id: 2,
+            method: "open",
+            params: ["db": "/tmp/mail.sqlite"]
         )
-        XCTAssertThrowsError(try OutlookMailDecoder.envelopes(payload)) { error in
-            XCTAssertEqual(error as? OutlookError, .misalignedPayload)
+        let object = try JSONSerialization.jsonObject(with: line.dropLast()) as! [String: Any]
+        let params = object["params"] as! [String: Any]
+        XCTAssertEqual(params["db"] as? String, "/tmp/mail.sqlite")
+    }
+
+    func testInt64ParamsAreJSONNumbers() throws {
+        let line = try OlSyncMailProtocol.requestLine(
+            id: 3,
+            method: "message",
+            params: ["message_id": Int64(222)]
+        )
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(
+            try JSONSerialization.jsonObject(with: line.dropLast())
+        ))
+        let object = try JSONSerialization.jsonObject(with: line.dropLast()) as! [String: Any]
+        let params = object["params"] as! [String: Any]
+        XCTAssertEqual(OlSyncMailProtocol.int64(params["message_id"]), 222)
+    }
+
+    func testASearchReplyDecodesAsAResponse() throws {
+        let incoming = try OlSyncMailProtocol.decodeIncoming(
+            #"{"id":7,"ok":{"hits":[{"message_id":222,"record_id":191357,"date":1789601000,"from":"Ada <ada@example.com>","subject":"Hi"}],"elapsed_ms":3}}"#
+        )
+        guard case let .response(id, result) = incoming, case let .success(data) = result else {
+            return XCTFail("expected a successful response")
         }
+        XCTAssertEqual(id, 7)
+        let ok = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let hits = ok?["hits"] as? [[String: Any]]
+        XCTAssertEqual(OlSyncMailProtocol.int64(hits?.first?["record_id"]), 191357)
     }
 
-    func testAReplyWithTheWrongShapeIsRejected() {
-        XCTAssertThrowsError(try OutlookMailDecoder.envelopes(list([.init(string: "nope")])))
-    }
-
-    /// A record missing the two fields every message must have is skipped
-    /// rather than invented; it never fails the sweep.
-    func testARecordWithNoDateIsSkipped() throws {
-        let payload = envelopePayload(
-            ids: [.init(int32: 1), .init(int32: 2)],
-            subjects: [.init(string: "Good"), .init(string: "Bad")],
-            times: [.init(date: date(15)), .null()],
-            read: [.init(boolean: false), .init(boolean: false)],
-            senders: [sender(name: "A", address: "a@x"), sender(name: "B", address: "b@x")]
+    func testAnErrorLineMapsTheCode() throws {
+        let incoming = try OlSyncMailProtocol.decodeIncoming(
+            #"{"id":4,"error":{"code":"profile_unavailable","message":"no profile"}}"#
         )
-        XCTAssertEqual(try OutlookMailDecoder.envelopes(payload).map(\.id), [1])
-    }
-
-    func testAMissingSubjectDecodesToEmptyRatherThanFailing() throws {
-        let payload = envelopePayload(
-            ids: [.init(int32: 1)],
-            subjects: [.null()],
-            times: [.init(date: date(15))],
-            read: [.init(boolean: false)],
-            senders: [sender(name: "A", address: "a@x")]
+        guard case let .response(_, result) = incoming, case let .failure(error) = result else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertEqual(error as? OlSyncMailError, .profileUnavailable("no profile"))
+        XCTAssertEqual(
+            (error as? OlSyncMailError)?.settingsURL,
+            OlSyncMailError.fullDiskAccessSettingsURL
         )
-        XCTAssertEqual(try OutlookMailDecoder.envelopes(payload).first?.subject, "")
     }
 
-    func testAnEmptyWindowDecodesToNoMessages() throws {
-        let payload = envelopePayload(ids: [], subjects: [], times: [], read: [], senders: [])
-        XCTAssertTrue(try OutlookMailDecoder.envelopes(payload).isEmpty)
+    func testProgressIsAnEvent() throws {
+        let incoming = try OlSyncMailProtocol.decodeIncoming(
+            #"{"event":"progress","job":1,"phase":"indexing","done":4120,"total":25000}"#
+        )
+        guard case let .event(.progress(job, phase, done, total)) = incoming else {
+            return XCTFail("expected progress")
+        }
+        XCTAssertEqual(job, 1)
+        XCTAssertEqual(phase, "indexing")
+        XCTAssertEqual(done, 4120)
+        XCTAssertEqual(total, 25_000)
     }
 
-    // MARK: - Detail
+    func testAMismatchedHelloIsRefused() {
+        XCTAssertEqual(OlSyncMailError.protocolMismatch(2).errorDescription?.contains("2"), true)
+    }
 
-    func testDecodesBodyHeadersAndAttachments() {
-        let payload = list([
-            .init(string: "The body\n\nwith blank lines"),
-            .init(string: "Message-ID: <a@x>\rTo: you@x\rX-MS-Has-Attach: yes"),
-            list([.init(string: "brief.pdf"), .init(string: "exhibit.png")]),
-        ])
+    // MARK: - Mapping onto Planner types
 
-        let detail = OutlookMailDecoder.detail(payload, id: 7)
+    func testAMailboxSplitsNameAndAddress() {
+        let parsed = OlSyncMailProtocol.parseMailbox("\"Looper, Jared\" <jlooper@example.com>")
+        XCTAssertEqual(parsed.name, "Looper, Jared")
+        XCTAssertEqual(parsed.address, "jlooper@example.com")
+        XCTAssertEqual(OlSyncMailProtocol.parseMailbox("ada@example.com").address, "ada@example.com")
+    }
+
+    func testStatusRMeansRead() {
+        XCTAssertTrue(OlSyncMailProtocol.isRead(status: "RO"))
+        XCTAssertFalse(OlSyncMailProtocol.isRead(status: "O"))
+        XCTAssertFalse(OlSyncMailProtocol.isRead(status: nil))
+    }
+
+    func testAHitBecomesAnEnvelopeAddressedByOutlooksRecordId() {
+        let message = OlSyncMailProtocol.envelope(
+            hit: [
+                "message_id": 222,
+                "record_id": 191_357,
+                "date": 1_789_601_000,
+                "from": "Ada Lovelace <ada@example.com>",
+                "subject": "Re: IOEngine",
+            ],
+            isRead: true
+        )
+        XCTAssertEqual(message?.id, 191_357)
+        XCTAssertEqual(message?.subject, "Re: IOEngine")
+        XCTAssertEqual(message?.senderName, "Ada Lovelace")
+        XCTAssertEqual(message?.senderAddress, "ada@example.com")
+        XCTAssertEqual(message?.receivedAt, Date(timeIntervalSince1970: 1_789_601_000))
+        XCTAssertTrue(message?.isRead ?? false)
+    }
+
+    func testDetailReadsBodiesHeadersAndAttachmentNames() {
+        let detail = OlSyncMailProtocol.detail(
+            from: [
+                "message_id": 222,
+                "record_id": 7,
+                "rfc822_message_id": "mid@example.com",
+                "body_text": "plain",
+                "body_html": "<p>html</p>",
+                "to": "Ray <ray@example.com>",
+                "cc": "Ada <ada@example.com>",
+                "headers": [
+                    ["In-Reply-To", "<prev@example.com>"],
+                    ["References", "<prev@example.com>"],
+                    ["X-MS-Has-Attach", "yes"],
+                ],
+                "attachments": [
+                    ["filename": "brief.pdf"],
+                    ["filename": "exhibit.docx"],
+                ],
+            ],
+            fallbackID: 0
+        )
         XCTAssertEqual(detail.id, 7)
-        XCTAssertEqual(detail.body, "The body\n\nwith blank lines")
-        XCTAssertNil(detail.html, "a three-element payload has no HTML slot")
-        XCTAssertEqual(detail.messageID, "<a@x>")
-        XCTAssertEqual(detail.recipients, "you@x")
+        XCTAssertEqual(detail.body, "plain")
+        XCTAssertEqual(detail.html, "<p>html</p>")
+        XCTAssertEqual(detail.messageID, "<mid@example.com>")
+        XCTAssertEqual(detail.inReplyTo, "<prev@example.com>")
+        XCTAssertEqual(detail.recipients, "Ray <ray@example.com>, Ada <ada@example.com>")
         XCTAssertTrue(detail.hasAttachments)
-        XCTAssertEqual(detail.attachmentNames, "brief.pdf\nexhibit.png")
-    }
-
-    /// A rights-protected message can refuse its attachment list, and a
-    /// partially downloaded one can refuse its body. Neither is a failure.
-    func testAMessageThatRefusesItsPartsStillDecodes() {
-        let detail = OutlookMailDecoder.detail(list([.init(string: ""), .init(string: ""), list([])]), id: 7)
-        XCTAssertEqual(detail.body, "")
-        XCTAssertNil(detail.messageID)
-        XCTAssertFalse(detail.hasAttachments)
-        XCTAssertNil(detail.attachmentNames)
-    }
-
-    /// The Exchange header is the fallback when the attachment list could not
-    /// be enumerated at all.
-    func testTheAttachmentHeaderStandsInForAnUnreadableList() {
-        let detail = OutlookMailDecoder.detail(
-            list([.init(string: ""), .init(string: "X-MS-Has-Attach: yes"), list([])]),
-            id: 7
-        )
-        XCTAssertTrue(detail.hasAttachments)
-        XCTAssertNil(detail.attachmentNames)
-    }
-
-    /// Bodies keep their whitespace: it is content, not noise.
-    func testTheBodyIsNotTrimmed() {
-        let detail = OutlookMailDecoder.detail(
-            list([.init(string: "  leading and trailing  "), .init(string: ""), list([])]),
-            id: 1
-        )
-        XCTAssertEqual(detail.body, "  leading and trailing  ")
-    }
-
-    func testDecodesHTMLWhenTheFourthElementIsPresent() {
-        let payload = list([
-            .init(string: "Plain"),
-            .init(string: ""),
-            list([]),
-            .init(string: "<p>Hello <b>there</b></p>"),
-        ])
-        let detail = OutlookMailDecoder.detail(payload, id: 7)
-        XCTAssertEqual(detail.body, "Plain")
-        XCTAssertEqual(detail.html, "<p>Hello <b>there</b></p>")
-    }
-
-    func testBlankHTMLIsTreatedAsMissing() {
-        let payload = list([
-            .init(string: "Plain"),
-            .init(string: ""),
-            list([]),
-            .init(string: "   \n"),
-        ])
-        XCTAssertNil(OutlookMailDecoder.detail(payload, id: 7).html)
-    }
-
-    // MARK: - Script generation
-
-    /// Every generated script must contain numbers only where a value goes:
-    /// that is what makes them impossible to break with an odd account name or
-    /// a locale Outlook does not share.
-    func testTheDateLiteralIsBuiltFieldByField() {
-        let script = OutlookMailScripting.dateLiteral(
-            named: "cutoff",
-            for: calendar.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 0))!,
-            calendar: calendar
-        )
-        XCTAssertTrue(script.contains("set year of cutoff to 2026"), script)
-        XCTAssertTrue(script.contains("set month of cutoff to 8"), script)
-        XCTAssertTrue(script.contains("set day of cutoff to 13"), script)
-        XCTAssertTrue(script.contains("set time of cutoff to 0"), script)
-        // day 1 first, or setting day 31 in a short month rolls the date over.
-        let firstDay = try! XCTUnwrap(script.range(of: "set day of cutoff to 1\n"))
-        let year = try! XCTUnwrap(script.range(of: "set year of cutoff to"))
-        XCTAssertLessThan(firstDay.lowerBound, year.lowerBound)
-    }
-
-    func testTheDateLiteralCarriesTheTimeOfDay() {
-        let script = OutlookMailScripting.dateLiteral(
-            named: "cutoff",
-            for: calendar.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 1, minute: 2, second: 3))!,
-            calendar: calendar
-        )
-        XCTAssertTrue(script.contains("set time of cutoff to \(3600 + 120 + 3)"), script)
-    }
-
-    /// The binary search runs inside the script, not as a series of round
-    /// trips: fifteen probes at ~32ms each is half a second of Apple events for
-    /// something Outlook can do in one.
-    func testTheWindowCountScriptSearchesInPlace() {
-        let script = OutlookMailScripting.windowCount(
-            accountIndex: 1,
-            since: date(13),
-            calendar: calendar
-        )
-        XCTAssertTrue(script.contains("repeat while lo < hi"), script)
-        XCTAssertTrue(script.contains("div 2"), script)
-        XCTAssertFalse(script.contains("whose"), "the whose clause costs 23s a call")
-    }
-
-    func testTheEnvelopeScriptUsesARangeAndNotProperties() {
-        let script = OutlookMailScripting.envelopes(accountIndex: 2, count: 164)
-        XCTAssertTrue(script.contains("messages 1 thru 164"), script)
-        XCTAssertTrue(script.contains("exchange account 2"), script)
-        XCTAssertFalse(script.contains("properties"), "a single message's properties is 2.4 MB")
-        // Five columns, in the order the decoder reads them.
-        XCTAssertTrue(script.contains("return {theIDs, theSubjects, theTimes, theRead, theSenders}"), script)
-    }
-
-    func testTheEnvelopeScriptCanReadASlice() {
-        let script = OutlookMailScripting.envelopes(accountIndex: 1, from: 41, through: 80)
-        XCTAssertTrue(script.contains("messages 41 thru 80"), script)
-    }
-
-    func testTheIndexScanScriptReadsOnlyIdAndRead() {
-        let script = OutlookMailScripting.indexScan(accountIndex: 1, count: 50)
-        XCTAssertTrue(script.contains("id of messages 1 thru 50"), script)
-        XCTAssertTrue(script.contains("is read of messages 1 thru 50"), script)
-        XCTAssertFalse(script.contains("subject"), script)
-        XCTAssertFalse(script.contains("sender"), script)
-        XCTAssertTrue(script.contains("return {theIDs, theRead}"), script)
-    }
-
-    func testDecodesAnIndexScan() throws {
-        let payload = list([
-            list([.init(int32: 9), .init(int32: 8)]),
-            list([.init(boolean: true), .init(boolean: false)]),
-        ])
-        let scan = try OutlookMailDecoder.indexScan(payload)
-        XCTAssertEqual(scan.map(\.id), [9, 8])
-        XCTAssertEqual(scan.map(\.isRead), [true, false])
-    }
-
-    func testTheDetailScriptAddressesOneMessageByIdAndToleratesMissingParts() {
-        let script = OutlookMailScripting.detail(messageID: 181_121)
-        XCTAssertTrue(script.contains("message id 181121"), script)
-        XCTAssertTrue(script.contains("plain text content of m"), script)
-        XCTAssertTrue(script.contains("to content of m"), script)
-        XCTAssertTrue(script.contains("return {theBody, theHeaders, theNames, theHTML}"), script)
-        XCTAssertEqual(script.components(separatedBy: "try").count - 1, 8, "each read is wrapped")
+        XCTAssertEqual(detail.attachmentNames, "brief.pdf\nexhibit.docx")
     }
 
     // MARK: - Configuration
@@ -304,7 +187,13 @@ final class OutlookMailSourceTests: XCTestCase {
         XCTAssertNil(OutlookMailSource.Configuration.fromDefaults(suite).accountName)
     }
 
-    // MARK: - Errors
+    // MARK: - Reveal and errors
+
+    func testTheRevealScriptAddressesOneMessageById() {
+        let script = OutlookMailScripting.reveal(messageID: 181_121)
+        XCTAssertTrue(script.contains("message id 181121"), script)
+        XCTAssertTrue(script.contains("activate"), script)
+    }
 
     func testAppleScriptFailuresMapOntoOutlookErrors() {
         func mapped(_ code: Int) -> OutlookError {
@@ -316,18 +205,10 @@ final class OutlookMailSourceTests: XCTestCase {
         XCTAssertEqual(mapped(-1728), .appleEvent(code: -1728))
     }
 
-    /// "That one message is gone" is an ordinary outcome, not a broken
-    /// connection, and the reader says so in plain words.
     func testAMissingObjectIsDistinguishedFromABrokenConnection() {
         XCTAssertTrue(OutlookError.appleEvent(code: -1728).isMissingObject)
         XCTAssertTrue(OutlookError.appleEvent(code: -1719).isMissingObject)
         XCTAssertFalse(OutlookError.appleEvent(code: -1712).isMissingObject)
         XCTAssertFalse(OutlookError.permissionDenied.isMissingObject)
-    }
-
-    func testMisalignmentReadsAsSomethingToRetry() {
-        XCTAssertNotNil(OutlookError.misalignedPayload.errorDescription)
-        XCTAssertNotNil(OutlookError.misalignedPayload.recoverySuggestion)
-        XCTAssertNil(OutlookError.misalignedPayload.settingsURL)
     }
 }

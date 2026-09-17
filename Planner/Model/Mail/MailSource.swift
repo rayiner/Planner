@@ -3,13 +3,12 @@ import Foundation
 /// Where Recent Mail comes from.
 ///
 /// Not `@MainActor`, for the same reason `CalendarEventSource` is not:
-/// implementations are slow — the Outlook source costs ~60ms per message — and
-/// must work off the main thread. Only `Sendable` values cross back, which is
-/// what keeps scripting objects from escaping their own queue.
+/// implementations talk to a helper or to Outlook and must work off the main
+/// thread. Only `Sendable` values cross back.
 ///
-/// The split between `envelopes` and `detail` is the whole performance design,
-/// settled by the M0 spike: the sweep reads five fields per message, and body,
-/// headers and attachment names are read one message at a time, on demand.
+/// The split between `envelopes` and `detail` is the performance design: the
+/// window is a cheap search over the local index, and body, headers and
+/// attachment names are read one message at a time, on demand.
 nonisolated protocol MailSource: Sendable {
     var sourceID: String { get }
     /// Shown in error messages and the refresh tooltip, e.g. "Inbox".
@@ -70,11 +69,10 @@ nonisolated struct NullMailSource: MailSource {
 /// and abandoning the loser.
 ///
 /// Not a `withThrowingTaskGroup`: a group awaits its remaining children on the
-/// way out, and the mail source wraps a blocking Apple event that never
-/// observes cancellation — so the group would sit behind the very hang the
-/// timeout exists to escape. `EventCoordinator` settles this the same way, with
-/// a timer that only flips the UI. The abandoned task finishes into a
-/// continuation that is already spent, which the one-shot below absorbs.
+/// way out, and a hung helper would sit behind the hang the timeout exists to
+/// escape. `EventCoordinator` settles this the same way, with a timer that only
+/// flips the UI. The abandoned task finishes into a continuation that is
+/// already spent, which the one-shot below absorbs.
 nonisolated func withMailTimeout<T: Sendable>(
     seconds: Int,
     _ operation: @escaping @Sendable () async throws -> T

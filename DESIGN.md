@@ -2133,6 +2133,20 @@ build. That flag is not enough for the *first* build on a new Mac: registering
 the device and minting the initial profile needs Xcode.app, or an App Store
 Connect API key passed to `xcodebuild`.
 
+Both scripts also build the `olsyncmail` helper before `xcodebuild`, because a
+build phase copies `target/release/olsyncmail` into `Contents/MacOS` and would
+otherwise ship whatever was there last time. The crate is expected at
+`../mailindex`; `MAILINDEX_DIR` overrides that and `SKIP_HELPER=1` leaves the
+existing binary alone for a Swift-only edit. A missing helper fails a Release
+build and only warns in Debug, where `PATH` is a reasonable fallback.
+
+The copy phase signs the helper with the app's own identity and hardened
+runtime *before* Xcode seals the bundle, since nested code signed only by the
+Rust linker fails `codesign --verify --deep`. It signs a copy in
+`TARGET_TEMP_DIR` and then installs that: `codesign` writes a `.cstemp` beside
+its argument, and under `ENABLE_USER_SCRIPT_SANDBOXING` — which this project
+leaves on — only the declared output file is writable, not its directory.
+
 The entitlement gate in `CloudSyncEntitlement` survives this change and is still
 load-bearing. It no longer guards "a build with no iCloud entitlement at all",
 which can no longer exist, but it still catches the container identifier

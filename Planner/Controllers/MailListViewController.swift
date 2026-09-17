@@ -25,10 +25,42 @@ final class MailListRow: NSObject {
     /// The folder already holding a copy, if any — the "Saved to X" chip, and
     /// the reason the row is dimmed.
     let savedFolderName: String?
+    /// Whether the row reserves a line for the on-device summary at all.
+    /// Decided per reload from the model's availability, not per message, so
+    /// every row in the list has the same height and nothing jumps as answers
+    /// land.
+    let showsSummaryLine: Bool
+    /// Mutable because a summary arrives long after the row was built, and
+    /// rebuilding the whole list for one line would drop the scroll position
+    /// the user is holding.
+    var summaryState: MailSummaryCoordinator.State
 
-    init(message: MailMessage, savedFolderName: String?) {
+    init(
+        message: MailMessage,
+        savedFolderName: String?,
+        showsSummaryLine: Bool = false,
+        summaryState: MailSummaryCoordinator.State = .idle
+    ) {
         self.message = message
         self.savedFolderName = savedFolderName
+        self.showsSummaryLine = showsSummaryLine
+        self.summaryState = summaryState
+    }
+
+    /// What the summary line shows right now: the summary, the placeholder
+    /// while one is on its way, or nothing once it has failed.
+    var summaryLineText: String? {
+        guard showsSummaryLine else { return nil }
+        switch summaryState {
+        case let .loaded(text): return text
+        case .idle, .queued, .loading: return MailLabels.summarizing
+        case .failed: return ""
+        }
+    }
+
+    var summaryLineIsPlaceholder: Bool {
+        if case .loaded = summaryState { return false }
+        return true
     }
 }
 
@@ -246,6 +278,14 @@ final class MailListViewController: NSViewController {
             name: .plannerMailDidChange,
             object: mail
         )
+        // A summary is one row's third line, minutes after the row was built.
+        // Redraw that row; do not rebuild the list.
+        center.addObserver(
+            self,
+            selector: #selector(summaryDidChange(_:)),
+            name: .plannerMailSummaryDidChange,
+            object: mail.summaries
+        )
         center.addObserver(
             self,
             selector: #selector(plannerSelectionDidChange(_:)),
@@ -272,6 +312,16 @@ final class MailListViewController: NSViewController {
 
     @objc private func mailDidChange(_ notification: Notification) { reload() }
     @objc private func contextDidSave(_ notification: Notification) { reload() }
+
+    @objc private func summaryDidChange(_ notification: Notification) {
+        guard let id = notification.userInfo?[MailChangeUserInfoKey.messageID] as? Int64,
+              let row = groups.lazy.flatMap(\.rows).first(where: { $0.message.id == id })
+        else { return }
+        row.summaryState = mail.summaries.state(for: id)
+        // The line is reserved whether or not there is a summary yet, so the
+        // height does not change and only the cell needs to be redrawn.
+        outlineView.reloadItem(row)
+    }
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
@@ -379,6 +429,8 @@ final class MailListViewController: NSViewController {
     private func makeGroups() -> [MailDateGroup] {
         guard selection.isRecentMailSelected else { return [] }
         let saved = model.foldersByOutlookID()
+        let summaries = mail.summaries
+        let showsSummaryLine = summaries.isAvailable
         var groups: [MailDateGroup] = []
         var currentDay: Date?
         var currentRows: [MailListRow] = []
@@ -396,7 +448,9 @@ final class MailListViewController: NSViewController {
             }
             currentRows.append(MailListRow(
                 message: message,
-                savedFolderName: saved[message.id]?.name
+                savedFolderName: saved[message.id]?.name,
+                showsSummaryLine: showsSummaryLine,
+                summaryState: summaries.state(for: message.id)
             ))
         }
         if let currentDay, !currentRows.isEmpty {
@@ -682,20 +736,27 @@ extension MailListViewController: NSOutlineViewDelegate {
         !(item is MailDateGroup)
     }
 
-    /// Two heights, because some rows carry a third line and some do not: a
+    /// Heights vary because some rows carry extra lines and some do not: a
     /// "Saved to X" chip and a conversation's message count both sit under the
-    /// subject, and a fixed height tall enough for them would leave every plain
-    /// row padded.
+    /// subject, and a Recent Mail row reserves a summary line when the
+    /// on-device model is available. A fixed height tall enough for all of
+    /// them would leave every plain row padded.
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         switch item {
         // 18 matches the calendar's day-header band, so the two modes' headers
         // read as the same weight of chrome.
         case is MailDateGroup: return 18
-        case let row as MailListRow: return row.savedFolderName == nil ? 54 : 68
+        case let row as MailListRow:
+            return 54
+                + (row.showsSummaryLine ? Self.summaryLineHeight : 0)
+                + (row.savedFolderName == nil ? 0 : 14)
         case is MailThreadRow: return 68
         default: return 54
         }
     }
+
+    /// An 11-pt line plus the stack's 2-pt spacing.
+    static let summaryLineHeight: CGFloat = 15
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         if let group = item as? MailDateGroup {
@@ -716,6 +777,8 @@ extension MailListViewController: NSOutlineViewDelegate {
         switch item {
         case let row as MailListRow:
             cell.apply(row, calendar: calendar)
+            // Drawing a row is the best signal that its summary is wanted now.
+            mail.summaries.prioritize(row.message.id)
         case let thread as MailThreadRow:
             cell.apply(thread, calendar: calendar)
         case let row as SavedMessageRow:
@@ -775,13 +838,15 @@ private final class DateGroupCellView: NSTableCellView {
 }
 
 /// One message: an unread dot, the sender and time on the first line, the
-/// subject on the second, and a "Saved to X" chip on the third when there is
-/// one.
+/// subject on the second, a one-line summary from the on-device model under
+/// it when the model is available, and a "Saved to X" chip last when there
+/// is one.
 ///
-/// No preview snippet, which the mock shows and the envelope cannot supply:
-/// the M0 spike put a message's body behind a per-message fetch, so a snippet
-/// per row would mean a round trip per visible row. The subject is what the
-/// sweep is read on anyway.
+/// The summary stands where a preview snippet would, and is what the envelope
+/// alone could never supply: the M0 spike put a message's body behind a
+/// per-message fetch, so a snippet per row would mean a round trip per visible
+/// row. The summary costs that round trip too — but once, in the background,
+/// and the answer is worth more than the first eighty characters of a body.
 private final class MessageRowView: NSTableCellView {
     private let unreadDot = NSView()
     /// Vertical tick in the unread-dot slot, for a message that belongs to
@@ -791,7 +856,11 @@ private final class MessageRowView: NSTableCellView {
     private let senderField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let subjectField = NSTextField(labelWithString: "")
+    private let summaryField = NSTextField(labelWithString: "")
     private let savedChip = NSTextField(labelWithString: "")
+    /// "Summarizing…" is tertiary; a summary is secondary. Tracked so a
+    /// selection highlight can restore the right one.
+    private var summaryIsPlaceholder = false
     /// The subject is what the sweep is read on, so message rows show it in
     /// the primary label color. A thread row reuses the field for its
     /// participants, which stay secondary — the subject is already on top.
@@ -823,6 +892,13 @@ private final class MessageRowView: NSTableCellView {
         subjectField.font = .systemFont(ofSize: 13)
         subjectField.lineBreakMode = .byTruncatingTail
 
+        summaryField.font = .systemFont(ofSize: 11)
+        summaryField.textColor = .secondaryLabelColor
+        summaryField.lineBreakMode = .byTruncatingTail
+        summaryField.maximumNumberOfLines = 1
+        summaryField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        summaryField.isHidden = true
+
         savedChip.font = .systemFont(ofSize: 11, weight: .medium)
         savedChip.textColor = .secondaryLabelColor
         savedChip.lineBreakMode = .byTruncatingTail
@@ -833,7 +909,7 @@ private final class MessageRowView: NSTableCellView {
         topRow.spacing = 8
         topRow.distribution = .fill
 
-        let lines = NSStackView(views: [topRow, subjectField, savedChip])
+        let lines = NSStackView(views: [topRow, subjectField, summaryField, savedChip])
         lines.orientation = .vertical
         lines.alignment = .leading
         lines.spacing = 2
@@ -875,6 +951,9 @@ private final class MessageRowView: NSTableCellView {
             // right-aligned time field is what makes the times a column.
             lines.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             topRow.widthAnchor.constraint(equalTo: lines.widthAnchor),
+            // Full width so a long summary truncates at the row's edge instead
+            // of pushing the stack wider than the cell.
+            summaryField.widthAnchor.constraint(equalTo: lines.widthAnchor),
         ])
     }
 
@@ -886,6 +965,14 @@ private final class MessageRowView: NSTableCellView {
         subjectIsSecondary = false
         unreadDot.isHidden = message.isRead
         conversationTick.isHidden = true
+
+        if let summaryLine = row.summaryLineText {
+            summaryField.stringValue = summaryLine
+            summaryIsPlaceholder = row.summaryLineIsPlaceholder
+            summaryField.isHidden = false
+        } else {
+            summaryField.isHidden = true
+        }
 
         if let folder = row.savedFolderName {
             savedChip.stringValue = MailLabels.savedChip(folderName: folder)
@@ -906,6 +993,7 @@ private final class MessageRowView: NSTableCellView {
             receivedAt: message.receivedAt,
             isRead: message.isRead,
             savedFolderName: row.savedFolderName,
+            summary: row.summaryLineIsPlaceholder ? nil : row.summaryLineText,
             calendar: calendar
         ))
     }
@@ -919,6 +1007,7 @@ private final class MessageRowView: NSTableCellView {
         subjectIsSecondary = true
         unreadDot.isHidden = true
         conversationTick.isHidden = true
+        summaryField.isHidden = true
         savedChip.stringValue = MailLabels.messageCount(thread.rows.count)
         savedChip.isHidden = false
         alphaValue = 1
@@ -942,6 +1031,7 @@ private final class MessageRowView: NSTableCellView {
         subjectIsSecondary = false
         unreadDot.isHidden = true
         conversationTick.isHidden = !inConversation
+        summaryField.isHidden = true
         savedChip.isHidden = true
         alphaValue = 1
         refreshColors()
@@ -960,6 +1050,7 @@ private final class MessageRowView: NSTableCellView {
     }
 
     var test_showsConversationTick: Bool { !conversationTick.isHidden }
+    var test_summaryLine: String? { summaryField.isHidden ? nil : summaryField.stringValue }
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { refreshColors() }
@@ -972,6 +1063,9 @@ private final class MessageRowView: NSTableCellView {
             ? .alternateSelectedControlTextColor
             : (subjectIsSecondary ? .secondaryLabelColor : .labelColor)
         timeField.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        summaryField.textColor = emphasized
+            ? .alternateSelectedControlTextColor
+            : (summaryIsPlaceholder ? .tertiaryLabelColor : .secondaryLabelColor)
         savedChip.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
         unreadDot.layer?.backgroundColor = (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).cgColor
         conversationTick.layer?.backgroundColor = (emphasized
@@ -999,6 +1093,17 @@ extension MailListViewController {
               let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as? MessageRowView
         else { return false }
         return cell.test_showsConversationTick
+    }
+    /// The drawn summary line, or nil when the row has none.
+    func test_summaryLine(for item: Any) -> String? {
+        let row = outlineView.row(forItem: item)
+        guard row >= 0,
+              let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as? MessageRowView
+        else { return nil }
+        return cell.test_summaryLine
+    }
+    func test_rowHeight(for item: Any) -> CGFloat {
+        self.outlineView(outlineView, heightOfRowByItem: item)
     }
     var test_searchFieldIsHidden: Bool { searchHeader.isHidden }
     var test_searchQuery: String { searchQuery }

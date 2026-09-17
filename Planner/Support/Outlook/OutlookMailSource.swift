@@ -1,25 +1,20 @@
-import AppKit
 import Foundation
 
-/// Reads recent mail from the Microsoft Outlook already running on this Mac.
+/// Recent Mail, filled from the `olsyncmail` daemon rather than Apple events.
 ///
-/// Strictly read-only and strictly local: nothing here files, flags, marks read
-/// or deletes, and Planner never contacts Exchange or Microsoft 365. The one
-/// command that is not a read is `open`, and that is the user asking to work on
-/// a message in Outlook, reachable only from an explicit action.
-///
-/// Three shapes of query, and the reasons for each are in
-/// `OutlookMailScripting`: one binary search for the window's edge, one
-/// five-column range read for the envelopes, and a per-id read for a body.
-/// `NSAppleScript` rather than `SBApplication` because only AppleScript can
-/// express a range specifier, which is the whole performance story.
-nonisolated final class OutlookMailSource: MailSource {
+/// Planner owns one daemon process, talks NDJSON on its stdin/stdout, and
+/// keeps the index at `~/Library/Application Support/Planner/olsyncmail.sqlite`.
+/// Envelope lists and bodies come from that database after a `sync`; opening a
+/// message in Outlook is still a user-initiated Apple event, because that is a
+/// command, not a read.
+nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
     struct Configuration: Sendable, Equatable {
-        /// `nil` means "whichever Exchange account Outlook lists first".
+        /// `nil` means "whichever Exchange account Outlook lists first" — kept
+        /// so an existing `defaults write` does not become a dead key, even
+        /// though the indexer currently reads the default Outlook profile.
         var accountName: String?
-        /// A ceiling on one sweep, so a firehose inbox cannot stall the fetch.
-        /// At ~60ms a message this is about half a minute in the worst case,
-        /// which the coordinator's backstop is set to survive.
+        /// A ceiling on one Recent Mail window, so a firehose inbox cannot
+        /// stall the list. The index itself is not capped.
         var maximumMessages: Int
 
         static let defaultMaximumMessages = 400
@@ -27,8 +22,6 @@ nonisolated final class OutlookMailSource: MailSource {
         static let accountDefaultsKey = "mail.accountName"
         static let maximumDefaultsKey = "mail.maximumMessages"
 
-        /// Overridable through `defaults write`, pending a settings UI — the
-        /// same convention `events.accountName` follows.
         static func fromDefaults(_ defaults: UserDefaults = .standard) -> Configuration {
             let account = defaults.string(forKey: accountDefaultsKey)?
                 .trimmingCharacters(in: .whitespaces)
@@ -40,21 +33,36 @@ nonisolated final class OutlookMailSource: MailSource {
         }
     }
 
-    /// How many messages one envelope Apple event covers. A click that wants
-    /// a body is queued as a `.detail` and can only run *between* events, so
-    /// a full refresh is walked in slices rather than one 10-second tell.
-    static let envelopeChunkSize = 40
-
     let sourceID = "outlook"
     var displayName: String { configuration.accountName ?? "Inbox" }
 
     private let configuration: Configuration
-    /// Serialises Apple events. Details jump ahead of sweep slices so
-    /// opening a message is not stuck behind `messages 1 thru N`.
-    private let events = MailAppleEventQueue()
+    private let databaseURL: URL
+    private let daemon: OlSyncMailDaemon?
+    private let lock = NSLock()
+    /// Outlook record id → indexer row id. `message` is addressed by the
+    /// latter; Recent Mail and reveal still use the former.
+    private var rowIDs: [Int64: Int64] = [:]
+    private var ready = false
 
-    init(configuration: Configuration = .fromDefaults()) {
+    init(
+        configuration: Configuration = .fromDefaults(),
+        databaseURL: URL = OlSyncMailProtocol.databaseURL(),
+        daemon: OlSyncMailDaemon? = nil
+    ) {
         self.configuration = configuration
+        self.databaseURL = databaseURL
+        if let daemon {
+            self.daemon = daemon
+        } else if let executable = OlSyncMailDaemon.resolveExecutable() {
+            self.daemon = OlSyncMailDaemon(executable: executable)
+        } else {
+            self.daemon = nil
+        }
+    }
+
+    deinit {
+        daemon?.shutdown()
     }
 
     // MARK: - MailSource
@@ -65,289 +73,123 @@ nonisolated final class OutlookMailSource: MailSource {
 
     func envelopes(
         in range: Range<Date>,
-        known: [MailMessage],
+        known _: [MailMessage],
         userInitiated: Bool
     ) async throws -> [MailMessage] {
-        try await fetchEnvelopes(in: range, known: known, userInitiated: userInitiated)
+        let daemon = try helper()
+        try await prepare(daemon: daemon)
+        try await synchronize(daemon: daemon, in: range, userInitiated: userInitiated)
+        return try await loadEnvelopes(daemon: daemon, in: range)
     }
 
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail {
-        try await events.submit(priority: .detail) {
-            try Self.preflight(userInitiated: true)
-            let payload = try Self.runOnMessage(OutlookMailScripting.detail(messageID: id))
-            return OutlookMailDecoder.detail(payload, id: id)
+        let daemon = try helper()
+        try await prepare(daemon: daemon)
+        let rowID = lock.withLock { rowIDs[id] } ?? id
+        do {
+            let object = try await daemon.message(id: rowID)
+            return OlSyncMailProtocol.detail(from: object, fallbackID: id)
+        } catch let error as OlSyncMailError {
+            if case .failed(let message) = error, message.contains("no message") {
+                throw MailSourceError.messageUnavailable
+            }
+            throw error
         }
     }
 
     func reveal(messageID id: Int64) async throws {
-        try await events.submit(priority: .detail) {
-            try Self.preflight(userInitiated: true)
-            _ = try Self.runOnMessage(OutlookMailScripting.reveal(messageID: id))
-        }
+        try Self.runOnMessage(OutlookMailScripting.reveal(messageID: id))
     }
 
-    // MARK: - Preflight
+    // MARK: - Session
 
-    /// `NSAppleScript` sends the event that raises the TCC dialog, so an
-    /// automatic refresh must not reach it while consent is undetermined. The
-    /// running check matters just as much: sending would otherwise *launch*
-    /// Outlook merely because Planner opened.
-    private static func preflight(userInitiated: Bool) throws {
-        guard OutlookEventSource.isOutlookRunning else { throw OutlookError.notRunning }
-        try OutlookEventSource.allowFetch(
-            permission: OutlookEventSource.automationPermission(),
-            userInitiated: userInitiated
-        )
+    private func helper() throws -> OlSyncMailDaemon {
+        guard let daemon else { throw OlSyncMailError.helperMissing }
+        return daemon
     }
 
-    // MARK: - The fetch
-
-    private func fetchEnvelopes(
-        in range: Range<Date>,
-        known: [MailMessage],
-        userInitiated: Bool
-    ) async throws -> [MailMessage] {
-        let started = Date()
-        let configuration = configuration
-        let accountIndex = try await events.submit(priority: .sweep) {
-            try Self.preflight(userInitiated: userInitiated)
-            return try Self.resolveAccountIndex(configuration: configuration)
+    private func prepare(daemon: OlSyncMailDaemon) async throws {
+        if lock.withLock({ ready }) { return }
+        let hello = try await daemon.hello()
+        let protocolVersion = UInt32(OlSyncMailProtocol.int64(hello["protocol"]) ?? 0)
+        guard protocolVersion == OlSyncMailProtocol.version else {
+            throw OlSyncMailError.protocolMismatch(protocolVersion)
         }
-
-        let matched = try await events.submit(priority: .sweep) { () -> Int in
-            let payload = try Self.run(OutlookMailScripting.windowCount(
-                accountIndex: accountIndex,
-                since: range.lowerBound,
-                calendar: Calendar.current
-            ))
-            return Int(OutlookMailDecoder.identifier(payload) ?? 0)
-        }
-        guard matched > 0 else {
-            PlannerLog.mail.info("Outlook mail sweep: window is empty")
-            return []
-        }
-        let count = min(matched, configuration.maximumMessages)
-        if count < matched {
-            PlannerLog.mail.info(
-                """
-                Outlook mail sweep capped at \(count, privacy: .public) \
-                of \(matched, privacy: .public) messages in the window
-                """
-            )
-        }
-
-        let messages: [MailMessage]
-        if userInitiated || known.isEmpty {
-            messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
-            logSweep(kind: "full", matched: matched, kept: messages.count, started: started)
-        } else {
-            messages = try await readIncrementalEnvelopes(
-                accountIndex: accountIndex,
-                count: count,
-                known: known,
-                matched: matched,
-                started: started
-            )
-        }
-
-        // The count query only bounds the *older* edge. A message dated in the
-        // future — a clock skew upstream, or a draft-like oddity — would sit at
-        // the head of the list and belongs nowhere in a "last N days" window.
-        return messages.filter { range.contains($0.receivedAt) }
-    }
-
-    private func readIncrementalEnvelopes(
-        accountIndex: Int,
-        count: Int,
-        known: [MailMessage],
-        matched: Int,
-        started: Date
-    ) async throws -> [MailMessage] {
-        let scan: [(id: Int64, isRead: Bool)]
         do {
-            scan = try await events.submit(priority: .sweep) {
-                let payload = try Self.run(OutlookMailScripting.indexScan(
-                    accountIndex: accountIndex,
-                    count: count
-                ))
-                return try OutlookMailDecoder.indexScan(payload)
-            }
+            _ = try await daemon.open(database: databaseURL)
+        } catch OlSyncMailError.schemaMismatch {
+            try Self.removeDatabase(at: databaseURL)
+            _ = try await daemon.open(database: databaseURL)
+        }
+        lock.withLock { ready = true }
+    }
+
+    private func synchronize(
+        daemon: OlSyncMailDaemon,
+        in range: Range<Date>,
+        userInitiated: Bool
+    ) async throws {
+        let pending: [String: Any]
+        do {
+            pending = try await daemon.refresh()
         } catch {
-            PlannerLog.mail.error(
-                "Outlook mail index scan failed; falling back to a full sweep"
-            )
-            let messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
-            logSweep(kind: "full-fallback", matched: matched, kept: messages.count, started: started)
-            return messages
+            // No prior sync: refresh still needs Outlook's profile. Fall
+            // through to `sync`, which reports the same permission errors.
+            pending = [:]
+            PlannerLog.mail.info("olsyncmail refresh skipped: \(error.localizedDescription, privacy: .public)")
         }
-
-        let currentIDs = scan.map(\.id)
-        let knownIDs = Set(known.map(\.id))
-        switch MailEnvelopeSweep.plan(currentIDs: currentIDs, knownIDs: knownIDs) {
-        case .full:
-            let messages = try await readFullEnvelopes(accountIndex: accountIndex, count: count)
-            logSweep(kind: "full-tail", matched: matched, kept: messages.count, started: started)
-            return messages
-        case .reuse:
-            let assembled = MailEnvelopeSweep.assemble(
-                currentIDs: currentIDs,
-                isRead: Dictionary(uniqueKeysWithValues: scan.map { ($0.id, $0.isRead) }),
-                known: Dictionary(uniqueKeysWithValues: known.map { ($0.id, $0) }),
-                fresh: []
-            )
-            logSweep(kind: "reuse", matched: matched, kept: assembled.count, started: started)
-            return assembled
-        case let .prefix(prefixCount):
-            let fresh = try await readFullEnvelopes(accountIndex: accountIndex, count: prefixCount)
-            let assembled = MailEnvelopeSweep.assemble(
-                currentIDs: currentIDs,
-                isRead: Dictionary(uniqueKeysWithValues: scan.map { ($0.id, $0.isRead) }),
-                known: Dictionary(uniqueKeysWithValues: known.map { ($0.id, $0) }),
-                fresh: fresh
-            )
-            logSweep(kind: "prefix-\(prefixCount)", matched: matched, kept: assembled.count, started: started)
-            return assembled
+        let changed = OlSyncMailProtocol.int64(pending["changed_since_last_sync"]) ?? 1
+        let lastSync = OlSyncMailProtocol.int64(pending["last_sync"])
+        guard userInitiated || lastSync == nil || changed > 0 else {
+            PlannerLog.mail.info("olsyncmail: index is current")
+            return
         }
+        let since = Int64(range.lowerBound.timeIntervalSince1970)
+        try await daemon.sync(since: since)
     }
 
-    /// Walks `1 thru count` in slices so a `.detail` item queued mid-sweep
-    /// can run at a slice boundary rather than after the whole window.
-    private func readFullEnvelopes(accountIndex: Int, count: Int) async throws -> [MailMessage] {
-        var collected: [MailMessage] = []
-        var start = 1
-        while start <= count {
-            let end = min(start + Self.envelopeChunkSize - 1, count)
-            let sliceStart = start
-            let sliceEnd = end
-            let batch = try await events.submit(priority: .sweep) {
-                let payload = try Self.run(OutlookMailScripting.envelopes(
-                    accountIndex: accountIndex,
-                    from: sliceStart,
-                    through: sliceEnd
-                ))
-                return try OutlookMailDecoder.envelopes(payload)
+    private func loadEnvelopes(daemon: OlSyncMailDaemon, in range: Range<Date>) async throws -> [MailMessage] {
+        let query = OlSyncMailProtocol.windowQuery(in: range)
+        let limit = configuration.maximumMessages
+        let hits = try await daemon.search(query: query, limit: limit)
+        let recordIDs = hits.compactMap { OlSyncMailProtocol.int64($0["record_id"]) }
+        let readFlags = OlSyncMailReadFlags.load(database: databaseURL, recordIDs: recordIDs)
+        var mapping: [Int64: Int64] = [:]
+        let messages: [MailMessage] = hits.compactMap { hit in
+            let recordID = OlSyncMailProtocol.int64(hit["record_id"])
+            let rowID = OlSyncMailProtocol.int64(hit["message_id"])
+            if let recordID, let rowID {
+                mapping[recordID] = rowID
             }
-            collected.append(contentsOf: batch)
-            start = end + 1
+            let isRead = recordID.flatMap { readFlags[$0] } ?? false
+            guard let message = OlSyncMailProtocol.envelope(hit: hit, isRead: isRead) else { return nil }
+            return range.contains(message.receivedAt) ? message : nil
         }
-        return collected
-    }
-
-    private func logSweep(kind: String, matched: Int, kept: Int, started: Date) {
+        lock.withLock { rowIDs.merge(mapping, uniquingKeysWith: { _, new in new }) }
         PlannerLog.mail.info(
-            """
-            Outlook mail sweep (\(kind, privacy: .public)): \
-            \(matched, privacy: .public) in window, \
-            \(kept, privacy: .public) kept \
-            in \(Int(Date().timeIntervalSince(started) * 1000), privacy: .public)ms
-            """
+            "olsyncmail search kept \(messages.count, privacy: .public) of \(hits.count, privacy: .public) hits"
         )
+        return messages
     }
 
-    /// Which Exchange account to read, as an index into Outlook's own list.
-    ///
-    /// An index rather than a name substituted into the script: the scripts
-    /// then contain nothing but numbers, so there is no quoting to get wrong
-    /// and no account name that can change what a script means.
-    private static func resolveAccountIndex(configuration: Configuration) throws -> Int {
-        let payload = try run(OutlookMailScripting.accountNames)
-        let names = OutlookMailDecoder.list(payload).map {
-            OutlookMailDecoder.string($0) ?? ""
+    private static func removeDatabase(at url: URL) throws {
+        let extras = ["", "-wal", "-shm"]
+        for extra in extras {
+            let file = extra.isEmpty ? url : URL(fileURLWithPath: url.path + extra)
+            try? FileManager.default.removeItem(at: file)
         }
-        guard !names.isEmpty else { throw OutlookError.noExchangeAccounts }
-
-        guard let wanted = configuration.accountName else { return 1 }
-        guard let index = names.firstIndex(of: wanted) else {
-            throw OutlookError.accountNotFound(name: wanted, available: names.filter { !$0.isEmpty })
-        }
-        return index + 1   // AppleScript indexes from one.
     }
 
-    // MARK: - Running scripts
-
-    /// Compiles and runs one script, mapping its failure onto `OutlookError`.
-    ///
-    /// Compiled per call rather than cached: `NSAppleScript` is not `Sendable`
-    /// and a compiled script holds a connection to its target, so keeping one
-    /// alive across an Outlook restart is a stale-handle bug waiting to happen.
-    /// Compilation is microseconds against Apple events measured in seconds.
-    private static func run(_ source: String) throws -> NSAppleEventDescriptor {
+    private static func runOnMessage(_ source: String) throws {
         guard let script = NSAppleScript(source: source) else {
             throw OutlookError.scriptingUnavailable
         }
         var error: NSDictionary?
-        let result = script.executeAndReturnError(&error)
-        if let error { throw OutlookError.fromAppleScript(error) }
-        return result
-    }
-
-    /// The same, for scripts addressed at one message by id — where "no such
-    /// object" is an ordinary outcome rather than a fault. The message may have
-    /// been filed, archived or deleted upstream since the sweep saw it, and the
-    /// reader should say that rather than report an Apple event number.
-    private static func runOnMessage(_ source: String) throws -> NSAppleEventDescriptor {
-        do {
-            return try run(source)
-        } catch let error as OutlookError where error.isMissingObject {
-            throw MailSourceError.messageUnavailable
-        }
-    }
-}
-
-/// Serialises Apple events to Outlook. A `.detail` item is always taken
-/// before a `.sweep` slice, so a click that wants a body runs at the next
-/// event boundary instead of after the rest of the window.
-nonisolated final class MailAppleEventQueue: @unchecked Sendable {
-    enum Priority {
-        case detail
-        case sweep
-    }
-
-    private let lock = NSLock()
-    private var pending: [(priority: Priority, work: () -> Void)] = []
-    private var running = false
-    private let runner = DispatchQueue(
-        label: "com.rihscb.Planner.outlook.mail",
-        qos: .userInitiated
-    )
-
-    func submit<T: Sendable>(
-        priority: Priority,
-        _ work: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            enqueue(priority: priority) {
-                continuation.resume(with: Result { try work() })
-            }
-        }
-    }
-
-    func enqueue(priority: Priority, _ work: @escaping () -> Void) {
-        lock.lock()
-        pending.append((priority, work))
-        let start = !running
-        if start { running = true }
-        lock.unlock()
-        if start {
-            runner.async { self.drain() }
-        }
-    }
-
-    private func drain() {
-        while true {
-            lock.lock()
-            let next: (() -> Void)?
-            if let index = pending.firstIndex(where: { $0.priority == .detail }) {
-                next = pending.remove(at: index).work
-            } else if !pending.isEmpty {
-                next = pending.removeFirst().work
-            } else {
-                running = false
-                lock.unlock()
-                return
-            }
-            lock.unlock()
-            next?()
+        script.executeAndReturnError(&error)
+        if let error {
+            let mapped = OutlookError.fromAppleScript(error)
+            if mapped.isMissingObject { throw MailSourceError.messageUnavailable }
+            throw mapped
         }
     }
 }

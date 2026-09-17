@@ -27,8 +27,9 @@
 		A4000000000000000000000015 /* MailListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000015 /* MailListTests.swift */; };
 		A4000000000000000000000016 /* MailHeaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000016 /* MailHeaders.swift */; };
 		A4000000000000000000000017 /* OutlookMailScripting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000017 /* OutlookMailScripting.swift */; };
-		A4000000000000000000000018 /* OutlookMailDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000018 /* OutlookMailDecoder.swift */; };
 		A4000000000000000000000019 /* OutlookMailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000019 /* OutlookMailSource.swift */; };
+		A4000000000000000000000080 /* OlSyncMailProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000080 /* OlSyncMailProtocol.swift */; };
+		A4000000000000000000000081 /* OlSyncMailDaemon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000081 /* OlSyncMailDaemon.swift */; };
 		A400000000000000000000001A /* MailHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001A /* MailHeaderTests.swift */; };
 		A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001B /* OutlookMailSourceTests.swift */; };
 		A400000000000000000000001C /* MailListOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001C /* MailListOutlineView.swift */; };
@@ -40,6 +41,11 @@
 		A4000000000000000000000022 /* MailEnvelopeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000022 /* MailEnvelopeCache.swift */; };
 		A4000000000000000000000023 /* MailEnvelopeCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000023 /* MailEnvelopeCacheTests.swift */; };
 		A4000000000000000000000030 /* MailSidecarFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000030 /* MailSidecarFile.swift */; };
+		A4000000000000000000000070 /* OnDeviceLanguageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000070 /* OnDeviceLanguageModel.swift */; };
+		A4000000000000000000000071 /* MailSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000071 /* MailSummary.swift */; };
+		A4000000000000000000000072 /* MailSummaryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000072 /* MailSummaryCoordinator.swift */; };
+		A4000000000000000000000073 /* StubOnDeviceLanguageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */; };
+		A4000000000000000000000074 /* MailSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000074 /* MailSummaryTests.swift */; };
 		A4000000000000000000000031 /* MailDismissals.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000031 /* MailDismissals.swift */; };
 		A4000000000000000000000032 /* MailDismissalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000032 /* MailDismissalTests.swift */; };
 		A4000000000000000000000033 /* SavedMessageSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000033 /* SavedMessageSearch.swift */; };
@@ -147,8 +153,9 @@
 		A3000000000000000000000015 /* MailListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000016 /* MailHeaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaders.swift; sourceTree = "<group>"; };
 		A3000000000000000000000017 /* OutlookMailScripting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailScripting.swift; sourceTree = "<group>"; };
-		A3000000000000000000000018 /* OutlookMailDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailDecoder.swift; sourceTree = "<group>"; };
 		A3000000000000000000000019 /* OutlookMailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSource.swift; sourceTree = "<group>"; };
+		A3000000000000000000000080 /* OlSyncMailProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlSyncMailProtocol.swift; sourceTree = "<group>"; };
+		A3000000000000000000000081 /* OlSyncMailDaemon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlSyncMailDaemon.swift; sourceTree = "<group>"; };
 		A300000000000000000000001A /* MailHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaderTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001B /* OutlookMailSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSourceTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001C /* MailListOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListOutlineView.swift; sourceTree = "<group>"; };
@@ -160,6 +167,11 @@
 		A3000000000000000000000022 /* MailEnvelopeCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailEnvelopeCache.swift; sourceTree = "<group>"; };
 		A3000000000000000000000023 /* MailEnvelopeCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailEnvelopeCacheTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000030 /* MailSidecarFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSidecarFile.swift; sourceTree = "<group>"; };
+		A3000000000000000000000070 /* OnDeviceLanguageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceLanguageModel.swift; sourceTree = "<group>"; };
+		A3000000000000000000000071 /* MailSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummary.swift; sourceTree = "<group>"; };
+		A3000000000000000000000072 /* MailSummaryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummaryCoordinator.swift; sourceTree = "<group>"; };
+		A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubOnDeviceLanguageModel.swift; sourceTree = "<group>"; };
+		A3000000000000000000000074 /* MailSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummaryTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000031 /* MailDismissals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailDismissals.swift; sourceTree = "<group>"; };
 		A3000000000000000000000032 /* MailDismissalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailDismissalTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000033 /* SavedMessageSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedMessageSearch.swift; sourceTree = "<group>"; };
@@ -269,6 +281,8 @@
 				A3000000000000000000000022 /* MailEnvelopeCache.swift */,
 				A3000000000000000000000031 /* MailDismissals.swift */,
 				A3000000000000000000000030 /* MailSidecarFile.swift */,
+				A3000000000000000000000071 /* MailSummary.swift */,
+				A3000000000000000000000072 /* MailSummaryCoordinator.swift */,
 			);
 			path = Mail;
 			sourceTree = "<group>";
@@ -334,6 +348,8 @@
 				A300000000000000000000000C /* MailStoreTests.swift */,
 				A300000000000000000000000B /* MailThreadingTests.swift */,
 				A3000000000000000000000007 /* MailCoordinatorTests.swift */,
+				A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */,
+				A3000000000000000000000074 /* MailSummaryTests.swift */,
 				A3000000000000000000000006 /* MailWindowTests.swift */,
 				A3000000000000000000000005 /* StubMailSource.swift */,
 				A30000000000000000000006 /* PlannerTests.swift */,
@@ -365,10 +381,19 @@
 			path = PlannerTests;
 			sourceTree = "<group>";
 		};
+		A2000000000000000000000D /* Intelligence */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000000070 /* OnDeviceLanguageModel.swift */,
+			);
+			path = Intelligence;
+			sourceTree = "<group>";
+		};
 		A20000000000000000000007 /* Model */ = {
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000010 /* Sync */,
+				A2000000000000000000000D /* Intelligence */,
 				A3000000000000000000000009 /* SavedMessage+CoreData.swift */,
 				A3000000000000000000000033 /* SavedMessageSearch.swift */,
 				A3000000000000000000000008 /* MailFolder+CoreData.swift */,
@@ -443,7 +468,8 @@
 			isa = PBXGroup;
 			children = (
 				A3000000000000000000000019 /* OutlookMailSource.swift */,
-				A3000000000000000000000018 /* OutlookMailDecoder.swift */,
+				A3000000000000000000000080 /* OlSyncMailProtocol.swift */,
+				A3000000000000000000000081 /* OlSyncMailDaemon.swift */,
 				A3000000000000000000000017 /* OutlookMailScripting.swift */,
 				A3000000000000000000000016 /* MailHeaders.swift */,
 				A3000000000000000000002F /* ICalendar.swift */,
@@ -481,6 +507,7 @@
 				A50000000000000000000001 /* Sources */,
 				A50000000000000000000002 /* Frameworks */,
 				A50000000000000000000003 /* Resources */,
+				A50000000000000000000007 /* Copy olsyncmail */,
 			);
 			buildRules = (
 			);
@@ -566,6 +593,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A50000000000000000000007 /* Copy olsyncmail */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy olsyncmail";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/olsyncmail",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "SRC=\"${MAILINDEX_DIR:-${SRCROOT}/../mailindex}/target/release/olsyncmail\"\nDEST=\"${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/olsyncmail\"\nif [ ! -x \"$SRC\" ]; then\n  # Release is what gets installed, so a missing helper is a failure there and\n  # only a nuisance in Debug, where PATH is a reasonable fallback.\n  if [ \"${CONFIGURATION}\" = \"Release\" ]; then\n    echo \"error: olsyncmail not found at $SRC -- build it with scripts/package.sh, or set MAILINDEX_DIR\"\n    exit 1\n  fi\n  echo \"warning: olsyncmail not found at $SRC; Planner will look on PATH at runtime\"\n  exit 0\nfi\n\n# Nested code has to carry the app's own signature before Xcode seals the\n# bundle; left ad-hoc from the Rust linker it fails --deep validation. Signing\n# happens in TARGET_TEMP_DIR because codesign writes a .cstemp beside its\n# argument, and under ENABLE_USER_SCRIPT_SANDBOXING only the declared output\n# file itself is writable, not the directory holding it.\nSTAGE=\"${TARGET_TEMP_DIR}/olsyncmail\"\nmkdir -p \"${TARGET_TEMP_DIR}\"\ncp -f \"$SRC\" \"$STAGE\"\nchmod +x \"$STAGE\"\nif [ \"${CODE_SIGNING_ALLOWED}\" != \"NO\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  codesign --force --options runtime --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \"$STAGE\"\nfi\n\nmkdir -p \"$(dirname \"$DEST\")\"\ncp -f \"$STAGE\" \"$DEST\"\nchmod +x \"$DEST\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A50000000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -578,7 +628,8 @@
 				A40000000000000000000053 /* CloudSyncController.swift in Sources */,
 				A400000000000000000000001C /* MailListOutlineView.swift in Sources */,
 				A4000000000000000000000019 /* OutlookMailSource.swift in Sources */,
-				A4000000000000000000000018 /* OutlookMailDecoder.swift in Sources */,
+				A4000000000000000000000080 /* OlSyncMailProtocol.swift in Sources */,
+				A4000000000000000000000081 /* OlSyncMailDaemon.swift in Sources */,
 				A4000000000000000000000017 /* OutlookMailScripting.swift in Sources */,
 				A4000000000000000000000016 /* MailHeaders.swift in Sources */,
 				A4000000000000000000000011 /* MailLabels.swift in Sources */,
@@ -596,6 +647,9 @@
 				A4000000000000000000000022 /* MailEnvelopeCache.swift in Sources */,
 				A4000000000000000000000031 /* MailDismissals.swift in Sources */,
 				A4000000000000000000000030 /* MailSidecarFile.swift in Sources */,
+				A4000000000000000000000070 /* OnDeviceLanguageModel.swift in Sources */,
+				A4000000000000000000000071 /* MailSummary.swift in Sources */,
+				A4000000000000000000000072 /* MailSummaryCoordinator.swift in Sources */,
 				A40000000000000000000001 /* AppDelegate.swift in Sources */,
 				A4000000000000000000001C /* main.swift in Sources */,
 				A40000000000000000000005 /* PersistenceController.swift in Sources */,
@@ -656,6 +710,8 @@
 				A400000000000000000000000C /* MailStoreTests.swift in Sources */,
 				A400000000000000000000000B /* MailThreadingTests.swift in Sources */,
 				A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */,
+				A4000000000000000000000073 /* StubOnDeviceLanguageModel.swift in Sources */,
+				A4000000000000000000000074 /* MailSummaryTests.swift in Sources */,
 				A4000000000000000000000006 /* MailWindowTests.swift in Sources */,
 				A4000000000000000000000005 /* StubMailSource.swift in Sources */,
 				A40000000000000000000004 /* PlannerTests.swift in Sources */,
@@ -860,6 +916,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_STANDALONE_ICON_BEHAVIOR = all;
 				CODE_SIGN_ENTITLEMENTS = Planner/Planner.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

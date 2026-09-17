@@ -103,48 +103,4 @@ final class MailEnvelopeCacheTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
-    // MARK: - Detail priority
-
-    func testADetailJumpsAWaitingSweep() {
-        let queue = MailAppleEventQueue()
-        let started = DispatchSemaphore(value: 0)
-        let gate = DispatchSemaphore(value: 0)
-        let order = LockedStrings()
-
-        queue.enqueue(priority: .sweep) {
-            started.signal()
-            gate.wait()
-            order.append("s1")
-        }
-        started.wait()
-        // s1 is running (blocked). Queue a second sweep, then a detail.
-        queue.enqueue(priority: .sweep) { order.append("s2") }
-        queue.enqueue(priority: .detail) { order.append("d") }
-        gate.signal()
-
-        let deadline = Date().addingTimeInterval(1)
-        while order.snapshot().count < 3, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        XCTAssertEqual(order.snapshot(), ["s1", "d", "s2"])
-    }
-}
-
-/// `MailAppleEventQueue` runs off the main thread; this is just a lock box
-/// so the test can read the order it produced.
-private final class LockedStrings: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [String] = []
-
-    func append(_ value: String) {
-        lock.lock()
-        values.append(value)
-        lock.unlock()
-    }
-
-    func snapshot() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return values
-    }
 }

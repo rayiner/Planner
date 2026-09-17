@@ -153,6 +153,12 @@ enum MailLabels {
         "Saved to \(folderName)"
     }
 
+    /// The reserved summary line while the model has not answered yet. Says
+    /// that something is coming rather than leaving a gap that reads as a
+    /// layout bug. Cleared, not replaced, when a summary fails: a row that
+    /// could not be summarized is not worth a second line of explanation.
+    static let summarizing = "Summarizing…"
+
     static func conversationPosition(index: Int, of count: Int) -> String {
         "Message \(index + 1) of \(count) in this conversation"
     }
@@ -205,9 +211,11 @@ enum MailLabels {
         receivedAt: Date,
         isRead: Bool,
         savedFolderName: String?,
+        summary: String? = nil,
         calendar: Calendar = .current
     ) -> String {
         var parts = [sender, subject.isEmpty ? "No subject" : subject]
+        if let summary, !summary.isEmpty { parts.append(summary) }
         parts.append(readerTimestamp(for: receivedAt, calendar: calendar))
         if !isRead { parts.append("Unread") }
         if let savedFolderName { parts.append(savedChip(folderName: savedFolderName)) }

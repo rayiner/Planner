@@ -39,10 +39,10 @@ final class MailCoordinator {
         case failed(String)
     }
 
-    /// Backstop so the UI can always leave `.loading`. Longer than the
-    /// calendar's 30s: M0 measured ~60ms per message, so a 7-day window on a
-    /// busy inbox legitimately takes half a minute.
-    static let timeoutSeconds = 60
+    /// Backstop so the UI can always leave `.loading`. A first `olsyncmail`
+    /// index of a large mailbox is minutes, not seconds; later refreshes are
+    /// incremental and return almost immediately.
+    static let timeoutSeconds = 300
     /// A message body is one small read; if it has not landed in this long,
     /// something is wrong rather than slow.
     static let detailTimeoutSeconds = 20
@@ -53,6 +53,10 @@ final class MailCoordinator {
     private let defaults: UserDefaults
     private let envelopeStore: MailEnvelopeStore
     private let dismissalStore: MailDismissalStore
+    /// One-line summaries of the window, produced by the on-device model.
+    /// Owned here because it feeds on `messages` and on the shared body fetch,
+    /// and because the list reads it wherever it reads the coordinator.
+    let summaries: MailSummaryCoordinator
 
     private(set) var state: State = .idle
     private(set) var window: Range<Date>
@@ -107,6 +111,8 @@ final class MailCoordinator {
         defaults: UserDefaults = .standard,
         envelopeStore: MailEnvelopeStore = .disabled,
         dismissalStore: MailDismissalStore = .disabled,
+        summaryModel: OnDeviceLanguageModel = UnavailableOnDeviceLanguageModel(),
+        summaryStore: MailSummaryStore = .disabled,
         timeoutSeconds: Int = MailCoordinator.timeoutSeconds,
         detailTimeoutSeconds: Int = MailCoordinator.detailTimeoutSeconds
     ) {
@@ -120,6 +126,20 @@ final class MailCoordinator {
         self.detailTimeoutSeconds = detailTimeoutSeconds
         windowDays = MailWindow.days(from: defaults)
         window = MailWindow.current(days: windowDays, now: now(), calendar: calendar)
+        summaries = MailSummaryCoordinator(
+            model: summaryModel,
+            store: summaryStore,
+            sourceID: source.sourceID,
+            calendar: calendar,
+            now: now
+        )
+        // Bodies for summaries go through the same shared, cached fetch the
+        // reader uses, so opening a message never costs a second Apple event
+        // because the summarizer got there first.
+        summaries.detailLoader = { [weak self] id in
+            guard let self else { throw CancellationError() }
+            return try await self.loadDetail(for: id)
+        }
         // Before the envelopes, so the very first list a launch paints is
         // already filtered and a dismissed row never flashes up.
         restoreDismissals()
@@ -140,6 +160,7 @@ final class MailCoordinator {
         loadTask?.cancel()
         timeoutTask?.cancel()
         for task in detailTasks.values { task.cancel() }
+        // `summaries` cancels its own in-flight work in its deinit.
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -194,9 +215,9 @@ final class MailCoordinator {
 
         let source = source
         let seconds = timeoutSeconds
-        // The source wraps a blocking Apple event that never observes
-        // cancellation, so a task-group timeout would sit behind it. The timer
-        // only flips the UI; a late real result still applies via the
+        // The source's first sync can run for minutes and does not observe
+        // cancellation promptly, so a task-group timeout would sit behind it.
+        // The timer only flips the UI; a late real result still applies via the
         // generation gate.
         //
         // Unfiltered on purpose — see `allMessages`. Handing the sweep the
@@ -233,6 +254,7 @@ final class MailCoordinator {
         timeoutTask = nil
         for task in detailTasks.values { task.cancel() }
         detailTasks.removeAll()
+        summaries.cancel()
     }
 
     func message(id: Int64) -> MailMessage? {
@@ -426,9 +448,12 @@ final class MailCoordinator {
         )
     }
 
-    /// The one place the dismissal filter is applied.
+    /// The one place the dismissal filter is applied — and so the one place
+    /// the summarizer learns what is in the window. A dismissed message is not
+    /// worth a model call, and one that ages out leaves the queue with it.
     private func republish() {
         messages = dismissals.isEmpty ? allMessages : allMessages.filter { !dismissals.contains($0) }
+        summaries.update(messages: messages)
     }
 
     private static func sorted(_ messages: [MailMessage]) -> [MailMessage] {
