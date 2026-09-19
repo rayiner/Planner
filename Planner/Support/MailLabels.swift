@@ -83,18 +83,13 @@ enum MailLabels {
         return trimmed.isEmpty ? nil : "To: \(trimmed)"
     }
 
-    /// Says *that* a message carries attachments, not what they are: Planner
-    /// never opens one, so a list of names is dead weight in the header. The
-    /// count is kept when the source could read the list; a rights-protected
-    /// message refuses its list but still flags the header, and gets the
-    /// uncounted line.
-    static func attachmentsIndicator(count: Int, hasAttachments: Bool) -> String? {
-        guard hasAttachments || count > 0 else { return nil }
-        switch count {
-        case 0: return "Has attachments"
-        case 1: return "1 attachment"
-        default: return "\(count) attachments"
-        }
+    /// Fallback when the source flags attachments but cannot name them.
+    static let unnamedAttachments = "Has attachments"
+
+    static let attachmentNotStored = "This attachment wasn’t stored in the mail index."
+
+    static func attachmentAccessibilityLabel(filename: String, stored: Bool) -> String {
+        stored ? filename : "\(filename), not stored"
     }
 
     /// The banner that says a message is on its way out of the window.

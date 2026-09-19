@@ -25,6 +25,7 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     private var _availableCategories: [OutlookCategory] = []
     private var _folders: [MailFolder] = []
     private var _categoryChanges: [(id: Int64, categoryID: Int64, present: Bool)] = []
+    private var blobs: [String: Data] = [:]
     private var hiddenChangeError: Error?
     private var hiddenChangeErrorsByID: [Int64: Error] = [:]
     private var categoryChangeErrorsByID: [Int64: Error] = [:]
@@ -159,6 +160,21 @@ final class StubMailSource: MailSource, @unchecked Sendable {
 
     func reveal(messageID id: Int64) async throws {
         lock.withLock { _revealedIDs.append(id) }
+    }
+
+    func setAttachmentData(_ data: Data, sha256: String) {
+        lock.withLock { blobs[sha256] = data }
+    }
+
+    func fileURL(for attachment: MailAttachment) async throws -> URL {
+        guard attachment.stored else { throw MailSourceError.attachmentUnavailable }
+        let data: Data? = lock.withLock { blobs[attachment.sha256] }
+        guard let data else { throw MailSourceError.attachmentUnavailable }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            OlSyncAttachmentStore.fileName(for: attachment)
+        )
+        try data.write(to: url, options: .atomic)
+        return url
     }
 
     func setHidden(_ hidden: Bool, messageID id: Int64) async throws {
@@ -326,9 +342,27 @@ extension MailMessageDetail {
         references: String? = nil,
         recipients: String? = "you@example.com",
         hasAttachments: Bool = false,
-        attachmentNames: String? = nil
+        attachmentNames: String? = nil,
+        attachments: [MailAttachment] = []
     ) -> MailMessageDetail {
-        MailMessageDetail(
+        let resolved: [MailAttachment]
+        if attachments.isEmpty, let attachmentNames {
+            resolved = attachmentNames
+                .components(separatedBy: "\n")
+                .filter { !$0.isEmpty }
+                .enumerated()
+                .map { index, name in
+                    MailAttachment(
+                        id: Int64(index + 1),
+                        filename: name,
+                        sha256: "sha-\(name)",
+                        stored: true
+                    )
+                }
+        } else {
+            resolved = attachments
+        }
+        return MailMessageDetail(
             id: id,
             body: body,
             html: html,
@@ -337,7 +371,7 @@ extension MailMessageDetail {
             references: references,
             recipients: recipients,
             hasAttachments: hasAttachments,
-            attachmentNames: attachmentNames
+            attachments: resolved
         )
     }
 }

@@ -361,8 +361,21 @@ final class OutlookMailSourceTests: XCTestCase {
                     ["X-MS-Has-Attach", "yes"],
                 ],
                 "attachments": [
-                    ["filename": "brief.pdf"],
-                    ["filename": "exhibit.docx"],
+                    [
+                        "attachment_id": 91,
+                        "filename": "brief.pdf",
+                        "content_type": "application/pdf",
+                        "size": 12,
+                        "sha256": "aaa",
+                        "stored": true,
+                        "is_inline": false,
+                        "blob_rowid": 139,
+                    ],
+                    [
+                        "attachment_id": 92,
+                        "filename": "exhibit.docx",
+                        "stored": false,
+                    ],
                 ],
             ],
             fallbackID: 0
@@ -375,6 +388,59 @@ final class OutlookMailSourceTests: XCTestCase {
         XCTAssertEqual(detail.recipients, "Ray <ray@example.com>, Ada <ada@example.com>")
         XCTAssertTrue(detail.hasAttachments)
         XCTAssertEqual(detail.attachmentNames, "brief.pdf\nexhibit.docx")
+        XCTAssertEqual(detail.attachments.map(\.filename), ["brief.pdf", "exhibit.docx"])
+        XCTAssertEqual(detail.attachments.map(\.id), [91, 92])
+        XCTAssertEqual(detail.attachments.map(\.stored), [true, false])
+        XCTAssertEqual(detail.attachments.map(\.isInline), [false, false])
+        XCTAssertEqual(detail.attachments.first?.sha256, "aaa")
+        XCTAssertEqual(detail.attachments.first?.blobRowid, 139)
+        XCTAssertEqual(detail.attachments.first?.contentType, "application/pdf")
+    }
+
+    func testInlineImagesAreOmittedFromTheReaderList() {
+        let image = MailAttachment(
+            id: 1,
+            filename: "image001.png",
+            contentType: "image/png",
+            sha256: "img",
+            isInline: true
+        )
+        let brief = MailAttachment(id: 2, filename: "brief.pdf", sha256: "pdf")
+        XCTAssertFalse(image.showsInReader)
+        XCTAssertTrue(brief.showsInReader)
+    }
+
+    func testAttachmentStoreWritesTheBlobToATempFile() throws {
+        let database = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OlSyncAttachmentStoreTests-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: database) }
+        let payload = Data("hello-attachment".utf8)
+        try OlSyncAttachmentStore.seedForTesting(
+            databaseURL: database,
+            sha256: "deadbeefcafebabe",
+            content: payload
+        )
+        let attachment = MailAttachment(
+            id: 1,
+            filename: "brief.pdf",
+            sha256: "deadbeefcafebabe"
+        )
+        let url = try OlSyncAttachmentStore.fileURL(for: attachment, databaseURL: database)
+        XCTAssertEqual(try Data(contentsOf: url), payload)
+        XCTAssertTrue(url.lastPathComponent.contains("brief.pdf"))
+        let again = try OlSyncAttachmentStore.fileURL(for: attachment, databaseURL: database)
+        XCTAssertEqual(url, again)
+    }
+
+    func testUnstoredAttachmentsAreNotMaterialized() {
+        XCTAssertThrowsError(
+            try OlSyncAttachmentStore.fileURL(
+                for: MailAttachment(id: 1, filename: "huge.zip", sha256: "abc", stored: false),
+                databaseURL: URL(fileURLWithPath: "/tmp/missing.sqlite")
+            )
+        ) { error in
+            XCTAssertEqual(error as? MailSourceError, .attachmentUnavailable)
+        }
     }
 
     // MARK: - Configuration

@@ -549,6 +549,11 @@ final class MailCoordinator {
         try await source.reveal(messageID: id)
     }
 
+    /// Copies a stored attachment out of the index so the reader can open it.
+    func fileURL(for attachment: MailAttachment) async throws -> URL {
+        try await source.fileURL(for: attachment)
+    }
+
     private func sharedDetailTask(for id: Int64) -> Task<MailMessageDetail, Error> {
         if let existing = detailTasks[id] { return existing }
         let source = source

@@ -24,6 +24,7 @@
 		A4000000000000000000000019 /* OutlookMailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000019 /* OutlookMailSource.swift */; };
 		A4000000000000000000000080 /* OlSyncMailProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000080 /* OlSyncMailProtocol.swift */; };
 		A4000000000000000000000081 /* OlSyncMailDaemon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000081 /* OlSyncMailDaemon.swift */; };
+		B400000000000000000000010 /* OlSyncAttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300000000000000000000010 /* OlSyncAttachmentStore.swift */; };
 		A400000000000000000000001A /* MailHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001A /* MailHeaderTests.swift */; };
 		A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001B /* OutlookMailSourceTests.swift */; };
 		A400000000000000000000001C /* MailListOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001C /* MailListOutlineView.swift */; };
@@ -135,6 +136,7 @@
 		A3000000000000000000000019 /* OutlookMailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSource.swift; sourceTree = "<group>"; };
 		A3000000000000000000000080 /* OlSyncMailProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlSyncMailProtocol.swift; sourceTree = "<group>"; };
 		A3000000000000000000000081 /* OlSyncMailDaemon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlSyncMailDaemon.swift; sourceTree = "<group>"; };
+		B300000000000000000000010 /* OlSyncAttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OlSyncAttachmentStore.swift; sourceTree = "<group>"; };
 		A300000000000000000000001A /* MailHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaderTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001B /* OutlookMailSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSourceTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001C /* MailListOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListOutlineView.swift; sourceTree = "<group>"; };
@@ -446,6 +448,7 @@
 				A3000000000000000000000019 /* OutlookMailSource.swift */,
 				A3000000000000000000000080 /* OlSyncMailProtocol.swift */,
 				A3000000000000000000000081 /* OlSyncMailDaemon.swift */,
+				B300000000000000000000010 /* OlSyncAttachmentStore.swift */,
 				A3000000000000000000000017 /* OutlookMailScripting.swift */,
 				A3000000000000000000000016 /* MailHeaders.swift */,
 				A3000000000000000000003A /* OutlookError.swift */,
@@ -618,6 +621,7 @@
 				A4000000000000000000000019 /* OutlookMailSource.swift in Sources */,
 				A4000000000000000000000080 /* OlSyncMailProtocol.swift in Sources */,
 				A4000000000000000000000081 /* OlSyncMailDaemon.swift in Sources */,
+				B400000000000000000000010 /* OlSyncAttachmentStore.swift in Sources */,
 				A4000000000000000000000017 /* OutlookMailScripting.swift in Sources */,
 				A4000000000000000000000016 /* MailHeaders.swift in Sources */,
 				A4000000000000000000000011 /* MailLabels.swift in Sources */,

@@ -22,7 +22,7 @@ final class MailReaderViewController: NSViewController {
     private let senderField = NSTextField(labelWithString: "")
     private let recipientsField = NSTextField(labelWithString: "")
     private let dateField = NSTextField(labelWithString: "")
-    private let attachmentsField = NSTextField(labelWithString: "")
+    private let attachmentsStack = NSStackView()
     private let expiryBanner = NSTextField(labelWithString: "")
     private let bodyView = NSTextView()
     private let bodyScrollView = NSScrollView()
@@ -38,6 +38,8 @@ final class MailReaderViewController: NSViewController {
     /// against it rather than painted over whatever is on screen now.
     private var displayedMessageID: Int64?
     private var isBodyLoading = false
+    /// Tests replace this so opening an attachment does not launch Preview.
+    var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
 
     init(
         selection: SelectionModel,
@@ -103,7 +105,7 @@ final class MailReaderViewController: NSViewController {
         subjectField.cell?.truncatesLastVisibleLine = true
         subjectField.isSelectable = true
 
-        for field in [senderField, recipientsField, dateField, attachmentsField] {
+        for field in [senderField, recipientsField, dateField] {
             field.font = .systemFont(ofSize: 12)
             field.textColor = .secondaryLabelColor
             field.lineBreakMode = .byTruncatingTail
@@ -111,7 +113,10 @@ final class MailReaderViewController: NSViewController {
         }
         senderField.textColor = .labelColor
 
-        attachmentsField.textColor = .secondaryLabelColor
+        attachmentsStack.orientation = .vertical
+        attachmentsStack.alignment = .leading
+        attachmentsStack.spacing = 2
+        attachmentsStack.detachesHiddenViews = true
 
         expiryBanner.font = .systemFont(ofSize: 11, weight: .medium)
         expiryBanner.textColor = .secondaryLabelColor
@@ -125,7 +130,7 @@ final class MailReaderViewController: NSViewController {
         headerStack.detachesHiddenViews = true
         headerStack.translatesAutoresizingMaskIntoConstraints = false
         for view in [subjectField, senderField, recipientsField, dateField,
-                     attachmentsField, expiryBanner] {
+                     attachmentsStack, expiryBanner] {
             headerStack.addArrangedSubview(view)
             view.setContentHuggingPriority(.defaultLow, for: .horizontal)
             // At or below the split items' holding priorities (240–260): a long
@@ -309,18 +314,78 @@ final class MailReaderViewController: NSViewController {
         } else {
             recipientsField.isHidden = true
         }
+        showAttachments(detail)
+    }
 
-        let names = detail?.attachmentNames?
-            .components(separatedBy: "\n")
-            .filter { !$0.isEmpty } ?? []
-        if let line = MailLabels.attachmentsIndicator(
-            count: names.count,
-            hasAttachments: detail?.hasAttachments ?? false
-        ) {
-            attachmentsField.stringValue = "📎 \(line)"
-            attachmentsField.isHidden = false
-        } else {
-            attachmentsField.isHidden = true
+    private func showAttachments(_ detail: MailMessageDetail?) {
+        attachmentsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let listed = (detail?.attachments ?? []).filter(\.showsInReader)
+        if listed.isEmpty {
+            if detail?.hasAttachments == true {
+                let label = NSTextField(labelWithString: "📎 \(MailLabels.unnamedAttachments)")
+                label.font = .systemFont(ofSize: 12)
+                label.textColor = .secondaryLabelColor
+                attachmentsStack.addArrangedSubview(label)
+                attachmentsStack.isHidden = false
+            } else {
+                attachmentsStack.isHidden = true
+            }
+            return
+        }
+        for attachment in listed {
+            attachmentsStack.addArrangedSubview(makeAttachmentButton(attachment))
+        }
+        attachmentsStack.isHidden = false
+    }
+
+    private func makeAttachmentButton(_ attachment: MailAttachment) -> NSButton {
+        let button = AttachmentButton()
+        button.attachment = attachment
+        button.title = attachment.displayName
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.image = NSWorkspace.shared.icon(
+            forFileType: (attachment.displayName as NSString).pathExtension
+        )
+        button.image?.size = NSSize(width: 14, height: 14)
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+        button.font = .systemFont(ofSize: 12)
+        button.contentTintColor = .linkColor
+        (button.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingMiddle
+        button.setButtonType(.momentaryChange)
+        button.target = self
+        button.action = #selector(openAttachmentButton(_:))
+        button.isEnabled = attachment.stored
+        button.toolTip = attachment.stored ? attachment.displayName : MailLabels.attachmentNotStored
+        button.setAccessibilityLabel(
+            MailLabels.attachmentAccessibilityLabel(
+                filename: attachment.displayName,
+                stored: attachment.stored
+            )
+        )
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+
+    @objc private func openAttachmentButton(_ sender: AttachmentButton) {
+        guard let attachment = sender.attachment else { return }
+        openAttachment(attachment)
+    }
+
+    private func openAttachment(_ attachment: MailAttachment) {
+        guard attachment.stored else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let url = try await self.mail.fileURL(for: attachment)
+                _ = self.openURL(url)
+            } catch {
+                PlannerLog.mail.error(
+                    "Attachment open failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
     }
 
@@ -400,7 +465,23 @@ extension MailReaderViewController {
     var test_bodyStatus: String? { bodyStatusField.isHidden ? nil : bodyStatusField.stringValue }
     var test_isBodyLoading: Bool { isBodyLoading }
     var test_recipients: String? { recipientsField.isHidden ? nil : recipientsField.stringValue }
-    var test_attachments: String? { attachmentsField.isHidden ? nil : attachmentsField.stringValue }
+    var test_attachments: [String] {
+        attachmentsStack.isHidden
+            ? []
+            : attachmentsStack.arrangedSubviews.compactMap { view in
+                (view as? NSButton)?.title ?? (view as? NSTextField)?.stringValue
+            }
+    }
+    var test_attachmentEnabled: [Bool] {
+        attachmentsStack.arrangedSubviews.compactMap { ($0 as? NSButton)?.isEnabled }
+    }
+
+    func test_openAttachment(named name: String) {
+        let button = attachmentsStack.arrangedSubviews
+            .compactMap { $0 as? AttachmentButton }
+            .first { $0.title == name }
+        button?.performClick(nil)
+    }
     var test_displayedMessageID: Int64? { displayedMessageID }
     var test_subjectTruncatesLastVisibleLine: Bool {
         subjectField.cell?.truncatesLastVisibleLine ?? false
@@ -410,4 +491,8 @@ extension MailReaderViewController {
     }
     var test_subjectPreferredMaxLayoutWidth: CGFloat { subjectField.preferredMaxLayoutWidth }
     var test_recipientsLineBreakMode: NSLineBreakMode { recipientsField.lineBreakMode }
+}
+
+private final class AttachmentButton: NSButton {
+    var attachment: MailAttachment?
 }

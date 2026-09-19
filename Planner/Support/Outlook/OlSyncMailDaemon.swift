@@ -555,6 +555,11 @@ actor OlSyncOutlookSession {
         return OlSyncJSONObject(value: try await daemon.message(id: id))
     }
 
+    func fileURL(for attachment: MailAttachment) async throws -> URL {
+        try await prepare()
+        return try OlSyncAttachmentStore.fileURL(for: attachment, databaseURL: databaseURL)
+    }
+
     func categories() async throws -> [OutlookCategory] {
         try await prepare()
         return try await daemon.categories()

@@ -407,9 +407,8 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertEqual(reader.test_bodyLink, URL(string: "https://example.com/path"))
     }
 
-    /// The header says *that* attachments exist, not what they are: Planner
-    /// never opens one, so the names are dead weight in the reader.
-    func testTheReaderCountsAttachmentsRatherThanNamingThem() async {
+    /// The header lists filenames so a click can open the file.
+    func testTheReaderNamesAttachments() async {
         await load([message(id: 3, dayOffset: 0)])
         selection.selectMessage(.recent(3))
         await settle { self.source.pendingDetailCount > 0 }
@@ -418,9 +417,10 @@ final class MailListTests: PersistenceTestCase {
             hasAttachments: true,
             attachmentNames: "brief.pdf\nexhibit.png"
         ))
-        await settle { self.reader.test_attachments != nil }
+        await settle { !self.reader.test_attachments.isEmpty }
 
-        XCTAssertEqual(reader.test_attachments, "📎 2 attachments")
+        XCTAssertEqual(reader.test_attachments, ["brief.pdf", "exhibit.png"])
+        XCTAssertEqual(reader.test_attachmentEnabled, [true, true])
     }
 
     /// A rights-protected message refuses its attachment list but still flags
@@ -430,9 +430,9 @@ final class MailListTests: PersistenceTestCase {
         selection.selectMessage(.recent(3))
         await settle { self.source.pendingDetailCount > 0 }
         source.finishDetail(.fixture(id: 3, hasAttachments: true, attachmentNames: nil))
-        await settle { self.reader.test_attachments != nil }
+        await settle { !self.reader.test_attachments.isEmpty }
 
-        XCTAssertEqual(reader.test_attachments, "📎 Has attachments")
+        XCTAssertEqual(reader.test_attachments, ["📎 Has attachments"])
     }
 
     func testAMessageWithoutAttachmentsShowsNoIndicator() async {
@@ -442,7 +442,62 @@ final class MailListTests: PersistenceTestCase {
         source.finishDetail(.fixture(id: 3))
         await settle { !self.reader.test_body.isEmpty }
 
-        XCTAssertNil(reader.test_attachments)
+        XCTAssertEqual(reader.test_attachments, [])
+    }
+
+    func testClickingAnAttachmentOpensItInTheDefaultViewer() async {
+        var opened: [URL] = []
+        reader.openURL = { url in
+            opened.append(url)
+            return true
+        }
+        let payload = Data("pdf-bytes".utf8)
+        source.setAttachmentData(payload, sha256: "sha-brief.pdf")
+
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(
+            id: 3,
+            hasAttachments: true,
+            attachmentNames: "brief.pdf"
+        ))
+        await settle { self.reader.test_attachments == ["brief.pdf"] }
+
+        reader.test_openAttachment(named: "brief.pdf")
+        await settle { !opened.isEmpty }
+
+        XCTAssertEqual(opened.count, 1)
+        XCTAssertEqual(opened[0].lastPathComponent.hasSuffix("brief.pdf"), true)
+        XCTAssertEqual(try? Data(contentsOf: opened[0]), payload)
+    }
+
+    func testAnUnstoredAttachmentCannotBeOpened() async {
+        var opened: [URL] = []
+        reader.openURL = { url in
+            opened.append(url)
+            return true
+        }
+        await load([message(id: 3, dayOffset: 0)])
+        selection.selectMessage(.recent(3))
+        await settle { self.source.pendingDetailCount > 0 }
+        source.finishDetail(.fixture(
+            id: 3,
+            attachments: [
+                MailAttachment(
+                    id: 9,
+                    filename: "huge.zip",
+                    sha256: "abc",
+                    stored: false
+                )
+            ]
+        ))
+        await settle { self.reader.test_attachments == ["huge.zip"] }
+
+        XCTAssertEqual(reader.test_attachmentEnabled, [false])
+        reader.test_openAttachment(named: "huge.zip")
+        try? await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(opened.isEmpty)
     }
 
     /// A body that lands after the user has moved on must not paint over the

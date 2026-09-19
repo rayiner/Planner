@@ -141,6 +141,10 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
         }
     }
 
+    func fileURL(for attachment: MailAttachment) async throws -> URL {
+        try await helper().fileURL(for: attachment)
+    }
+
     func reveal(messageID id: Int64) async throws {
         try Self.runOnMessage(OutlookMailScripting.reveal(messageID: id))
     }

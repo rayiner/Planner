@@ -180,6 +180,56 @@ nonisolated struct MailMessage: Hashable, Sendable, Identifiable {
     }
 }
 
+/// One file attached to a message, as the index describes it.
+///
+/// The daemon never sends bytes over NDJSON. `sha256` is the key for a
+/// read-only `blobs` lookup; `stored` is false when a size cap skipped the
+/// payload, in which case there is nothing to open.
+nonisolated struct MailAttachment: Hashable, Sendable, Identifiable {
+    let id: Int64
+    let filename: String
+    let contentType: String?
+    let size: Int64
+    let sha256: String
+    let stored: Bool
+    let isInline: Bool
+    let blobRowid: Int64?
+
+    init(
+        id: Int64,
+        filename: String,
+        contentType: String? = nil,
+        size: Int64 = 0,
+        sha256: String,
+        stored: Bool = true,
+        isInline: Bool = false,
+        blobRowid: Int64? = nil
+    ) {
+        self.id = id
+        self.filename = filename
+        self.contentType = contentType
+        self.size = size
+        self.sha256 = sha256
+        self.stored = stored
+        self.isInline = isInline
+        self.blobRowid = blobRowid
+    }
+
+    var displayName: String {
+        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled attachment" : trimmed
+    }
+
+    /// Inline CID images stay out of the reader's list; real files, even if
+    /// Outlook marked them inline, still belong there.
+    var showsInReader: Bool {
+        if isInline, (contentType ?? "").lowercased().hasPrefix("image/") {
+            return false
+        }
+        return true
+    }
+}
+
 /// A message's body and threading headers, fetched one message at a time.
 ///
 /// Kept apart from `MailMessage` so the window sweep can never accidentally
@@ -198,7 +248,16 @@ nonisolated struct MailMessageDetail: Hashable, Sendable {
     let references: String?
     let recipients: String?
     let hasAttachments: Bool
-    let attachmentNames: String?
+    let attachments: [MailAttachment]
+
+    /// Newline-joined filenames, for MCP and anything that still wants a
+    /// single string. Nil when the source could not name any.
+    var attachmentNames: String? {
+        let names = attachments
+            .map { $0.filename.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return names.isEmpty ? nil : names.joined(separator: "\n")
+    }
 
     init(
         id: Int64,
@@ -209,7 +268,7 @@ nonisolated struct MailMessageDetail: Hashable, Sendable {
         references: String? = nil,
         recipients: String? = nil,
         hasAttachments: Bool = false,
-        attachmentNames: String? = nil
+        attachments: [MailAttachment] = []
     ) {
         self.id = id
         self.body = body
@@ -218,7 +277,7 @@ nonisolated struct MailMessageDetail: Hashable, Sendable {
         self.inReplyTo = inReplyTo
         self.references = references
         self.recipients = recipients
-        self.hasAttachments = hasAttachments
-        self.attachmentNames = attachmentNames
+        self.hasAttachments = hasAttachments || !attachments.isEmpty
+        self.attachments = attachments
     }
 }

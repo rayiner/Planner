@@ -644,6 +644,14 @@ final class MailCoordinatorTests: XCTestCase {
         XCTAssertEqual(source.revealedIDs, [7])
     }
 
+    func testFileURLForwardsAStoredAttachmentToTheSource() async throws {
+        let payload = Data("bytes".utf8)
+        source.setAttachmentData(payload, sha256: "abc")
+        let attachment = MailAttachment(id: 1, filename: "brief.pdf", sha256: "abc")
+        let url = try await coordinator.fileURL(for: attachment)
+        XCTAssertEqual(try Data(contentsOf: url), payload)
+    }
+
     // MARK: - Expiry
 
     func testExpiryDayUsesTheCurrentWindowLength() {

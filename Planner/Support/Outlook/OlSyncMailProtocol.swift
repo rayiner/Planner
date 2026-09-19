@@ -160,8 +160,7 @@ nonisolated enum OlSyncMailProtocol {
             return "\(name): \(value)"
         }.joined(separator: "\r")
         let parsed = MailHeaders.parse(block.isEmpty ? nil : block)
-        let attachments = (object["attachments"] as? [[String: Any]]) ?? []
-        let names = attachments.compactMap { $0["filename"] as? String }.filter { !$0.isEmpty }
+        let attachments = attachments(from: object)
         let to = object["to"] as? String
         let cc = object["cc"] as? String
         let recipients = [to, cc].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
@@ -175,9 +174,33 @@ nonisolated enum OlSyncMailProtocol {
             inReplyTo: parsed.inReplyTo,
             references: parsed.references,
             recipients: recipients.isEmpty ? parsed.recipients : recipients,
-            hasAttachments: !names.isEmpty || parsed.hasAttachments,
-            attachmentNames: names.isEmpty ? nil : names.joined(separator: "\n")
+            hasAttachments: !attachments.isEmpty || parsed.hasAttachments,
+            attachments: attachments
         )
+    }
+
+    /// Keys the daemon puts on `message`, including whether the payload is
+    /// actually in `blobs`. Filenames without a digest still belong in the
+    /// list so the reader can say they exist.
+    static func attachments(from object: [String: Any]) -> [MailAttachment] {
+        (object["attachments"] as? [[String: Any]] ?? []).compactMap { raw in
+            let filename = (raw["filename"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let sha256 = (raw["sha256"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let id = int64(raw["attachment_id"]) ?? 0
+            guard id != 0 || !filename.isEmpty || !sha256.isEmpty else { return nil }
+            return MailAttachment(
+                id: id,
+                filename: filename,
+                contentType: nonempty(raw["content_type"] as? String),
+                size: int64(raw["size"]) ?? 0,
+                sha256: sha256,
+                stored: bool(raw["stored"]),
+                isInline: bool(raw["is_inline"]),
+                blobRowid: int64(raw["blob_rowid"])
+            )
+        }
     }
 
     /// Decode the `categories` reply.

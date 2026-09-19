@@ -43,6 +43,10 @@ nonisolated protocol MailSource: Sendable {
     /// The body and headers of one message, by the id its envelope carried.
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail
 
+    /// Writes one stored attachment to a temporary file so the reader can
+    /// hand it to the default viewer. Throws if the payload was never stored.
+    func fileURL(for attachment: MailAttachment) async throws -> URL
+
     /// Brings the original up in Outlook. Always user-initiated: opening an
     /// unread message marks it read upstream, which is a write.
     func reveal(messageID id: Int64) async throws
@@ -88,6 +92,10 @@ nonisolated struct NullMailSource: MailSource {
 
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail {
         throw MailSourceError.messageUnavailable
+    }
+
+    func fileURL(for attachment: MailAttachment) async throws -> URL {
+        throw MailSourceError.attachmentUnavailable
     }
 
     func reveal(messageID id: Int64) async throws {
@@ -157,6 +165,9 @@ nonisolated enum MailSourceError: LocalizedError, Equatable {
     /// The message is no longer where its id said it was — moved, deleted, or
     /// aged out of Outlook while Planner held a stale envelope.
     case messageUnavailable
+    /// The index has the name but not the bytes — size cap, `--no-attachment-content`,
+    /// or a blob that has not been written yet.
+    case attachmentUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -164,6 +175,8 @@ nonisolated enum MailSourceError: LocalizedError, Equatable {
             return "Outlook didn’t respond within \(seconds) seconds."
         case .messageUnavailable:
             return "That message is no longer in Outlook."
+        case .attachmentUnavailable:
+            return "That attachment isn’t available."
         }
     }
 
@@ -173,6 +186,8 @@ nonisolated enum MailSourceError: LocalizedError, Equatable {
             return "Try refreshing. A large mailbox can take a while."
         case .messageUnavailable:
             return "It may have been moved or deleted. Refresh to see what’s there now."
+        case .attachmentUnavailable:
+            return "It may have been too large to store. Open the message in Outlook to get the file."
         }
     }
 }
