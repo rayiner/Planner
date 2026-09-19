@@ -2,10 +2,9 @@ import Foundation
 
 /// Where external calendar events come from.
 ///
-/// Not `@MainActor`: implementations are expected to be slow (the Outlook
-/// source costs ~2s of Apple events) and must do their work off the main
-/// thread. Only `Sendable` values cross the boundary, which is what keeps
-/// non-`Sendable` bridge objects from ever escaping their own queue.
+/// Not `@MainActor`: implementations may synchronize an external index and
+/// must do that work off the main thread. Only `Sendable` values cross the
+/// boundary.
 ///
 /// This protocol is the seam that lets the model, the coordinator, and the grid
 /// be built and tested with no Outlook anywhere near them.
@@ -14,8 +13,8 @@ nonisolated protocol CalendarEventSource: Sendable {
     /// Shown in error messages and the refresh tooltip, e.g. a calendar name.
     var displayName: String { get }
 
-    /// - Parameter userInitiated: An explicit refresh may raise a system
-    ///   consent dialog; an automatic one (launch, day rollover) must not.
+    /// - Parameter userInitiated: Whether the user explicitly requested this
+    ///   refresh. Sources may use it to bypass an up-to-date shortcut.
     func events(in range: Range<Date>, userInitiated: Bool) async throws -> [CalendarEvent]
 }
 

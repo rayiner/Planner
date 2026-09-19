@@ -8,7 +8,7 @@ enum SelectionField: String {
 ///
 /// A mode, not a window: the unified sidebar stays put and the two trailing
 /// panes are replaced wholesale. The mode is whichever sidebar row is
-/// selected — a project or task shows the calendar, a mailbox shows the
+/// selected — a project or task shows the calendar, Recent Mail shows the
 /// reader. There is no separate Tasks / Mail command.
 enum PlannerMode: String {
     case tasks, mail
@@ -22,20 +22,15 @@ enum PlannerSelection: Equatable {
     case day(Date)
 }
 
-/// Which mailbox the mail sidebar has selected. `recent` is the transient
-/// window over Outlook; a folder is Planner's own saved mail.
-enum MailboxSelection: Equatable {
-    case recent
-    case folder(UUID)
+/// Which transient Outlook message is open in the reader.
+enum MessageSelection: Equatable, Hashable {
+    case recent(Int64)
 }
 
-/// Which message is open in the reader. The two cases are genuinely different
-/// things — an Outlook record id that is only valid this session, and a
-/// `SavedMessage` UUID that is Planner's own — and conflating them is how a
-/// reader ends up showing the wrong message after a save.
-enum MessageSelection: Equatable {
-    case recent(Int64)
-    case saved(UUID)
+enum MailboxSelection: Equatable {
+    case recent
+    case search
+    case quickSearch(UUID)
 }
 
 extension Notification.Name {
@@ -56,7 +51,10 @@ final class SelectionModel {
     private(set) var visibleWeekStart: Date
     private(set) var mode: PlannerMode
     private(set) var mailbox: MailboxSelection = .recent
-    private(set) var message: MessageSelection?
+    /// Visual order, with the last-clicked message last so the reader can
+    /// follow it. Empty when nothing in the list is selected.
+    private(set) var messages: [MessageSelection] = []
+    var message: MessageSelection? { messages.last }
 
     var selectedNodeUUID: UUID? {
         if case let .node(uuid) = selection { return uuid }
@@ -67,13 +65,6 @@ final class SelectionModel {
         if case let .day(date) = selection { return date }
         return nil
     }
-
-    var selectedFolderUUID: UUID? {
-        if case let .folder(uuid) = mailbox { return uuid }
-        return nil
-    }
-
-    var isRecentMailSelected: Bool { mailbox == .recent }
 
     private let calendar: Calendar
     private let defaults: UserDefaults
@@ -130,7 +121,7 @@ final class SelectionModel {
     // MARK: - Mode
 
     /// Low-level pane swap. Callers that have a sidebar row should select
-    /// that row instead — `selectNode` / `selectMailbox` adopt the mode.
+    /// that row instead — `selectNode` / `selectMail` adopt the mode.
     func setMode(_ new: PlannerMode) {
         guard adoptMode(new) else { return }
         post(changed: [.mode])
@@ -146,18 +137,18 @@ final class SelectionModel {
 
     // MARK: - Mail
 
-    /// Selecting a mailbox enters mail mode. The open message is cleared
-    /// when the mailbox itself changes, so the reader cannot keep showing
-    /// something the list no longer contains. Re-selecting the current
-    /// mailbox from tasks mode still enters mail — the mailbox field is
-    /// unchanged, but the sidebar row is.
+    /// Compatibility convenience for callers that mean Recent Mail.
+    func selectMail() {
+        selectMailbox(.recent)
+    }
+
     func selectMailbox(_ new: MailboxSelection) {
         var changed: Set<SelectionField> = []
         if mailbox != new {
             mailbox = new
             changed.insert(.mailbox)
-            if message != nil {
-                message = nil
+            if !messages.isEmpty {
+                messages = []
                 changed.insert(.message)
             }
         }
@@ -167,8 +158,17 @@ final class SelectionModel {
     }
 
     func selectMessage(_ new: MessageSelection?) {
-        guard message != new else { return }
-        message = new
+        selectMessages(new.map { [$0] } ?? [])
+    }
+
+    func selectMessages(_ new: [MessageSelection]) {
+        var seen: Set<Int64> = []
+        let unique = new.filter { selection in
+            guard case let .recent(id) = selection else { return false }
+            return seen.insert(id).inserted
+        }
+        guard unique != messages else { return }
+        messages = unique
         post(changed: [.message])
     }
 

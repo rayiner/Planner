@@ -7,11 +7,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static var running: AppDelegate?
 
     private var window: NSWindow?
-    private var persistence: PersistenceController?
-    private var model: ModelController?
-    private var selection: SelectionModel?
+    /// Not private: `MCPAppBridge` lists and mutates tasks through it.
+    private(set) var persistence: PersistenceController?
+    /// Not private: `MCPAppBridge` lists and mutates tasks through it.
+    private(set) var model: ModelController?
+    /// Not private: `MCPAppBridge` reads the current mail selection.
+    private(set) var selection: SelectionModel?
     private var events: EventCoordinator?
-    private var mail: MailCoordinator?
+    /// Not private: `MCPAppBridge` searches and loads bodies through it.
+    private(set) var mail: MailCoordinator?
     private var sync: CloudSyncController?
 
     override init() {
@@ -35,21 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let model = ModelController(persistence: persistence)
         let selection = SelectionModel()
-        // Outlook is read over Apple events, so a Mac without it (or without
-        // consent) simply shows no events rather than failing to launch.
-        let events = EventCoordinator(source: OutlookEventSource())
-        // Same reasoning for mail: no Outlook profile, or no Full Disk Access,
-        // simply means an empty Recent Mail rather than a failure to launch.
-        // The summarizer is Apple's on-device model. A Mac without Apple
-        // Intelligence reports it unavailable and the list keeps its two-line
-        // rows; nothing else changes.
-        let mail = MailCoordinator(
-            source: OutlookMailSource(),
-            envelopeStore: .live,
-            dismissalStore: .live,
-            summaryModel: SystemOnDeviceLanguageModel(),
-            summaryStore: .live
-        )
+        // Mail and calendar share one daemon and one derived index. The shared
+        // session serializes their startup syncs; a missing helper/profile
+        // leaves the corresponding feed in its ordinary failed state.
+        let outlook = OlSyncOutlookSession()
+        let events = EventCoordinator(source: OlSyncEventSource(session: outlook))
+        let mail = MailCoordinator(source: OutlookMailSource(session: outlook))
         // Mirroring, the history drain behind it, and the repair pass that
         // follows an import. Inert when sync is off.
         let sync = CloudSyncController(persistence: persistence)
@@ -85,9 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.titlebarSeparatorStyle = .none
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1100, height: 720))
-        // Sidebar 240 + calendar 420; the trailing inspector collapses out of the
-        // way rather than holding the window any wider than that.
-        window.contentMinSize = NSSize(width: 880, height: 520)
+        // Wider than either mode's panes need, so a mode switch never forces
+        // the window to grow. See `windowContentMinimumWidth`.
+        window.contentMinSize = NSSize(
+            width: MainSplitViewController.windowContentMinimumWidth,
+            height: 520
+        )
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.center()
@@ -98,6 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         model.presentingWindow = window
         self.window = window
+
+        // XCTest hosts the app; don't occupy the agent's port during tests.
+        if NSClassFromString("XCTestCase") == nil {
+            MCPServerController.shared.startIfEnabled()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MCPServerController.shared.shutdown()
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -109,8 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if let split = window?.contentViewController as? MainSplitViewController,
-           !split.flushInspectorNotes() {
+        // Notes are only ever edited in an item window now, so that is the only
+        // place a pending one can be.
+        if !ItemWindowController.flushAllNotes() {
             return .terminateCancel
         }
         guard let persistence else { return .terminateNow }
@@ -129,8 +137,8 @@ extension AppDelegate: NSMenuItemValidation {
     ///
     /// It genuinely cannot take effect now: a loaded store cannot be re-pointed
     /// at a CloudKit container, and tearing the coordinator down mid-session
-    /// would invalidate every managed object the outline, calendar, inspector
-    /// and mail list are holding. Telling the user "next launch" is the honest
+    /// would invalidate every managed object the outline, calendar and mail
+    /// list are holding. Telling the user "next launch" is the honest
     /// version of that; silently doing nothing is not.
     @IBAction func toggleCloudSync(_ sender: Any?) {
         let settings = CloudSyncSettings(defaults: .standard)
@@ -143,7 +151,7 @@ extension AppDelegate: NSMenuItemValidation {
             : "Planner will stop syncing with iCloud the next time it opens."
         alert.informativeText = enabling
             ? """
-            Your projects, tasks, day notes and saved mail will be mirrored to \
+            Your projects, tasks and day notes will be mirrored to \
             your private iCloud database and kept in step on every Mac signed \
             in to the same account. Nothing is uploaded until Planner reopens.
             """
@@ -160,6 +168,25 @@ extension AppDelegate: NSMenuItemValidation {
     /// it and can refresh the title on the way to returning false.
     @IBAction func showCloudSyncStatus(_ sender: Any?) {}
 
+    // MARK: - MCP server
+
+    /// Planner ▸ Turn On/Off MCP Server.
+    @IBAction func toggleMCPServer(_ sender: Any?) {
+        let controller = MCPServerController.shared
+        controller.setEnabled(!controller.isEnabled)
+    }
+
+    /// Planner ▸ Copy MCP Server URL — the endpoint to paste into a client's
+    /// configuration.
+    @IBAction func copyMCPServerURL(_ sender: Any?) {
+        guard let url = MCPServerController.shared.endpointURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+
+    /// The status line. Disabled on purpose — it is a readout, not a command.
+    @IBAction func showMCPServerStatus(_ sender: Any?) {}
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(toggleCloudSync(_:)):
@@ -171,6 +198,15 @@ extension AppDelegate: NSMenuItemValidation {
             return true
         case #selector(showCloudSyncStatus(_:)):
             item.title = sync?.status.menuDescription ?? CloudSyncStatus.off.menuDescription
+            return false
+        case #selector(toggleMCPServer(_:)):
+            item.title =
+                MCPServerController.shared.isEnabled ? "Turn Off MCP Server" : "Turn On MCP Server"
+            return true
+        case #selector(copyMCPServerURL(_:)):
+            return MCPServerController.shared.endpointURL != nil
+        case #selector(showMCPServerStatus(_:)):
+            item.title = MCPServerController.shared.statusSummary
             return false
         default:
             return true

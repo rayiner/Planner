@@ -1,8 +1,8 @@
 import Foundation
 @testable import Planner
 
-/// A model whose replies the test hands out, so `MailSummaryCoordinator`'s
-/// queue and states can be observed one step at a time rather than raced.
+/// A model whose replies the test hands out, so a caller of
+/// `OnDeviceLanguageModel` can be observed one step at a time rather than raced.
 ///
 /// Same shape as `StubMailSource`: requests park on continuations, the test
 /// inspects what was asked, then answers or fails whichever one it likes.

@@ -2,10 +2,8 @@ import AppKit
 
 /// The message list's outline view.
 ///
-/// It exists for two things. A context menu that offers what the row under the
-/// cursor can actually have done to it — Recent Mail's rows can be saved, a
-/// folder's rows can be moved or removed, a conversation heading is a heading —
-/// and the ⌫ key.
+/// It exists for two things: a message context menu and the ⌫ shortcut for the
+/// selected mailbox's Hide/Unhide command.
 final class MailListOutlineView: NSOutlineView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let location = convert(event.locationInWindow, from: nil)
@@ -27,7 +25,7 @@ final class MailListOutlineView: NSOutlineView {
         let isBare = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .isDisjoint(with: [.command, .option, .control, .shift])
-        if isDelete, isBare, selectedRow >= 0, sendToResponderChain(Self.removeSelector) {
+        if isDelete, isBare, !selectedRowIndexes.isEmpty, sendToResponderChain(Self.hideSelector) {
             return
         }
         // Escape clears an active folder search; an empty query falls through.
@@ -38,7 +36,7 @@ final class MailListOutlineView: NSOutlineView {
         super.keyDown(with: event)
     }
 
-    private static let removeSelector = #selector(MainSplitViewController.removeSelectedMessage(_:))
+    private static let hideSelector = #selector(MainSplitViewController.toggleHiddenForSelectedMessage(_:))
 
     /// Walks up from this view rather than going through `NSApp.sendAction`,
     /// which starts at the *key* window's first responder — true when a person
@@ -67,35 +65,57 @@ final class MailListOutlineView: NSOutlineView {
         return false
     }
 
+    override func selectAll(_ sender: Any?) {
+        var indexes = IndexSet()
+        for row in 0..<numberOfRows {
+            if item(atRow: row) is MailListRow {
+                indexes.insert(row)
+            }
+        }
+        selectRowIndexes(indexes, byExtendingSelection: false)
+    }
+
     func menu(forRow row: Int) -> NSMenu? {
         guard row >= 0 else { return nil }
-        // Right-clicking a row acts on that row, so it takes the selection
-        // first — the commands all read the selection, and acting on something
-        // other than what was clicked is the classic context-menu bug.
-        if item(atRow: row) is MailListRow || item(atRow: row) is SavedMessageRow {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        // Right-clicking a row acts on that row. If it is already part of a
+        // multi-selection, keep the selection; otherwise select only the click.
+        if item(atRow: row) is MailListRow {
+            if !selectedRowIndexes.contains(row) {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
             window?.makeFirstResponder(self)
         }
 
         switch item(atRow: row) {
         case is MailListRow:
+            let count = selectedRowIndexes.count
+            let hideTitle: String = {
+                let selected = listController?.selection.messages.compactMap { item -> MailMessage? in
+                    guard case let .recent(id) = item else { return nil }
+                    return listController?.mail.message(id: id)
+                } ?? []
+                let unhide = !selected.isEmpty && selected.allSatisfy(\.isHidden)
+                return unhide
+                    ? MailLabels.unhideActionTitle(count: count)
+                    : MailLabels.hideActionTitle(count: count)
+            }()
             return Self.makeMenu([
-                ("Save to Folder\u{2026}", #selector(MainSplitViewController.saveMessageToFolder(_:))),
-                ("New Task from Message", #selector(MainSplitViewController.newTaskFromMessage(_:))),
                 ("Open in Outlook", #selector(MainSplitViewController.openMessageInOutlook(_:))),
-                ("Remove from Recent Mail", #selector(MainSplitViewController.removeSelectedMessage(_:))),
-            ])
-        case is SavedMessageRow:
-            return Self.makeMenu([
-                ("Move to Folder\u{2026}", #selector(MainSplitViewController.moveMessageToFolder(_:))),
-                ("New Task from Message", #selector(MainSplitViewController.newTaskFromMessage(_:))),
-                ("Open in Outlook", #selector(MainSplitViewController.openMessageInOutlook(_:))),
-                ("Remove\u{2026}", #selector(MainSplitViewController.removeSelectedMessage(_:))),
+                (hideTitle, #selector(MainSplitViewController.toggleHiddenForSelectedMessage(_:))),
             ])
         default:
-            // A date header or a conversation heading: nothing to act on.
+            // A date header has nothing to act on.
             return nil
         }
+    }
+
+    private var listController: MailListViewController? {
+        var responder: NSResponder? = self
+        while let current = responder {
+            if let list = current as? MailListViewController { return list }
+            responder = current.nextResponder
+        }
+        return nil
     }
 
     private static func makeMenu(_ items: [(String, Selector)]) -> NSMenu {

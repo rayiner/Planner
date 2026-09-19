@@ -1,5 +1,4 @@
 import AppKit
-import CoreData
 
 /// The reading pane: one message's envelope and body. The actions that turn a
 /// message into Planner data live in the toolbar, over this pane.
@@ -10,12 +9,9 @@ import CoreData
 /// carries its own spinner — and it is what keeps selecting a message feeling
 /// instant on a mailbox where a sweep costs ten seconds.
 ///
-/// **Nothing here writes to Outlook.** No reply, no forward, no mark-read: the
-/// only actions are Save, which copies into Planner's own store, and Open in
-/// Outlook, which is the user asking for the original.
+/// **Nothing here writes to Outlook.** No reply, no forward, no mark-read.
+/// Open in Outlook is the user explicitly asking for the original.
 final class MailReaderViewController: NSViewController {
-    let persistence: PersistenceController
-    let model: ModelController
     let selection: SelectionModel
     let mail: MailCoordinator
 
@@ -28,7 +24,6 @@ final class MailReaderViewController: NSViewController {
     private let dateField = NSTextField(labelWithString: "")
     private let attachmentsField = NSTextField(labelWithString: "")
     private let expiryBanner = NSTextField(labelWithString: "")
-    private let conversationField = NSTextField(labelWithString: "")
     private let bodyView = NSTextView()
     private let bodyScrollView = NSScrollView()
     private let bodySpinner = NSProgressIndicator()
@@ -42,24 +37,14 @@ final class MailReaderViewController: NSViewController {
     /// What the reader is currently showing, so a late body can be matched
     /// against it rather than painted over whatever is on screen now.
     private var displayedMessageID: Int64?
-    private var displayedSavedUUID: UUID?
     private var isBodyLoading = false
 
-    /// Which conversation the open message sits in, for the "message k of n"
-    /// line. Supplied by the list, which is where threading is computed —
-    /// the reader has no business threading a folder a second time.
-    var conversationProvider: ((UUID) -> [SavedMessage])?
-
     init(
-        persistence: PersistenceController,
-        model: ModelController,
         selection: SelectionModel,
         mail: MailCoordinator,
         calendar: Calendar = .current,
         now: @escaping () -> Date = { Date() }
     ) {
-        self.persistence = persistence
-        self.model = model
         self.selection = selection
         self.mail = mail
         self.calendar = calendar
@@ -134,16 +119,13 @@ final class MailReaderViewController: NSViewController {
         expiryBanner.maximumNumberOfLines = 2
         expiryBanner.cell?.truncatesLastVisibleLine = true
 
-        conversationField.font = .systemFont(ofSize: 11)
-        conversationField.textColor = .secondaryLabelColor
-
         headerStack.orientation = .vertical
         headerStack.alignment = .leading
         headerStack.spacing = 3
         headerStack.detachesHiddenViews = true
         headerStack.translatesAutoresizingMaskIntoConstraints = false
         for view in [subjectField, senderField, recipientsField, dateField,
-                     attachmentsField, conversationField, expiryBanner] {
+                     attachmentsField, expiryBanner] {
             headerStack.addArrangedSubview(view)
             view.setContentHuggingPriority(.defaultLow, for: .horizontal)
             // At or below the split items' holding priorities (240–260): a long
@@ -240,8 +222,7 @@ final class MailReaderViewController: NSViewController {
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
-        guard fields.contains(SelectionField.message.rawValue)
-            || fields.contains(SelectionField.mailbox.rawValue) else { return }
+        guard fields.contains(SelectionField.message.rawValue) else { return }
         rebind()
     }
 
@@ -263,9 +244,6 @@ final class MailReaderViewController: NSViewController {
         case let .recent(id)?:
             guard let message = mail.message(id: id) else { return showEmptyState() }
             bindRecent(message, id: id)
-        case let .saved(uuid)?:
-            guard let message = model.savedMessage(uuid: uuid) else { return showEmptyState() }
-            bindSaved(message)
         case nil:
             showEmptyState()
         }
@@ -279,7 +257,6 @@ final class MailReaderViewController: NSViewController {
 
     private func bindRecent(_ message: MailMessage, id: Int64) {
         displayedMessageID = id
-        displayedSavedUUID = nil
         beginBinding()
 
         subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
@@ -288,7 +265,6 @@ final class MailReaderViewController: NSViewController {
             address: message.senderAddress
         )
         dateField.stringValue = MailLabels.readerTimestamp(for: message.receivedAt, calendar: calendar)
-        conversationField.isHidden = true
 
         updateExpiry(for: message)
         updateRecipientsAndAttachments()
@@ -298,73 +274,8 @@ final class MailReaderViewController: NSViewController {
         updateBody()
     }
 
-    /// A saved message needs no fetch: the copy in the store *is* the message,
-    /// which is the whole reason saving is a copy rather than a bookmark.
-    private func bindSaved(_ message: SavedMessage) {
-        displayedSavedUUID = message.uuid
-        // Outlook's id is kept only as a best-effort handle for Open in
-        // Outlook, and is expected to go stale.
-        displayedMessageID = message.outlookID == 0 ? nil : message.outlookID
-        beginBinding()
-
-        subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
-        senderField.stringValue = MailLabels.senderLine(
-            name: message.senderName,
-            address: message.senderAddress
-        )
-        dateField.stringValue = MailLabels.readerTimestamp(for: message.receivedAt, calendar: calendar)
-
-        if let line = MailLabels.recipientsLine(message.recipients) {
-            recipientsField.stringValue = line
-            recipientsField.isHidden = false
-        } else {
-            recipientsField.isHidden = true
-        }
-        if let line = MailLabels.attachmentsIndicator(
-            count: message.attachmentNameList.count,
-            hasAttachments: message.hasAttachments
-        ) {
-            attachmentsField.stringValue = "📎 \(line)"
-            attachmentsField.isHidden = false
-        } else {
-            attachmentsField.isHidden = true
-        }
-
-        // Saved mail does not expire; that is what saving it was for.
-        expiryBanner.isHidden = true
-        updateConversationPosition(for: message)
-
-        setBodyLoading(false)
-        bodyStatusField.isHidden = true
-        showBody(html: message.htmlBody, plain: message.body ?? "")
-    }
-
-    /// Search flattens the list without changing `.message`, so rebind never runs.
-    func refreshConversationPosition() {
-        guard let uuid = displayedSavedUUID,
-              let message = model.savedMessage(uuid: uuid)
-        else { return }
-        updateConversationPosition(for: message)
-    }
-
-    private func updateConversationPosition(for message: SavedMessage) {
-        let conversation = conversationProvider?(message.uuid) ?? []
-        guard conversation.count > 1,
-              let index = conversation.firstIndex(where: { $0.uuid == message.uuid })
-        else {
-            conversationField.isHidden = true
-            return
-        }
-        conversationField.stringValue = MailLabels.conversationPosition(
-            index: index,
-            of: conversation.count
-        )
-        conversationField.isHidden = false
-    }
-
     private func showEmptyState() {
         displayedMessageID = nil
-        displayedSavedUUID = nil
         emptyStateLabel.isHidden = false
         headerStack.isHidden = true
         bodyScrollView.isHidden = true
@@ -373,7 +284,8 @@ final class MailReaderViewController: NSViewController {
     }
 
     private func updateExpiry(for message: MailMessage) {
-        guard let expiry = mail.expiryDay(for: message),
+        guard selection.mailbox == .recent,
+              let expiry = mail.expiryDay(for: message),
               MailLabels.shouldShowExpiry(expiry: expiry, now: now(), calendar: calendar)
         else {
             expiryBanner.isHidden = true
@@ -490,9 +402,6 @@ extension MailReaderViewController {
     var test_recipients: String? { recipientsField.isHidden ? nil : recipientsField.stringValue }
     var test_attachments: String? { attachmentsField.isHidden ? nil : attachmentsField.stringValue }
     var test_displayedMessageID: Int64? { displayedMessageID }
-    var test_conversationPosition: String? {
-        conversationField.isHidden ? nil : conversationField.stringValue
-    }
     var test_subjectTruncatesLastVisibleLine: Bool {
         subjectField.cell?.truncatesLastVisibleLine ?? false
     }

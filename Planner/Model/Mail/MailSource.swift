@@ -1,6 +1,6 @@
 import Foundation
 
-/// Where Recent Mail comes from.
+/// Where Recent Mail comes from and where explicit mail commands go.
 ///
 /// Not `@MainActor`, for the same reason `CalendarEventSource` is not:
 /// implementations talk to a helper or to Outlook and must work off the main
@@ -27,19 +27,41 @@ nonisolated protocol MailSource: Sendable {
         userInitiated: Bool
     ) async throws -> [MailMessage]
 
+    /// Searches the source's complete local index. Unlike Recent Mail this has
+    /// no Inbox or date-window constraint, and includes message bodies and
+    /// attachment text because `olsyncmail` already indexed both.
+    func search(query: String) async throws -> [MailMessage]
+
+    /// Distinct folder paths in the local index — the names `folder:` search
+    /// accepts — with how many indexed messages each holds.
+    func folders() async throws -> [MailFolder]
+
+    /// Categories Outlook currently defines, excluding its reserved `Hide`
+    /// category from the generic catalog.
+    func availableCategories() async throws -> [OutlookCategory]
+
     /// The body and headers of one message, by the id its envelope carried.
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail
 
     /// Brings the original up in Outlook. Always user-initiated: opening an
     /// unread message marks it read upstream, which is a write.
     func reveal(messageID id: Int64) async throws
+
+    /// Adds or removes Outlook's `Hide` category for one message.
+    func setHidden(_ hidden: Bool, messageID id: Int64) async throws
+
+    /// Adds or removes one ordinary Outlook category by its stable record id.
+    func setCategory(_ categoryID: Int64, present: Bool, messageID id: Int64) async throws
+
+    /// Re-index every Outlook message and event, ignoring what the local
+    /// database already has. Default is a no-op for sources with no index.
+    func rebuildIndex() async throws
 }
 
 /// The source used when no mail account is configured or available.
 ///
 /// Returning nothing is a legitimate state, not an error: a user with no
-/// Outlook still gets a working planner, with mail folders they can file into
-/// by hand and an empty Recent Mail.
+/// Outlook still gets a working planner and an empty Recent Mail field.
 extension MailSource {
     func envelopes(
         in range: Range<Date>,
@@ -48,6 +70,8 @@ extension MailSource {
     ) async throws -> [MailMessage] {
         try await envelopes(in: range, userInitiated: userInitiated)
     }
+
+    func rebuildIndex() async throws {}
 }
 
 nonisolated struct NullMailSource: MailSource {
@@ -56,11 +80,25 @@ nonisolated struct NullMailSource: MailSource {
 
     func envelopes(in range: Range<Date>, userInitiated: Bool) async throws -> [MailMessage] { [] }
 
+    func search(query: String) async throws -> [MailMessage] { [] }
+
+    func folders() async throws -> [MailFolder] { [] }
+
+    func availableCategories() async throws -> [OutlookCategory] { [] }
+
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail {
         throw MailSourceError.messageUnavailable
     }
 
     func reveal(messageID id: Int64) async throws {
+        throw MailSourceError.messageUnavailable
+    }
+
+    func setHidden(_ hidden: Bool, messageID id: Int64) async throws {
+        throw MailSourceError.messageUnavailable
+    }
+
+    func setCategory(_ categoryID: Int64, present: Bool, messageID id: Int64) async throws {
         throw MailSourceError.messageUnavailable
     }
 }

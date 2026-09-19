@@ -1,5 +1,4 @@
 import AppKit
-import CoreData
 
 /// One day's worth of messages, and the sticky header over them.
 ///
@@ -22,125 +21,47 @@ final class MailDateGroup: NSObject {
 /// rows by identity, so the value gets a box.
 final class MailListRow: NSObject {
     let message: MailMessage
-    /// The folder already holding a copy, if any — the "Saved to X" chip, and
-    /// the reason the row is dimmed.
-    let savedFolderName: String?
-    /// Whether the row reserves a line for the on-device summary at all.
-    /// Decided per reload from the model's availability, not per message, so
-    /// every row in the list has the same height and nothing jumps as answers
-    /// land.
-    let showsSummaryLine: Bool
-    /// Mutable because a summary arrives long after the row was built, and
-    /// rebuilding the whole list for one line would drop the scroll position
-    /// the user is holding.
-    var summaryState: MailSummaryCoordinator.State
 
-    init(
-        message: MailMessage,
-        savedFolderName: String?,
-        showsSummaryLine: Bool = false,
-        summaryState: MailSummaryCoordinator.State = .idle
-    ) {
-        self.message = message
-        self.savedFolderName = savedFolderName
-        self.showsSummaryLine = showsSummaryLine
-        self.summaryState = summaryState
-    }
-
-    /// What the summary line shows right now: the summary, the placeholder
-    /// while one is on its way, or nothing once it has failed.
-    var summaryLineText: String? {
-        guard showsSummaryLine else { return nil }
-        switch summaryState {
-        case let .loaded(text): return text
-        case .idle, .queued, .loading: return MailLabels.summarizing
-        case .failed: return ""
-        }
-    }
-
-    var summaryLineIsPlaceholder: Bool {
-        if case .loaded = summaryState { return false }
-        return true
-    }
-}
-
-/// A conversation inside a folder: a parent row that expands in place.
-///
-/// Only built when there is more than one message. A one-message conversation
-/// is just a message, and wrapping it in a thread row would make the common
-/// case cost an extra click to read.
-final class MailThreadRow: NSObject {
-    let subject: String
-    let participants: String
-    let latest: Date
-    let rows: [SavedMessageRow]
-
-    init(subject: String, participants: String, latest: Date, rows: [SavedMessageRow]) {
-        self.subject = subject
-        self.participants = participants
-        self.latest = latest
-        self.rows = rows
-    }
-}
-
-/// One saved message in a folder.
-final class SavedMessageRow: NSObject {
-    let message: SavedMessage
-
-    init(message: SavedMessage) {
+    init(message: MailMessage) {
         self.message = message
     }
 }
 
-/// The message list: Recent Mail strictly chronologically, newest first.
+/// The message list: the selected mail field strictly chronologically, newest
+/// first.
 ///
 /// **No threading here, deliberately.** Recent Mail is a timeline you sweep,
-/// and threading it would collapse the very ordering that makes the sweep work.
-/// Threading is what a *folder* gets, once the user has decided the messages
-/// are worth keeping.
+/// and threading it would collapse the ordering that makes the sweep work.
 final class MailListViewController: NSViewController {
-    let persistence: PersistenceController
-    let model: ModelController
     let selection: SelectionModel
     let mail: MailCoordinator
     let outlineView = MailListOutlineView()
+
+    /// Three lines — sender and time, subject, one line of body — plus padding.
+    private static let messageRowHeight: CGFloat = 72
 
     private let calendar: Calendar
     private let now: () -> Date
     private let emptyStateLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
+    private let saveSearchButton = NSButton(title: "Save…", target: nil, action: nil)
     private let searchHeader = NSView()
     private var groups: [MailDateGroup] = []
-    /// Top-level rows in folder mode: thread parents and lone messages, mixed,
-    /// ordered by their newest message.
-    private var folderRows: [NSObject] = []
     private var isApplyingProgrammaticSelection = false
-    /// Enough that a conversation's messages sit under the header rather than
-    /// in the same column, without crowding the subject in a 300pt pane.
-    static let conversationIndent: CGFloat = 16
-
-    private var isShowingFolder: Bool { !selection.isRecentMailSelected }
 
     private var searchQuery = ""
-    private var searchDebounce: Task<Void, Never>?
-    /// Distinct from an empty hit set so the empty state can name a failed fetch.
-    private var searchFetchFailed = false
-    var conversationChromeNeedsRefresh: (() -> Void)?
+    private var manualSearchQuery = ""
 
     private var isSearching: Bool {
-        isShowingFolder && !SavedMessageSearch.tokens(in: searchQuery).isEmpty
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     init(
-        persistence: PersistenceController,
-        model: ModelController,
         selection: SelectionModel,
         mail: MailCoordinator,
         calendar: Calendar = .current,
         now: @escaping () -> Date = { Date() }
     ) {
-        self.persistence = persistence
-        self.model = model
         self.selection = selection
         self.mail = mail
         self.calendar = calendar
@@ -154,7 +75,6 @@ final class MailListViewController: NSViewController {
     }
 
     deinit {
-        searchDebounce?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -178,12 +98,20 @@ final class MailListViewController: NSViewController {
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        saveSearchButton.controlSize = .small
+        saveSearchButton.bezelStyle = .rounded
+        saveSearchButton.target = self
+        saveSearchButton.action = #selector(saveQuickSearchAction)
+        saveSearchButton.toolTip = "Save this query as a Quick Search"
+        saveSearchButton.translatesAutoresizingMaskIntoConstraints = false
+
         let separator = NSBox()
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
 
         searchHeader.translatesAutoresizingMaskIntoConstraints = false
         searchHeader.addSubview(searchField)
+        searchHeader.addSubview(saveSearchButton)
         searchHeader.addSubview(separator)
         searchHeader.setContentHuggingPriority(.required, for: .vertical)
         searchHeader.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -212,9 +140,11 @@ final class MailListViewController: NSViewController {
 
         NSLayoutConstraint.activate([
             searchField.leadingAnchor.constraint(equalTo: searchHeader.leadingAnchor, constant: 8),
-            searchField.trailingAnchor.constraint(equalTo: searchHeader.trailingAnchor, constant: -8),
+            searchField.trailingAnchor.constraint(equalTo: saveSearchButton.leadingAnchor, constant: -6),
             searchField.topAnchor.constraint(equalTo: searchHeader.topAnchor, constant: 6),
             searchField.bottomAnchor.constraint(equalTo: separator.topAnchor, constant: -6),
+            saveSearchButton.trailingAnchor.constraint(equalTo: searchHeader.trailingAnchor, constant: -8),
+            saveSearchButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
             separator.leadingAnchor.constraint(equalTo: searchHeader.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: searchHeader.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: searchHeader.bottomAnchor),
@@ -248,21 +178,21 @@ final class MailListViewController: NSViewController {
         outlineView.delegate = self
         outlineView.style = .inset
         outlineView.rowSizeStyle = .custom
-        outlineView.rowHeight = 54
+        outlineView.rowHeight = Self.messageRowHeight
         outlineView.intercellSpacing = NSSize(width: 0, height: 0)
         outlineView.headerView = nil
         outlineView.usesAlternatingRowBackgroundColors = false
-        // Folder conversations indent their children; Recent Mail days must
-        // not, or the triangle sits on the date title. `reload` picks the
-        // value for the open mailbox.
+        // Date groups are structure, not hierarchy.
         outlineView.indentationPerLevel = 0
-        outlineView.allowsMultipleSelection = false
+        outlineView.allowsMultipleSelection = true
         outlineView.allowsEmptySelection = true
         // The whole point of modelling days as parents: AppKit pins the group
         // row to the top of the scroll view while its day is on screen.
         outlineView.floatsGroupRows = true
         outlineView.focusRingType = .none
         outlineView.backgroundColor = .clear
+        outlineView.target = self
+        outlineView.doubleAction = #selector(openClickedMessage)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Message"))
         column.title = "Message"
@@ -278,13 +208,11 @@ final class MailListViewController: NSViewController {
             name: .plannerMailDidChange,
             object: mail
         )
-        // A summary is one row's third line, minutes after the row was built.
-        // Redraw that row; do not rebuild the list.
         center.addObserver(
             self,
-            selector: #selector(summaryDidChange(_:)),
-            name: .plannerMailSummaryDidChange,
-            object: mail.summaries
+            selector: #selector(mailSearchDidChange(_:)),
+            name: .plannerMailSearchDidChange,
+            object: mail
         )
         center.addObserver(
             self,
@@ -292,44 +220,37 @@ final class MailListViewController: NSViewController {
             name: .plannerSelectionDidChange,
             object: selection
         )
-        // Saving a message dims its Recent Mail row and gives it a chip.
-        center.addObserver(
-            self,
-            selector: #selector(contextDidSave(_:)),
-            name: .NSManagedObjectContextDidSave,
-            object: persistence.viewContext
-        )
-        // A CloudKit import is merged into the view context, and a merge is not
-        // a save — so the notification above never fires for mail that arrived
-        // from another Mac.
-        center.addObserver(
-            self,
-            selector: #selector(contextDidSave(_:)),
-            name: .plannerStoreDidChangeRemotely,
-            object: nil
-        )
     }
 
     @objc private func mailDidChange(_ notification: Notification) { reload() }
-    @objc private func contextDidSave(_ notification: Notification) { reload() }
 
-    @objc private func summaryDidChange(_ notification: Notification) {
-        guard let id = notification.userInfo?[MailChangeUserInfoKey.messageID] as? Int64,
-              let row = groups.lazy.flatMap(\.rows).first(where: { $0.message.id == id })
-        else { return }
-        row.summaryState = mail.summaries.state(for: id)
-        // The line is reserved whether or not there is a summary yet, so the
-        // height does not change and only the cell needs to be redrawn.
-        outlineView.reloadItem(row)
+    @objc private func mailSearchDidChange(_ notification: Notification) {
+        switch selection.mailbox {
+        case .search, .quickSearch: break
+        case .recent: return
+        }
+        reload()
+        guard isSearching, !selection.messages.isEmpty else { return }
+        switch mail.searchState {
+        case .loaded, .failed:
+            let visible = Set(groups.lazy.flatMap(\.rows).map(\.message.id))
+            let kept = selection.messages.filter {
+                guard case let .recent(id) = $0 else { return false }
+                return visible.contains(id)
+            }
+            if kept.count != selection.messages.count {
+                selection.selectMessages(kept)
+            }
+        case .idle, .loading:
+            break
+        }
     }
 
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
         if fields.contains(SelectionField.mailbox.rawValue) {
-            // A different mailbox is a different list. Keeping the previous
-            // clip origin would land in the middle of the new one.
+            activateSelectedMailbox()
             reload(preservingScroll: false)
-            updateSearchHeaderVisibility()
             return
         }
         guard fields.contains(SelectionField.message.rawValue) else { return }
@@ -339,40 +260,22 @@ final class MailListViewController: NSViewController {
     // MARK: - Contents
 
     func reload(preservingScroll: Bool = true) {
-        // Days in Recent Mail are outline parents only so they can float;
-        // indenting them would look like a hierarchy the timeline is not.
-        // A conversation *is* a hierarchy, so folder mode turns indent on.
-        outlineView.indentationPerLevel = (isShowingFolder && !isSearching) ? Self.conversationIndent : 0
+        outlineView.indentationPerLevel = 0
         updateSearchHeaderVisibility()
-        // Which conversations were open, so a reload — one arrives on every
-        // save — does not collapse the thread the user is reading.
-        let expanded = Set(folderRows.compactMap { row -> String? in
-            guard let thread = row as? MailThreadRow, outlineView.isItemExpanded(thread) else {
-                return nil
-            }
-            return thread.rows.first?.message.uuid.uuidString
-        })
-
+        updateSaveSearchButton()
         let clipView = outlineView.enclosingScrollView?.contentView
         let savedOrigin = preservingScroll ? clipView?.bounds.origin : nil
 
         groups = makeGroups()
-        folderRows = makeFolderRows()
         isApplyingProgrammaticSelection = true
         outlineView.reloadData()
         for group in groups { outlineView.expandItem(group) }
-        for row in folderRows {
-            guard let thread = row as? MailThreadRow,
-                  let key = thread.rows.first?.message.uuid.uuidString,
-                  expanded.contains(key)
-            else { continue }
-            outlineView.expandItem(thread)
-        }
         // Don't scrollRowToVisible here: reloadData already jumped the clip
         // view, and the caller is about to put it back. A reveal-driven
         // scroll is what `plannerSelectionDidChange` is for.
         revealSelection(scroll: false)
         isApplyingProgrammaticSelection = false
+        pruneInvisibleSelection()
         if let clipView, let savedOrigin {
             clipView.scroll(to: savedOrigin)
             outlineView.enclosingScrollView?.reflectScrolledClipView(clipView)
@@ -382,62 +285,22 @@ final class MailListViewController: NSViewController {
             outlineView.enclosingScrollView?.reflectScrolledClipView(clipView)
         }
         updateEmptyState()
-        if isShowingFolder {
-            conversationChromeNeedsRefresh?()
-        }
-    }
-
-    /// A folder's messages, threaded. Recomputed on every reload rather than
-    /// stored: threading is a *view* of a folder, and a stored membership
-    /// would need repairing on every save, move and remove.
-    private func makeFolderRows() -> [NSObject] {
-        guard let uuid = selection.selectedFolderUUID,
-              let folder = model.mailFolders().first(where: { $0.uuid == uuid })
-        else { return [] }
-
-        let messages: [SavedMessage]
-        do {
-            messages = try model.messages(in: folder, matching: searchQuery)
-            searchFetchFailed = false
-        } catch {
-            searchFetchFailed = true
-            return []
-        }
-        if isSearching {
-            return messages.map(SavedMessageRow.init)
-        }
-
-        let byUUID = Dictionary(uniqueKeysWithValues: messages.map { ($0.uuid, $0) })
-        let threads = MailThreading.threads(messages.map(\.threadingMessage))
-
-        return threads.compactMap { thread in
-            let rows = thread.messages.compactMap { byUUID[$0.id].map(SavedMessageRow.init) }
-            guard !rows.isEmpty else { return nil }
-            // A conversation of one is just a message.
-            guard rows.count > 1 else { return rows[0] }
-            return MailThreadRow(
-                subject: thread.subject,
-                participants: MailLabels.threadParticipants(
-                    rows.map(\.message.senderDisplayName)
-                ),
-                latest: thread.latestDate,
-                rows: rows
-            )
-        }
     }
 
     private func makeGroups() -> [MailDateGroup] {
-        guard selection.isRecentMailSelected else { return [] }
-        let saved = model.foldersByOutlookID()
-        let summaries = mail.summaries
-        let showsSummaryLine = summaries.isAvailable
         var groups: [MailDateGroup] = []
         var currentDay: Date?
         var currentRows: [MailListRow] = []
 
         // The coordinator already sorted newest-first, so one pass is enough
         // and the list can never disagree with it about order.
-        for message in mail.messages {
+        let messages: [MailMessage]
+        switch selection.mailbox {
+        case .recent: messages = mail.messages
+        case .search: messages = isSearching ? mail.searchResults : []
+        case .quickSearch: messages = mail.searchResults
+        }
+        for message in messages {
             let day = calendar.startOfDay(for: message.receivedAt)
             if day != currentDay {
                 if let currentDay, !currentRows.isEmpty {
@@ -446,12 +309,7 @@ final class MailListViewController: NSViewController {
                 currentDay = day
                 currentRows = []
             }
-            currentRows.append(MailListRow(
-                message: message,
-                savedFolderName: saved[message.id]?.name,
-                showsSummaryLine: showsSummaryLine,
-                summaryState: summaries.state(for: message.id)
-            ))
+            currentRows.append(MailListRow(message: message))
         }
         if let currentDay, !currentRows.isEmpty {
             groups.append(makeGroup(day: currentDay, rows: currentRows))
@@ -468,173 +326,216 @@ final class MailListViewController: NSViewController {
     }
 
     private func updateEmptyState() {
-        let isEmpty = isShowingFolder
-            ? folderRows.isEmpty
-            : groups.allSatisfy { $0.rows.isEmpty }
+        let isEmpty = groups.allSatisfy { $0.rows.isEmpty }
         emptyStateLabel.isHidden = !isEmpty
         guard isEmpty else { return }
-        switch selection.mailbox {
-        case .recent:
+        let isSearchMailbox: Bool = {
+            switch selection.mailbox {
+            case .search, .quickSearch: return true
+            case .recent: return false
+            }
+        }()
+        if selection.mailbox == .search, !isSearching {
+            emptyStateLabel.stringValue = MailLabels.emptySearchPrompt
+        } else if isSearchMailbox, mail.searchState == .loading {
+            emptyStateLabel.stringValue = MailLabels.searching
+        } else if isSearchMailbox {
+            switch mail.searchState {
+            case .failed:
+                emptyStateLabel.stringValue = MailLabels.searchFailed
+            case .idle, .loading, .loaded:
+                emptyStateLabel.stringValue = MailLabels.emptySearch
+            }
+        } else {
             emptyStateLabel.stringValue = MailLabels.emptyRecentMail(
                 days: mail.windowDays,
                 hasSource: mail.sourceID != NullMailSource().sourceID
             )
-        case .folder where searchFetchFailed:
-            emptyStateLabel.stringValue = MailLabels.searchFailed
-        case .folder where isSearching:
-            emptyStateLabel.stringValue = MailLabels.emptySearch
-        case .folder:
-            emptyStateLabel.stringValue = MailLabels.emptyFolder(name: selectedFolderName ?? "")
         }
     }
 
-    private var selectedFolderName: String? {
-        guard let uuid = selection.selectedFolderUUID else { return nil }
-        return model.mailFolders().first { $0.uuid == uuid }?.name
-    }
-
     var messageCount: Int { groups.reduce(0) { $0 + $1.rows.count } }
+
+    /// A Hide, or turning Hidden back off, can drop the selected rows out of
+    /// the list. Keep the model in step so the reader does not stay on a
+    /// message that is no longer on screen. Skip this while a search is in
+    /// flight: the list is empty only because the hits have not arrived yet.
+    private func pruneInvisibleSelection() {
+        guard !selection.messages.isEmpty else { return }
+        switch selection.mailbox {
+        case .search, .quickSearch:
+            if mail.searchState == .loading { return }
+        case .recent:
+            break
+        }
+        let visibleIDs = Set(groups.lazy.flatMap(\.rows).map(\.message.id))
+        let kept = selection.messages.filter {
+            guard case let .recent(id) = $0 else { return false }
+            return visibleIDs.contains(id)
+        }
+        if kept.count != selection.messages.count {
+            selection.selectMessages(kept)
+        }
+    }
 
     // MARK: - Selection
 
     /// The row that should stay selected after `current` leaves the list.
     /// Next remaining, then previous, then nothing — so Delete can be hit
     /// again and keep walking down the list.
-    func messageToSelectAfterRemoving(_ current: MessageSelection) -> MessageSelection? {
-        let ordered = visibleMessageSelections()
-        guard let index = ordered.firstIndex(of: current) else { return nil }
-        if index + 1 < ordered.count { return ordered[index + 1] }
-        if index > 0 { return ordered[index - 1] }
-        return nil
+    func messageToSelectAfterMoving(_ current: MessageSelection) -> MessageSelection? {
+        messageToSelectAfterMoving([current])
     }
 
-    /// Selectable messages in visual order: Recent Mail newest-first, a
-    /// folder in thread order. Date headers and conversation headings are
-    /// not destinations, so they are not in this list.
-    private func visibleMessageSelections() -> [MessageSelection] {
-        if isShowingFolder {
-            return folderRows.flatMap { row -> [MessageSelection] in
-                switch row {
-                case let saved as SavedMessageRow:
-                    return [.saved(saved.message.uuid)]
-                case let thread as MailThreadRow:
-                    return thread.rows.map { .saved($0.message.uuid) }
-                default:
-                    return []
-                }
-            }
+    func messageToSelectAfterMoving(_ current: [MessageSelection]) -> MessageSelection? {
+        let ordered = visibleMessageSelections()
+        let removed = Set(current)
+        guard let lastIndex = current.compactMap({ ordered.firstIndex(of: $0) }).max() else {
+            return nil
         }
+        if let next = ordered[(lastIndex + 1)...].first(where: { !removed.contains($0) }) {
+            return next
+        }
+        return ordered[..<lastIndex].last(where: { !removed.contains($0) })
+    }
+
+    /// Selectable messages in visual order. Date headers are not destinations.
+    private func visibleMessageSelections() -> [MessageSelection] {
         return groups.flatMap(\.rows).map { .recent($0.message.id) }
     }
 
     private func revealSelection(scroll: Bool = true) {
-        switch selection.message {
-        case nil:
+        let wasApplying = isApplyingProgrammaticSelection
+        isApplyingProgrammaticSelection = true
+        defer { if !wasApplying { isApplyingProgrammaticSelection = false } }
+        let ids = Set(selection.messages.compactMap { item -> Int64? in
+            guard case let .recent(id) = item else { return nil }
+            return id
+        })
+        guard !ids.isEmpty else {
             outlineView.deselectAll(nil)
-        case let .recent(id)?:
-            guard let row = groups.lazy.flatMap(\.rows).first(where: { $0.message.id == id }) else {
-                return
+            return
+        }
+        var indexes = IndexSet()
+        var primaryIndex: Int?
+        for row in groups.flatMap(\.rows) {
+            guard ids.contains(row.message.id) else { continue }
+            let index = outlineView.row(forItem: row)
+            guard index >= 0 else { continue }
+            indexes.insert(index)
+            if case let .recent(id)? = selection.message, row.message.id == id {
+                primaryIndex = index
             }
-            select(item: row, scroll: scroll)
-        case let .saved(uuid)?:
-            guard let row = savedRow(uuid: uuid) else { return }
-            // A message inside a collapsed conversation has no row until the
-            // conversation opens, so revealing it opens the conversation.
-            if let thread = thread(containing: row) { outlineView.expandItem(thread) }
-            select(item: row, scroll: scroll)
+        }
+        outlineView.selectRowIndexes(indexes, byExtendingSelection: false)
+        if scroll, let primaryIndex {
+            outlineView.scrollRowToVisible(primaryIndex)
         }
     }
 
-    private func select(item: Any, scroll: Bool = true) {
-        let index = outlineView.row(forItem: item)
-        guard index >= 0 else { return }
-        outlineView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        if scroll { outlineView.scrollRowToVisible(index) }
-    }
-
-    private func savedRow(uuid: UUID) -> SavedMessageRow? {
-        for row in folderRows {
-            if let saved = row as? SavedMessageRow, saved.message.uuid == uuid { return saved }
-            if let thread = row as? MailThreadRow,
-               let match = thread.rows.first(where: { $0.message.uuid == uuid }) {
-                return match
-            }
-        }
-        return nil
-    }
-
-    private func thread(containing row: SavedMessageRow) -> MailThreadRow? {
-        folderRows.compactMap { $0 as? MailThreadRow }.first { $0.rows.contains(row) }
-    }
-
-    /// Selecting a conversation opens its newest message: a thread row is a
-    /// heading, and landing on a heading with an empty reader would be a step
-    /// backwards from clicking the message directly.
     private func publishSelection() {
         guard !isApplyingProgrammaticSelection else { return }
-        switch outlineView.item(atRow: outlineView.selectedRow) {
-        case let row as MailListRow:
-            selection.selectMessage(.recent(row.message.id))
-        case let row as SavedMessageRow:
-            selection.selectMessage(.saved(row.message.uuid))
-        case let thread as MailThreadRow:
-            selection.selectMessage(.saved(thread.rows[0].message.uuid))
-        default:
-            selection.selectMessage(nil)
+        var ordered: [MessageSelection] = []
+        for row in outlineView.selectedRowIndexes.sorted() {
+            guard let item = outlineView.item(atRow: row) as? MailListRow else { continue }
+            ordered.append(.recent(item.message.id))
         }
-    }
-
-    /// The conversation the reader's "message k of n" line counts against.
-    func conversation(containing uuid: UUID) -> [SavedMessage] {
-        guard let row = savedRow(uuid: uuid) else { return [] }
-        guard let thread = thread(containing: row) else { return [row.message] }
-        return thread.rows.map(\.message)
+        if outlineView.selectedRow >= 0,
+           let item = outlineView.item(atRow: outlineView.selectedRow) as? MailListRow {
+            let lastClicked = MessageSelection.recent(item.message.id)
+            if let index = ordered.firstIndex(of: lastClicked) {
+                ordered.remove(at: index)
+                ordered.append(lastClicked)
+            }
+        }
+        selection.selectMessages(ordered)
     }
 
     // MARK: - Search
 
     private func updateSearchHeaderVisibility() {
-        searchHeader.isHidden = selection.isRecentMailSelected
+        searchHeader.isHidden = selection.mailbox != .search
+    }
+
+    private func activateSelectedMailbox() {
+        switch selection.mailbox {
+        case .search:
+            searchQuery = manualSearchQuery
+            mail.search(manualSearchQuery)
+        case let .quickSearch(id):
+            let query = mail.quickSearch(id: id)?.query ?? ""
+            searchQuery = query
+            mail.search(query)
+        case .recent:
+            searchQuery = ""
+            mail.search("")
+        }
     }
 
     @objc private func searchFieldAction(_ sender: NSSearchField) {
         // Return / search button / cancel only — sendsWholeSearchString is true,
         // so this is not a keystroke.
-        searchDebounce?.cancel()
         applySearch(sender.stringValue)
     }
 
-    private func scheduleSearchApply(_ raw: String) {
-        searchDebounce?.cancel()
-        if SavedMessageSearch.tokens(in: raw).isEmpty {
-            applySearch(raw)
-            return
-        }
-        searchDebounce = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
-            self?.applySearch(raw)
-        }
-    }
-
     private func applySearch(_ raw: String) {
-        let nextTokens = SavedMessageSearch.tokens(in: raw)
-        let currentTokens = SavedMessageSearch.tokens(in: searchQuery)
-        // Raw `"ada"` → `"ada "` is the same predicate. Comparing strings would
-        // still reload(preservingScroll: false) and jump the clip view.
-        guard nextTokens != currentTokens else {
+        guard selection.mailbox == .search else { return }
+        let next = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard next != current else {
             searchQuery = raw
             return
         }
         searchQuery = raw
+        manualSearchQuery = raw
+        mail.search(raw)
         reload(preservingScroll: false)
-        if isSearching, case let .saved(uuid)? = selection.message, savedRow(uuid: uuid) == nil {
-            selection.selectMessage(nil)
+    }
+
+    private func updateSaveSearchButton() {
+        guard selection.mailbox == .search, isSearching else {
+            saveSearchButton.isEnabled = false
+            return
+        }
+        if case .loaded = mail.searchState {
+            saveSearchButton.isEnabled = true
+        } else {
+            saveSearchButton.isEnabled = false
         }
     }
 
+    @objc private func saveQuickSearchAction() {
+        guard saveSearchButton.isEnabled, let window = view.window else { return }
+        let nameField = NSTextField(string: "")
+        nameField.placeholderString = "Name"
+        nameField.frame.size = NSSize(width: 280, height: 24)
+
+        let alert = NSAlert()
+        alert.messageText = "Save Quick Search"
+        alert.informativeText = "Choose a name for this search."
+        alert.accessoryView = nameField
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self, weak nameField] response in
+            guard response == .alertFirstButtonReturn, let self, let name = nameField?.stringValue else {
+                return
+            }
+            MainActor.assumeIsolated {
+                self.saveSearch(named: name)
+            }
+        }
+        window.makeFirstResponder(nameField)
+    }
+
+    private func saveSearch(named name: String) {
+        guard let saved = mail.saveQuickSearch(name: name, query: manualSearchQuery) else {
+            NSSound.beep()
+            return
+        }
+        selection.selectMailbox(.quickSearch(saved.id))
+    }
+
     func clearSearch(resigning: Bool) {
-        searchDebounce?.cancel()
         searchField.stringValue = ""
         applySearch("")
         if resigning {
@@ -643,7 +544,6 @@ final class MailListViewController: NSViewController {
     }
 
     func focusSearchField() {
-        guard isShowingFolder else { return }
         view.window?.makeFirstResponder(searchField)
         searchField.currentEditor()?.selectAll(nil)
     }
@@ -673,15 +573,10 @@ final class MailListViewController: NSViewController {
 }
 
 extension MailListViewController: NSSearchFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        guard obj.object as? NSSearchField === searchField else { return }
-        scheduleSearchApply(searchField.stringValue)
-    }
-
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === searchField,
               commandSelector == #selector(cancelOperation(_:)),
-              SavedMessageSearch.tokens(in: searchField.stringValue).isEmpty
+              searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return false }
         clearSearch(resigning: true)
         return true
@@ -690,23 +585,21 @@ extension MailListViewController: NSSearchFieldDelegate {
 
 extension MailListViewController: NSOutlineViewDataSource {
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let item else { return isShowingFolder ? folderRows.count : groups.count }
+        guard let item else { return groups.count }
         switch item {
         case let group as MailDateGroup: return group.rows.count
-        case let thread as MailThreadRow: return thread.rows.count
         default: return 0
         }
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        item is MailDateGroup || item is MailThreadRow
+        item is MailDateGroup
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        guard let item else { return isShowingFolder ? folderRows[index] : groups[index] }
+        guard let item else { return groups[index] }
         switch item {
         case let group as MailDateGroup: return group.rows[index]
-        case let thread as MailThreadRow: return thread.rows[index]
         default: preconditionFailure("unknown mail list item")
         }
     }
@@ -725,7 +618,6 @@ extension MailListViewController: NSOutlineViewDelegate {
 
     /// No disclosure triangle on a day header: with zero indentation it draws
     /// over the title, and it offers a collapse the timeline never wants.
-    /// Conversations keep theirs — expanding in place is their whole point.
     func outlineView(_ outlineView: NSOutlineView, shouldShowOutlineCellForItem item: Any) -> Bool {
         !(item is MailDateGroup)
     }
@@ -736,27 +628,14 @@ extension MailListViewController: NSOutlineViewDelegate {
         !(item is MailDateGroup)
     }
 
-    /// Heights vary because some rows carry extra lines and some do not: a
-    /// "Saved to X" chip and a conversation's message count both sit under the
-    /// subject, and a Recent Mail row reserves a summary line when the
-    /// on-device model is available. A fixed height tall enough for all of
-    /// them would leave every plain row padded.
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         switch item {
         // 18 matches the calendar's day-header band, so the two modes' headers
         // read as the same weight of chrome.
         case is MailDateGroup: return 18
-        case let row as MailListRow:
-            return 54
-                + (row.showsSummaryLine ? Self.summaryLineHeight : 0)
-                + (row.savedFolderName == nil ? 0 : 14)
-        case is MailThreadRow: return 68
-        default: return 54
+        default: return Self.messageRowHeight
         }
     }
-
-    /// An 11-pt line plus the stack's 2-pt spacing.
-    static let summaryLineHeight: CGFloat = 15
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         if let group = item as? MailDateGroup {
@@ -777,12 +656,6 @@ extension MailListViewController: NSOutlineViewDelegate {
         switch item {
         case let row as MailListRow:
             cell.apply(row, calendar: calendar)
-            // Drawing a row is the best signal that its summary is wanted now.
-            mail.summaries.prioritize(row.message.id)
-        case let thread as MailThreadRow:
-            cell.apply(thread, calendar: calendar)
-        case let row as SavedMessageRow:
-            cell.apply(row, calendar: calendar, inConversation: thread(containing: row) != nil)
         default:
             return nil
         }
@@ -791,6 +664,12 @@ extension MailListViewController: NSOutlineViewDelegate {
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         publishSelection()
+    }
+
+    @objc private func openClickedMessage() {
+        let row = outlineView.clickedRow
+        guard row >= 0, outlineView.item(atRow: row) is MailListRow else { return }
+        NSApp.sendAction(#selector(MainSplitViewController.openMailWindow(_:)), to: nil, from: self)
     }
 
     private func makeDateGroupCell(identifier: NSUserInterfaceItemIdentifier) -> DateGroupCellView {
@@ -837,46 +716,20 @@ private final class DateGroupCellView: NSTableCellView {
     }
 }
 
-/// One message: an unread dot, the sender and time on the first line, the
-/// subject on the second, a one-line summary from the on-device model under
-/// it when the model is available, and a "Saved to X" chip last when there
-/// is one.
-///
-/// The summary stands where a preview snippet would, and is what the envelope
-/// alone could never supply: the M0 spike put a message's body behind a
-/// per-message fetch, so a snippet per row would mean a round trip per visible
-/// row. The summary costs that round trip too — but once, in the background,
-/// and the answer is worth more than the first eighty characters of a body.
+/// One message: an unread dot, sender and time, then subject, then one line of
+/// the body.
 private final class MessageRowView: NSTableCellView {
     private let unreadDot = NSView()
-    /// Vertical tick in the unread-dot slot, for a message that belongs to
-    /// the conversation header above it. Saved rows have no unread state, so
-    /// the slot is free.
-    private let conversationTick = NSView()
     private let senderField = NSTextField(labelWithString: "")
     private let timeField = NSTextField(labelWithString: "")
     private let subjectField = NSTextField(labelWithString: "")
-    private let summaryField = NSTextField(labelWithString: "")
-    private let savedChip = NSTextField(labelWithString: "")
-    /// "Summarizing…" is tertiary; a summary is secondary. Tracked so a
-    /// selection highlight can restore the right one.
-    private var summaryIsPlaceholder = false
-    /// The subject is what the sweep is read on, so message rows show it in
-    /// the primary label color. A thread row reuses the field for its
-    /// participants, which stay secondary — the subject is already on top.
-    private var subjectIsSecondary = false
+    private let previewField = NSTextField(labelWithString: "")
 
     func build() {
         unreadDot.wantsLayer = true
         unreadDot.layer?.cornerRadius = 4
         unreadDot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
         unreadDot.translatesAutoresizingMaskIntoConstraints = false
-
-        conversationTick.wantsLayer = true
-        conversationTick.layer?.cornerRadius = 1
-        conversationTick.layer?.backgroundColor = NSColor.tertiaryLabelColor.cgColor
-        conversationTick.isHidden = true
-        conversationTick.translatesAutoresizingMaskIntoConstraints = false
 
         senderField.font = .systemFont(ofSize: 13, weight: .semibold)
         senderField.lineBreakMode = .byTruncatingTail
@@ -892,16 +745,10 @@ private final class MessageRowView: NSTableCellView {
         subjectField.font = .systemFont(ofSize: 13)
         subjectField.lineBreakMode = .byTruncatingTail
 
-        summaryField.font = .systemFont(ofSize: 11)
-        summaryField.textColor = .secondaryLabelColor
-        summaryField.lineBreakMode = .byTruncatingTail
-        summaryField.maximumNumberOfLines = 1
-        summaryField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        summaryField.isHidden = true
-
-        savedChip.font = .systemFont(ofSize: 11, weight: .medium)
-        savedChip.textColor = .secondaryLabelColor
-        savedChip.lineBreakMode = .byTruncatingTail
+        previewField.font = .systemFont(ofSize: 12)
+        previewField.textColor = .secondaryLabelColor
+        previewField.lineBreakMode = .byTruncatingTail
+        previewField.maximumNumberOfLines = 1
 
         let topRow = NSStackView(views: [senderField, timeField])
         topRow.orientation = .horizontal
@@ -909,7 +756,7 @@ private final class MessageRowView: NSTableCellView {
         topRow.spacing = 8
         topRow.distribution = .fill
 
-        let lines = NSStackView(views: [topRow, subjectField, summaryField, savedChip])
+        let lines = NSStackView(views: [topRow, subjectField, previewField])
         lines.orientation = .vertical
         lines.alignment = .leading
         lines.spacing = 2
@@ -918,7 +765,6 @@ private final class MessageRowView: NSTableCellView {
         let leadingSlot = NSView()
         leadingSlot.translatesAutoresizingMaskIntoConstraints = false
         leadingSlot.addSubview(unreadDot)
-        leadingSlot.addSubview(conversationTick)
 
         let stack = NSStackView(views: [leadingSlot, lines])
         stack.orientation = .horizontal
@@ -937,10 +783,6 @@ private final class MessageRowView: NSTableCellView {
             unreadDot.heightAnchor.constraint(equalToConstant: 8),
             unreadDot.topAnchor.constraint(equalTo: leadingSlot.topAnchor, constant: 4),
             unreadDot.centerXAnchor.constraint(equalTo: leadingSlot.centerXAnchor),
-            conversationTick.widthAnchor.constraint(equalToConstant: 2),
-            conversationTick.heightAnchor.constraint(equalToConstant: 28),
-            conversationTick.topAnchor.constraint(equalTo: leadingSlot.topAnchor),
-            conversationTick.centerXAnchor.constraint(equalTo: leadingSlot.centerXAnchor),
             leadingSlot.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
@@ -951,9 +793,6 @@ private final class MessageRowView: NSTableCellView {
             // right-aligned time field is what makes the times a column.
             lines.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             topRow.widthAnchor.constraint(equalTo: lines.widthAnchor),
-            // Full width so a long summary truncates at the row's edge instead
-            // of pushing the stack wider than the cell.
-            summaryField.widthAnchor.constraint(equalTo: lines.widthAnchor),
         ])
     }
 
@@ -962,29 +801,13 @@ private final class MessageRowView: NSTableCellView {
         senderField.stringValue = message.senderDisplayName
         timeField.stringValue = MailLabels.listTime(for: message.receivedAt, calendar: calendar)
         subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
-        subjectIsSecondary = false
+        // A message with no text part gets no placeholder line: the row keeps
+        // its height either way, and an empty third line reads as a blank field
+        // rather than as "this message has no body".
+        previewField.stringValue = message.preview
+        previewField.isHidden = message.preview.isEmpty
         unreadDot.isHidden = message.isRead
-        conversationTick.isHidden = true
-
-        if let summaryLine = row.summaryLineText {
-            summaryField.stringValue = summaryLine
-            summaryIsPlaceholder = row.summaryLineIsPlaceholder
-            summaryField.isHidden = false
-        } else {
-            summaryField.isHidden = true
-        }
-
-        if let folder = row.savedFolderName {
-            savedChip.stringValue = MailLabels.savedChip(folderName: folder)
-            savedChip.isHidden = false
-        } else {
-            savedChip.isHidden = true
-        }
-
-        // Already-saved messages dim rather than disappear: the point of the
-        // list is a timeline you sweep, and a hole in it loses your place.
-        let dimmed = row.savedFolderName != nil
-        alphaValue = dimmed ? 0.55 : 1
+        alphaValue = 1
         refreshColors()
 
         setAccessibilityLabel(MailLabels.messageAccessibilityLabel(
@@ -992,68 +815,16 @@ private final class MessageRowView: NSTableCellView {
             subject: message.subject,
             receivedAt: message.receivedAt,
             isRead: message.isRead,
-            savedFolderName: row.savedFolderName,
-            summary: row.summaryLineIsPlaceholder ? nil : row.summaryLineText,
             calendar: calendar
         ))
     }
-
-    /// A conversation heading: subject on top, participants below, the count
-    /// where the unread dot would be, and the latest date on the right.
-    func apply(_ thread: MailThreadRow, calendar: Calendar) {
-        senderField.stringValue = thread.subject
-        timeField.stringValue = MailLabels.listTime(for: thread.latest, calendar: calendar)
-        subjectField.stringValue = thread.participants
-        subjectIsSecondary = true
-        unreadDot.isHidden = true
-        conversationTick.isHidden = true
-        summaryField.isHidden = true
-        savedChip.stringValue = MailLabels.messageCount(thread.rows.count)
-        savedChip.isHidden = false
-        alphaValue = 1
-        refreshColors()
-        setAccessibilityLabel(MailLabels.threadAccessibilityLabel(
-            subject: thread.subject,
-            count: thread.rows.count,
-            latest: thread.latest
-        ))
-    }
-
-    /// A saved message. No unread dot — Planner never learns whether a saved
-    /// copy has been read, and inventing one would be a claim it cannot make.
-    /// A row under a conversation header gets a tick in that slot instead,
-    /// so it reads as part of the thread and not as another top-level message.
-    func apply(_ row: SavedMessageRow, calendar: Calendar, inConversation: Bool) {
-        let message = row.message
-        senderField.stringValue = message.senderDisplayName
-        timeField.stringValue = MailLabels.listTime(for: message.receivedAt, calendar: calendar)
-        subjectField.stringValue = message.subject.isEmpty ? "(No subject)" : message.subject
-        subjectIsSecondary = false
-        unreadDot.isHidden = true
-        conversationTick.isHidden = !inConversation
-        summaryField.isHidden = true
-        savedChip.isHidden = true
-        alphaValue = 1
-        refreshColors()
-        var label = MailLabels.messageAccessibilityLabel(
-            sender: message.senderDisplayName,
-            subject: message.subject,
-            receivedAt: message.receivedAt,
-            isRead: true,
-            savedFolderName: nil,
-            calendar: calendar
-        )
-        if inConversation {
-            label = "In conversation. \(label)"
-        }
-        setAccessibilityLabel(label)
-    }
-
-    var test_showsConversationTick: Bool { !conversationTick.isHidden }
-    var test_summaryLine: String? { summaryField.isHidden ? nil : summaryField.stringValue }
 
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet { refreshColors() }
+    }
+
+    var test_previewLine: String? {
+        previewField.isHidden ? nil : previewField.stringValue
     }
 
     private func refreshColors() {
@@ -1061,16 +832,12 @@ private final class MessageRowView: NSTableCellView {
         senderField.textColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
         subjectField.textColor = emphasized
             ? .alternateSelectedControlTextColor
-            : (subjectIsSecondary ? .secondaryLabelColor : .labelColor)
+            : .labelColor
         timeField.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
-        summaryField.textColor = emphasized
+        previewField.textColor = emphasized
             ? .alternateSelectedControlTextColor
-            : (summaryIsPlaceholder ? .tertiaryLabelColor : .secondaryLabelColor)
-        savedChip.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+            : .secondaryLabelColor
         unreadDot.layer?.backgroundColor = (emphasized ? NSColor.alternateSelectedControlTextColor : .controlAccentColor).cgColor
-        conversationTick.layer?.backgroundColor = (emphasized
-            ? NSColor.alternateSelectedControlTextColor
-            : NSColor.tertiaryLabelColor).cgColor
     }
 }
 
@@ -1079,38 +846,25 @@ extension MailListViewController {
     var test_emptyStateText: String { emptyStateLabel.stringValue }
     var test_groupTitles: [String] { groups.map(\.title) }
     var test_rows: [MailListRow] { groups.flatMap(\.rows) }
-    var test_folderRows: [NSObject] { folderRows }
-    var test_threadSubjects: [String] {
-        folderRows.compactMap { ($0 as? MailThreadRow)?.subject }
-    }
     var test_indentationPerLevel: CGFloat { outlineView.indentationPerLevel }
     var test_scrollOrigin: NSPoint {
         outlineView.enclosingScrollView?.contentView.bounds.origin ?? .zero
     }
-    func test_showsConversationTick(for item: Any) -> Bool {
-        let row = outlineView.row(forItem: item)
-        guard row >= 0,
-              let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as? MessageRowView
-        else { return false }
-        return cell.test_showsConversationTick
-    }
-    /// The drawn summary line, or nil when the row has none.
-    func test_summaryLine(for item: Any) -> String? {
-        let row = outlineView.row(forItem: item)
-        guard row >= 0,
-              let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: true) as? MessageRowView
-        else { return nil }
-        return cell.test_summaryLine
-    }
     func test_rowHeight(for item: Any) -> CGFloat {
         self.outlineView(outlineView, heightOfRowByItem: item)
     }
+    /// The body line as the row renders it, or nil when the row hides it.
+    func test_previewLine(for row: MailListRow) -> String? {
+        let cell = self.outlineView(outlineView, viewFor: nil, item: row) as? MessageRowView
+        return cell?.test_previewLine
+    }
     var test_searchFieldIsHidden: Bool { searchHeader.isHidden }
     var test_searchQuery: String { searchQuery }
-    var test_searchFetchFailed: Bool { searchFetchFailed }
     var test_searchFieldMaximumRecents: Int { searchField.maximumRecents }
     var test_searchField: NSSearchField { searchField }
+    var test_saveSearchIsEnabled: Bool { saveSearchButton.isEnabled }
     func test_applySearch(_ raw: String) { applySearch(raw) }
+    func test_saveSearch(name: String) { saveSearch(named: name) }
     func test_clearSearch(resigning: Bool) { clearSearch(resigning: resigning) }
     func test_focusSearchField() { focusSearchField() }
 }

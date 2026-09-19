@@ -3,8 +3,17 @@ import AppKit
 protocol WeekCalendarViewDelegate: AnyObject {
     func weekCalendar(_ view: WeekCalendarView, didSelectTaskID uuid: UUID)
     func weekCalendar(_ view: WeekCalendarView, didSelectDay date: Date)
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickDay date: Date)
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickTaskID uuid: UUID)
     func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekStart date: Date)
-    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekCount count: Int)
+    /// The span the view wants chips for has moved: a scroll carried the rows
+    /// on screen towards the edge of what was last fetched.
+    func weekCalendar(_ view: WeekCalendarView, didChangeLoadedRange range: Range<Date>)
+}
+
+extension WeekCalendarViewDelegate {
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickDay date: Date) {}
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickTaskID uuid: UUID) {}
 }
 
 struct TaskDeadlineChip: Hashable {
@@ -14,18 +23,40 @@ struct TaskDeadlineChip: Hashable {
     var isCompleted: Bool
 }
 
-/// Days flow in reading order: the first visible day at the top left, each
-/// row filling left to right before the next begins. A row holds one day per
-/// column — the count the pane width allows — so the grid is always seven
-/// rows and paging moves by that many days, one column at a time. Weekend
-/// cells are full size; a gray wash is what distinguishes them from weekdays.
+/// One long sheet of days, scrolled vertically. Days flow in reading order:
+/// the first day of the sheet at the top left, each row filling left to right
+/// before the next begins. A row holds one day per column — the count the pane
+/// width allows — and every row is `rowHeight` tall whatever the pane's height
+/// is, so a short pane scrolls instead of squeezing the rows that are in it.
+/// Weekend cells are full size; a gray wash is what distinguishes them from
+/// weekdays.
+///
+/// Time is navigated by scrolling and nothing else: there are no week buttons,
+/// and `visibleWeekStart` is an *output* of the scroll position as much as an
+/// input to it.
+///
+/// The sheet spans two years either side of today, which is far more than fits
+/// on screen, so only the rows in view carry cells — the rest are recycled
+/// through `reuseQueue`. The view is its scroll view's document view and sizes
+/// itself; it is not under Auto Layout.
 final class WeekCalendarView: NSView {
     /// Upper bound only; each cell fits as many chips as its height allows.
     fileprivate static let maxVisibleChips = 6
 
-    /// Days per week over days per row (`visibleWeekCount`): the grid is
-    /// always exactly seven rows deep.
-    static let rowCount = 7
+    /// Every row is exactly this tall, on screen and off. The day header, then
+    /// five task rows and their spacing — derived rather than hardcoded so it
+    /// survives a change to any of the cell's metrics.
+    static let rowHeight = DayCellView.calibratedRowHeight
+
+    /// How far the sheet reaches either side of today. Beyond this there is
+    /// nothing to plan against — the event feed's own window is months, not
+    /// years — and an endless sheet costs a scroller that never means anything.
+    static let daysBack = 730
+    static let daysForward = 730
+
+    /// Rows of cells kept beyond the visible rect, so a scroll reveals a filled
+    /// row rather than an empty one that populates a frame later.
+    private static let bufferRows = 1
 
     /// Width a chip's text loses to insets before a glyph is drawn: the cell's
     /// inset on both sides, plus the chip's bar gutter and trailing padding.
@@ -54,27 +85,48 @@ final class WeekCalendarView: NSView {
 
     weak var delegate: WeekCalendarViewDelegate?
 
-    /// First visible day. Setter must not call the delegate.
+    /// Days per row. The pane's width decides it, the same way it always did.
+    private(set) var visibleWeekCount: Int = 4
+
+    /// First day on the sheet. Snapped so that **today always begins a row**:
+    /// the sheet re-cuts its rows whenever the pane changes width, and an
+    /// anchor that drifted would slide today's cell sideways under the user.
+    private(set) var rangeStart: Date
+    /// Rows the sheet holds end to end.
+    private(set) var rowCount: Int = 1
+
+    /// First day of the topmost row on screen. Setting it scrolls there;
+    /// scrolling sets it. Either way it snaps to the row it lands in, because a
+    /// row is a fixed slot on the sheet rather than a window onto it.
     var visibleWeekStart: Date {
         get { _visibleWeekStart }
         set {
             let normalized = Calendar.current.startOfDay(for: newValue)
             guard _visibleWeekStart != normalized else { return }
             _visibleWeekStart = normalized
-            applyVisibleWeeks()
+            // Reflecting our own scroll back at us; scrolling again would fight
+            // the user's drag.
+            guard !isPublishingScroll else { return }
+            scroll(toDay: normalized)
         }
     }
 
-    private(set) var visibleWeekCount: Int = 4
+    /// Rows the viewport can show, at least one even before it has a height.
+    var visibleRowCount: Int {
+        max(1, Int((viewportHeight / Self.rowHeight).rounded(.up)))
+    }
+
+    /// What is on screen right now — the title's span, not the sheet's.
+    var visibleDayCount: Int { visibleWeekCount * visibleRowCount }
 
     var deadlines: [TaskDeadlineChip] = [] {
-        didSet { applyChipsToCells() }
+        didSet { applyChips() }
     }
 
     /// External calendar events, already expanded to one chip per day. Read
     /// only: they cannot be selected, edited, or completed.
     var events: [CalendarEventChip] = [] {
-        didSet { applyChipsToCells() }
+        didSet { applyChips() }
     }
 
     /// Start-of-day dates that carry a note, marked with a dot in the cell.
@@ -88,7 +140,7 @@ final class WeekCalendarView: NSView {
     var selectedTaskID: UUID? {
         didSet {
             guard selectedTaskID != oldValue else { return }
-            for cell in dayCells { cell.selectedTaskID = selectedTaskID }
+            for cell in cells.values { cell.selectedTaskID = selectedTaskID }
         }
     }
 
@@ -104,20 +156,34 @@ final class WeekCalendarView: NSView {
 
     private var _visibleWeekStart: Date
     private var _selectedDay: Date?
+    /// Set while a scroll publishes its own first day, so the round trip back
+    /// through `SelectionModel` does not scroll on top of the user.
+    private var isPublishingScroll = false
+    /// Cleared until the sheet has been scrolled to `visibleWeekStart` once.
+    /// Without it the sheet would open two years in the past, which is where
+    /// scroll offset zero is.
+    private var hasAnchored = false
 
-    private let gridContainer = GridContainer()
-    /// Chronological, first visible day first; the cell at index `i` sits at
-    /// row `i / visibleWeekCount`, column `i % visibleWeekCount`.
-    private var dayCells: [DayCellView] = []
+    /// Chips indexed by day, so a cell coming off the reuse queue fills itself
+    /// from a dictionary rather than a scan.
+    private var tasksByDay: [Date: [TaskDeadlineChip]] = [:]
+    private var eventsByDay: [Date: [CalendarEventChip]] = [:]
+
+    /// Live cells by day index from `rangeStart`. Everything else is recycled.
+    private var cells: [Int: DayCellView] = [:]
+    private var reuseQueue: [DayCellView] = []
+    /// Rows the delegate has already been asked to supply chips for. Padded
+    /// either side of the viewport, so an ordinary scroll does not refetch.
+    private var loadedRows: Range<Int> = 0..<0
 
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
-        _visibleWeekStart = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: Date())
+        rangeStart = today
+        _visibleWeekStart = today
         super.init(frame: frameRect)
-        configure()
-        rebuildCells()
-        applyVisibleWeeks()
+        updateRange()
     }
 
     @available(*, unavailable)
@@ -125,28 +191,13 @@ final class WeekCalendarView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     /// Calls `didChangeVisibleWeekStart` with today; does not assign.
     func revealToday() {
         delegate?.weekCalendar(self, didChangeVisibleWeekStart: Date())
-    }
-
-    func goToPreviousWeek() {
-        shiftVisibleWeeks(by: -1)
-    }
-
-    func goToNextWeek() {
-        shiftVisibleWeeks(by: 1)
-    }
-
-    /// One step is one column: the grid slides left or right by the number of
-    /// days in a row, so every cell moves into its neighbour's place.
-    private func shiftVisibleWeeks(by weeks: Int) {
-        let target = Calendar.current.date(
-            byAdding: .day,
-            value: weeks * visibleWeekCount,
-            to: _visibleWeekStart
-        )!
-        delegate?.weekCalendar(self, didChangeVisibleWeekStart: target)
     }
 
     // MARK: - Keyboard
@@ -162,7 +213,7 @@ final class WeekCalendarView: NSView {
     }
 
     /// Reading order: horizontal movement walks days along a row; vertical
-    /// movement jumps a whole row, which is one day per visible week.
+    /// movement jumps a whole row, which is one day per column.
     static func dayOffset(for event: NSEvent, daysPerRow: Int) -> Int? {
         switch Int(event.keyCode) {
         case 123: return -1            // left
@@ -177,7 +228,7 @@ final class WeekCalendarView: NSView {
         let calendar = Calendar.current
         // Taking focus must not change the selection on its own — merely hiding a
         // pane moves first responder here, and that should not retarget the
-        // inspector. So the first arrow press is what seeds a day, landing on
+        // selection. So the first arrow press is what seeds a day, landing on
         // today rather than a day away from it.
         guard let anchor = _selectedDay else {
             select(calendar.startOfDay(for: Date()))
@@ -188,168 +239,379 @@ final class WeekCalendarView: NSView {
     }
 
     private func select(_ day: Date) {
-        let calendar = Calendar.current
         delegate?.weekCalendar(self, didSelectDay: day)
-
-        // Page only when the new day falls outside what is on screen, and
-        // then by whole columns so the grid stays on its current phase.
-        let firstVisible = calendar.startOfDay(for: _visibleWeekStart)
-        let lastVisible = calendar.endOfWeeks(from: firstVisible, count: visibleWeekCount)
-        if day < firstVisible || day >= lastVisible {
-            delegate?.weekCalendar(self, didChangeVisibleWeekStart: pagedStart(containing: day))
-        }
+        // Keyboard movement must not walk the selection off the screen; a
+        // scroll of exactly one row is what following it costs.
+        scrollDayIntoView(day)
     }
 
-    // MARK: - Layout
+    // MARK: - The sheet
 
-    override func layout() {
-        super.layout()
-        if gridContainer.bounds.width <= 0 || gridContainer.bounds.height <= 0, bounds.width > 0 {
-            gridContainer.frame = NSRect(
-                x: 0,
-                y: 0,
-                width: max(0, bounds.width),
-                height: max(0, bounds.height - 8)
-            )
-        }
-        updateWeekCountForWidth()
-        layoutGrid()
-    }
-
-    /// Columns keep a readable width; the visible week count follows the pane.
+    /// Columns keep a readable width; the count follows the pane.
     static func weekCount(fittingWidth width: CGFloat) -> Int {
         guard width > 0 else { return minimumWeekCount }
         let raw = Int((width / targetColumnWidth).rounded(.down))
         return max(minimumWeekCount, min(maximumWeekCount, raw))
     }
 
-    private func updateWeekCountForWidth() {
-        let wanted = Self.weekCount(fittingWidth: gridContainer.bounds.width)
-        guard wanted != visibleWeekCount else { return }
-        visibleWeekCount = wanted
-        rebuildCells()
-        applyVisibleWeeks()
-        delegate?.weekCalendar(self, didChangeVisibleWeekCount: wanted)
-    }
-
-    /// Seven equal row bands, top to bottom. Every day — weekend included — is
-    /// full size; the weekend's mark is its wash, not its height.
-    static func rowFrames(in height: CGFloat) -> [NSRect] {
-        let rowHeight = height / CGFloat(rowCount)
-        return (0..<rowCount).map {
-            NSRect(x: 0, y: CGFloat($0) * rowHeight, width: 0, height: rowHeight)
-        }
-    }
-
-    static func columnFrames(in width: CGFloat, count: Int) -> [NSRect] {
-        guard count > 0 else { return [] }
+    /// The columns' x boundaries, `count + 1` of them.
+    ///
+    /// Rounded here rather than per cell: neighbouring cells then share an edge
+    /// instead of leaving a seam between two independently rounded widths, and
+    /// the rules land on the same pixels the cells do because both read this.
+    static func columnEdges(in width: CGFloat, count: Int) -> [CGFloat] {
+        guard count > 0 else { return [0] }
         let columnWidth = width / CGFloat(count)
-        return (0..<count).map {
-            NSRect(x: CGFloat($0) * columnWidth, y: 0, width: columnWidth, height: 0)
-        }
+        return (0...count).map { (CGFloat($0) * columnWidth).rounded() }
     }
 
-    private func layoutGrid() {
-        let bounds = gridContainer.bounds
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        gridContainer.weekCount = visibleWeekCount
-        gridContainer.needsDisplay = true
+    /// The sheet's full height. Not the view's height when there is no scroll
+    /// view around it — a bare view is its own viewport.
+    var documentHeight: CGFloat { CGFloat(rowCount) * Self.rowHeight }
 
-        let columns = Self.columnFrames(in: bounds.width, count: visibleWeekCount)
-        let rows = Self.rowFrames(in: bounds.height)
+    /// Days on the sheet, first to last. Whole rows only, so the last row is
+    /// never ragged.
+    private var totalDayCount: Int { rowCount * max(1, visibleWeekCount) }
 
-        // Reading order: fill a row left to right, then start the next.
-        for (index, cell) in dayCells.enumerated() {
-            let row = index / visibleWeekCount
-            let column = index % visibleWeekCount
-            guard row < rows.count, column < columns.count else { continue }
-            cell.frame = NSRect(
-                x: columns[column].minX,
-                y: rows[row].minY,
-                width: columns[column].width,
-                height: rows[row].height
-            )
-        }
-    }
-
-    private func configure() {
-        gridContainer.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(gridContainer)
-        NSLayoutConstraint.activate([
-            gridContainer.topAnchor.constraint(equalTo: topAnchor),
-            gridContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            gridContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-            gridContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-        ])
-    }
-
-    private func rebuildCells() {
-        dayCells.forEach { $0.removeFromSuperview() }
-        dayCells = (0..<(visibleWeekCount * 7)).map { _ in
-            let cell = DayCellView()
-            cell.onChipClick = { [weak self] chip in
-                self?.handleChipClick(chip)
-            }
-            cell.onDayClick = { [weak self] day in
-                self?.handleDayClick(day)
-            }
-            cell.onEventClick = { [weak self] chip in
-                self?.handleEventClick(chip)
-            }
-            gridContainer.addSubview(cell)
-            return cell
-        }
-    }
-
-    /// The first visible day plus whole columns until `day` is on screen.
-    private func pagedStart(containing day: Date) -> Date {
+    /// Re-cuts the sheet for the current column count. Both ends are rounded
+    /// out to whole rows away from today, which is what keeps today on a row
+    /// boundary however many columns there are.
+    private func updateRange() {
         let calendar = Calendar.current
-        let first = calendar.startOfDay(for: _visibleWeekStart)
-        let step = max(1, visibleWeekCount)
-        let span = visibleWeekCount * Self.rowCount
-        if day < first {
-            let daysBack = calendar.dateComponents([.day], from: day, to: first).day ?? 0
-            let steps = (daysBack + step - 1) / step
-            return calendar.date(byAdding: .day, value: -steps * step, to: first)!
-        }
-        let daysForward = calendar.dateComponents([.day], from: first, to: day).day ?? 0
-        let steps = (daysForward - span + step) / step
-        return calendar.date(byAdding: .day, value: steps * step, to: first)!
+        let today = calendar.startOfDay(for: Date())
+        let columns = max(1, visibleWeekCount)
+        let rowsBack = Int((Double(Self.daysBack) / Double(columns)).rounded(.up))
+        let rowsForward = Int((Double(Self.daysForward) / Double(columns)).rounded(.up))
+        rangeStart = calendar.date(byAdding: .day, value: -rowsBack * columns, to: today) ?? today
+        rowCount = max(1, rowsBack + rowsForward)
     }
 
-    private func applyVisibleWeeks() {
+    private func day(atIndex index: Int) -> Date {
+        Calendar.current.date(byAdding: .day, value: index, to: rangeStart) ?? rangeStart
+    }
+
+    private func dayIndex(of day: Date) -> Int {
         let calendar = Calendar.current
-        let days = calendar.visibleDays(
-            from: _visibleWeekStart,
-            count: visibleWeekCount * Self.rowCount
+        return calendar.dateComponents(
+            [.day],
+            from: rangeStart,
+            to: calendar.startOfDay(for: day)
+        ).day ?? 0
+    }
+
+    private func rowIndex(of day: Date) -> Int {
+        let index = dayIndex(of: day)
+        let row = Int(floor(Double(index) / Double(max(1, visibleWeekCount))))
+        return max(0, min(rowCount - 1, row))
+    }
+
+    // MARK: - Scrolling
+
+    /// The band of the sheet on screen, in the sheet's own coordinates.
+    ///
+    /// Not `visibleRect`: AppKit hands that back as an infinite rectangle for a
+    /// view with no window, and the row arithmetic below turns an infinity into
+    /// a trap. A bare view is its own viewport, and its `bounds.origin` is the
+    /// scroll offset — see `setScrollOrigin`.
+    private var viewportRect: NSRect {
+        let rect: NSRect
+        if let clip = enclosingScrollView?.contentView {
+            rect = convert(clip.bounds, from: clip)
+        } else {
+            rect = bounds
+        }
+        guard rect.minY.isFinite, rect.height.isFinite, rect.height > 0 else { return bounds }
+        return rect
+    }
+
+    private var viewportHeight: CGFloat {
+        let height = viewportRect.height
+        return height > 0 ? height : Self.rowHeight
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        observeClipView()
+    }
+
+    private func observeClipView() {
+        let center = NotificationCenter.default
+        center.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        center.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+        guard let clip = enclosingScrollView?.contentView else { return }
+        // A clip view only posts these once asked to.
+        clip.postsBoundsChangedNotifications = true
+        clip.postsFrameChangedNotifications = true
+        center.addObserver(
+            self,
+            selector: #selector(clipDidScroll),
+            name: NSView.boundsDidChangeNotification,
+            object: clip
         )
-        for (index, day) in days.enumerated() {
-            guard dayCells.indices.contains(index) else { continue }
-            dayCells[index].configure(
-                day: day,
-                isWeekend: calendar.isWeekend(day),
-                selectedDay: _selectedDay
+        center.addObserver(
+            self,
+            selector: #selector(clipDidResize),
+            name: NSView.frameDidChangeNotification,
+            object: clip
+        )
+        clipDidResize()
+    }
+
+    @objc private func clipDidScroll() {
+        updateVisibleCells()
+        publishVisibleStart()
+        updateLoadedRows()
+    }
+
+    /// The pane changed shape. Width may have changed the column count, which
+    /// re-cuts every row, so the day the user was reading is put back under the
+    /// top edge rather than left wherever the arithmetic landed.
+    @objc private func clipDidResize() {
+        guard let clip = enclosingScrollView?.contentView else { return }
+        let width = clip.bounds.width
+        guard width > 0 else { return }
+        let columns = Self.weekCount(fittingWidth: width)
+        let reflowed = columns != visibleWeekCount
+        let anchor = _visibleWeekStart
+
+        visibleWeekCount = columns
+        updateRange()
+        setFrameSize(NSSize(width: width, height: documentHeight))
+
+        if reflowed || !hasAnchored {
+            recycleAll()
+            // Rows now stand for different days, so nothing fetched for the old
+            // ones counts as loaded.
+            loadedRows = 0..<0
+            hasAnchored = true
+            scroll(toDay: anchor)
+        } else {
+            updateVisibleCells()
+            updateLoadedRows()
+        }
+        needsDisplay = true
+    }
+
+    /// Puts `day`'s row under the top edge.
+    func scroll(toDay day: Date) {
+        setScrollOrigin(CGFloat(rowIndex(of: day)) * Self.rowHeight)
+        updateVisibleCells()
+        publishVisibleStart()
+        updateLoadedRows()
+    }
+
+    /// Scrolls by as little as it takes for `day`'s row to be whole on screen,
+    /// landing on a row boundary rather than wherever the arithmetic fell.
+    ///
+    /// A viewport is rarely a whole number of rows tall, so scrolling the
+    /// target's bottom edge just into view leaves the top row sliced in half —
+    /// and the title, which names the topmost row, then describes a sliver.
+    /// Rounding the offset *up* to a boundary keeps the target whole: it moves
+    /// by less than one row, and the viewport holds at least two.
+    private func scrollDayIntoView(_ day: Date) {
+        let top = CGFloat(rowIndex(of: day)) * Self.rowHeight
+        let bottom = top + Self.rowHeight
+        let rect = viewportRect
+        let origin: CGFloat
+        if top < rect.minY {
+            origin = top
+        } else if bottom > rect.maxY {
+            let minimum = bottom - rect.height
+            origin = rect.height >= Self.rowHeight * 2
+                ? (minimum / Self.rowHeight).rounded(.up) * Self.rowHeight
+                : top
+        } else {
+            return
+        }
+        setScrollOrigin(origin)
+        updateVisibleCells()
+        publishVisibleStart()
+        updateLoadedRows()
+    }
+
+    /// A clip view scrolls; a bare view moves its own bounds, which is the same
+    /// thing one layer down and is what makes the view testable without a
+    /// scroll view around it.
+    private func setScrollOrigin(_ y: CGFloat) {
+        let clamped = max(0, min(y, max(0, documentHeight - viewportHeight)))
+        if let clip = enclosingScrollView?.contentView {
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: clamped))
+            enclosingScrollView?.reflectScrolledClipView(clip)
+        } else {
+            bounds.origin.y = clamped
+            needsDisplay = true
+        }
+    }
+
+    /// The topmost row's first day, published when it changes.
+    private func publishVisibleStart() {
+        let row = max(0, min(rowCount - 1, Int(floor(viewportRect.minY / Self.rowHeight))))
+        let first = day(atIndex: row * visibleWeekCount)
+        guard first != _visibleWeekStart else { return }
+        _visibleWeekStart = first
+        isPublishingScroll = true
+        delegate?.weekCalendar(self, didChangeVisibleWeekStart: first)
+        isPublishingScroll = false
+    }
+
+    // MARK: - Fetch window
+
+    /// The span the delegate has been asked to supply chips for.
+    var loadedRange: Range<Date> {
+        let columns = max(1, visibleWeekCount)
+        let start = day(atIndex: loadedRows.lowerBound * columns)
+        let end = day(atIndex: min(totalDayCount, loadedRows.upperBound * columns))
+        return start..<max(end, start)
+    }
+
+    /// Slides the fetch window when the viewport comes off the end of it. The
+    /// padding is a screenful either side, so scrolling within what is already
+    /// fetched costs nothing.
+    private func updateLoadedRows() {
+        let rect = viewportRect
+        let first = max(0, Int(floor(rect.minY / Self.rowHeight)))
+        let last = min(rowCount, Int(ceil(rect.maxY / Self.rowHeight)))
+        let needed = first..<max(first + 1, last)
+        let covered = loadedRows.lowerBound <= needed.lowerBound
+            && needed.upperBound <= loadedRows.upperBound
+        guard !covered else { return }
+
+        let pad = max(1, visibleRowCount)
+        loadedRows = max(0, needed.lowerBound - pad)..<min(rowCount, needed.upperBound + pad)
+        delegate?.weekCalendar(self, didChangeLoadedRange: loadedRange)
+    }
+
+    // MARK: - Cells
+
+    override func layout() {
+        super.layout()
+        // No clip view to take the width from, so the view's own bounds are
+        // both the sheet's width and the viewport. This is how the tests drive
+        // it, and how the view behaves before it is installed anywhere.
+        if enclosingScrollView == nil, bounds.width > 0 {
+            let columns = Self.weekCount(fittingWidth: bounds.width)
+            if columns != visibleWeekCount || !hasAnchored {
+                visibleWeekCount = columns
+                updateRange()
+                recycleAll()
+                loadedRows = 0..<0
+                hasAnchored = true
+                setScrollOrigin(CGFloat(rowIndex(of: _visibleWeekStart)) * Self.rowHeight)
+            }
+        }
+        updateVisibleCells()
+        publishVisibleStart()
+        updateLoadedRows()
+    }
+
+    /// The rows that carry cells: what the viewport shows, plus a buffer row
+    /// either side.
+    private var realizedRows: Range<Int> {
+        let rect = viewportRect
+        guard rect.height > 0 else {
+            return 0..<min(rowCount, visibleRowCount + Self.bufferRows)
+        }
+        let first = max(0, Int(floor(rect.minY / Self.rowHeight)) - Self.bufferRows)
+        let last = min(rowCount, Int(ceil(rect.maxY / Self.rowHeight)) + Self.bufferRows)
+        return first..<max(first + 1, last)
+    }
+
+    private func updateVisibleCells() {
+        guard bounds.width > 0, visibleWeekCount > 0 else { return }
+        let columns = visibleWeekCount
+        let rows = realizedRows
+        let wanted = (rows.lowerBound * columns)..<min(totalDayCount, rows.upperBound * columns)
+
+        for (index, cell) in cells where !wanted.contains(index) {
+            cells[index] = nil
+            recycle(cell)
+        }
+
+        let edges = Self.columnEdges(in: bounds.width, count: columns)
+        for index in wanted {
+            let cell: DayCellView
+            if let existing = cells[index] {
+                cell = existing
+            } else {
+                cell = dequeueCell()
+                cells[index] = cell
+                configure(cell, forDayAt: index)
+            }
+            let row = index / columns
+            let column = index % columns
+            cell.frame = NSRect(
+                x: edges[column],
+                y: CGFloat(row) * Self.rowHeight,
+                width: edges[column + 1] - edges[column],
+                height: Self.rowHeight
             )
         }
-        applyChipsToCells()
-        applyNoteMarkers()
+    }
+
+    private func dequeueCell() -> DayCellView {
+        let cell = reuseQueue.popLast() ?? makeCell()
+        addSubview(cell)
+        return cell
+    }
+
+    private func recycle(_ cell: DayCellView) {
+        cell.removeFromSuperview()
+        reuseQueue.append(cell)
+    }
+
+    private func recycleAll() {
+        for (index, cell) in cells {
+            cells[index] = nil
+            recycle(cell)
+        }
+    }
+
+    private func makeCell() -> DayCellView {
+        let cell = DayCellView()
+        cell.onChipClick = { [weak self] chip in
+            self?.handleChipClick(chip)
+        }
+        cell.onChipDoubleClick = { [weak self] chip in
+            self?.handleChipDoubleClick(chip)
+        }
+        cell.onDayClick = { [weak self] day in
+            self?.handleDayClick(day)
+        }
+        cell.onDayDoubleClick = { [weak self] day in
+            self?.handleDayDoubleClick(day)
+        }
+        cell.onEventClick = { [weak self] chip in
+            self?.handleEventClick(chip)
+        }
+        cell.onEventDoubleClick = { [weak self] chip in
+            self?.handleDayDoubleClick(chip.day)
+        }
+        return cell
+    }
+
+    private func configure(_ cell: DayCellView, forDayAt index: Int) {
+        let calendar = Calendar.current
+        let day = day(atIndex: index)
+        cell.configure(day: day, isWeekend: calendar.isWeekend(day), selectedDay: _selectedDay)
+        cell.hasNote = daysWithNotes.contains(day)
+        cell.selectedTaskID = selectedTaskID
+        cell.setRows(tasks: tasksByDay[day] ?? [], events: eventsByDay[day] ?? [])
     }
 
     private func applyNoteMarkers() {
-        let calendar = Calendar.current
-        for cell in dayCells {
-            cell.hasNote = daysWithNotes.contains(calendar.startOfDay(for: cell.day))
+        for (index, cell) in cells {
+            cell.hasNote = daysWithNotes.contains(day(atIndex: index))
         }
     }
 
     private func applySelectionHighlights() {
         let calendar = Calendar.current
-        for cell in dayCells {
+        for cell in cells.values {
             cell.isSelected = _selectedDay.map { calendar.isDate(cell.day, inSameDayAs: $0) } ?? false
         }
     }
 
-    private func applyChipsToCells() {
+    private func applyChips() {
         let calendar = Calendar.current
         var tasks: [Date: [TaskDeadlineChip]] = [:]
         for chip in deadlines {
@@ -359,21 +621,62 @@ final class WeekCalendarView: NSView {
         for chip in self.events {
             events[calendar.startOfDay(for: chip.day), default: []].append(chip)
         }
-        for cell in dayCells {
+        tasksByDay = tasks
+        eventsByDay = events
+
+        for (index, cell) in cells {
+            let day = day(atIndex: index)
             cell.selectedTaskID = selectedTaskID
             // Set together, so a cell rebuilds its rows once rather than twice.
-            cell.setRows(
-                tasks: tasks[calendar.startOfDay(for: cell.day)] ?? [],
-                events: events[calendar.startOfDay(for: cell.day)] ?? []
-            )
+            cell.setRows(tasks: tasksByDay[day] ?? [], events: eventsByDay[day] ?? [])
         }
     }
+
+    // MARK: - Grid rules
+
+    /// Hairline rules behind the cells, drawn only for the band being
+    /// refreshed: the sheet is years long and the rules are cheap only because
+    /// nothing off screen is asked for.
+    override func draw(_ dirtyRect: NSRect) {
+        guard bounds.width > 0, visibleWeekCount > 0 else { return }
+
+        NSColor.separatorColor.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = 1
+
+        let firstRow = max(0, Int(floor(dirtyRect.minY / Self.rowHeight)))
+        let lastRow = min(rowCount, Int(ceil(dirtyRect.maxY / Self.rowHeight)))
+        if firstRow <= lastRow {
+            for row in firstRow...lastRow {
+                let y = (CGFloat(row) * Self.rowHeight).rounded() + 0.5
+                path.move(to: NSPoint(x: 0, y: y))
+                path.line(to: NSPoint(x: bounds.width, y: y))
+            }
+        }
+
+        let edges = Self.columnEdges(in: bounds.width, count: visibleWeekCount)
+        for edge in edges.dropFirst().dropLast() {
+            path.move(to: NSPoint(x: edge + 0.5, y: dirtyRect.minY))
+            path.line(to: NSPoint(x: edge + 0.5, y: dirtyRect.maxY))
+        }
+        path.stroke()
+    }
+
+    // MARK: - Clicks
 
     /// Selects the task only. Selection is exclusive, so also selecting the day
     /// would immediately displace the task the user just clicked.
     private func handleChipClick(_ chip: TaskDeadlineChip) {
         window?.makeFirstResponder(self)
         delegate?.weekCalendar(self, didSelectTaskID: chip.uuid)
+    }
+
+    /// A chip stands for a task, so it opens the task rather than the day the
+    /// cell around it would.
+    private func handleChipDoubleClick(_ chip: TaskDeadlineChip) {
+        window?.makeFirstResponder(self)
+        delegate?.weekCalendar(self, didSelectTaskID: chip.uuid)
+        delegate?.weekCalendar(self, didDoubleClickTaskID: chip.uuid)
     }
 
     /// An event is not a selectable thing: `PlannerSelection` holds a node or a
@@ -386,6 +689,12 @@ final class WeekCalendarView: NSView {
     private func handleDayClick(_ day: Date) {
         window?.makeFirstResponder(self)
         delegate?.weekCalendar(self, didSelectDay: day)
+    }
+
+    private func handleDayDoubleClick(_ day: Date) {
+        window?.makeFirstResponder(self)
+        delegate?.weekCalendar(self, didSelectDay: day)
+        delegate?.weekCalendar(self, didDoubleClickDay: day)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -403,101 +712,132 @@ final class WeekCalendarView: NSView {
 
 extension WeekCalendarView {
     var test_title: String {
-        Calendar.current.weekRangeString(from: _visibleWeekStart, count: visibleWeekCount)
+        Calendar.current.dayRangeString(from: _visibleWeekStart, days: visibleDayCount)
     }
-    var test_dayCount: Int { dayCells.count }
-    var test_days: [Date] { dayCells.map(\.day) }
+
+    /// The cells on screen, in reading order from the topmost visible row.
+    /// Indices in every hook below are offsets into this list, so a test can go
+    /// on addressing "the third cell" without knowing where the sheet is.
+    private var test_visibleCells: [DayCellView] {
+        let row = max(0, min(rowCount - 1, Int(floor(viewportRect.minY / Self.rowHeight))))
+        let first = row * visibleWeekCount
+        return (0..<visibleDayCount).compactMap { cells[first + $0] }
+    }
+
+    private func test_cell(_ index: Int) -> DayCellView { test_visibleCells[index] }
+
+    var test_dayCount: Int { test_visibleCells.count }
+    var test_days: [Date] { test_visibleCells.map(\.day) }
     var test_weekCount: Int { visibleWeekCount }
+    var test_rowCount: Int { rowCount }
+    var test_scrollOrigin: CGFloat { viewportRect.minY }
+    var test_loadedRange: Range<Date> { loadedRange }
 
     func test_setWeekCount(_ count: Int) {
         guard count != visibleWeekCount else { return }
         visibleWeekCount = count
-        rebuildCells()
-        applyVisibleWeeks()
+        updateRange()
+        recycleAll()
+        loadedRows = 0..<0
+        scroll(toDay: _visibleWeekStart)
     }
 
-    func test_isWeekend(at index: Int) -> Bool { dayCells[index].isWeekend }
-    func test_hasNoteMarker(at index: Int) -> Bool { dayCells[index].hasNote }
-    func test_cellFrame(at index: Int) -> NSRect { dayCells[index].frame }
-    func test_isToday(at index: Int) -> Bool { dayCells[index].isToday }
-    func test_isSelected(at index: Int) -> Bool { dayCells[index].isSelected }
-    func test_monthBadge(at index: Int) -> String? { dayCells[index].monthBadgeText }
-    func test_monthHeaderText(at index: Int) -> String { dayCells[index].test_monthHeaderText }
-    func test_monthHeaderFrame(at index: Int) -> NSRect? { dayCells[index].test_monthHeaderFrame }
-    func test_noteDotFrame(at index: Int) -> NSRect { dayCells[index].test_noteDotFrame }
-    func test_dayNumber(at index: Int) -> String { dayCells[index].test_dayNumberText }
-    func test_dayNumberFrame(at index: Int) -> NSRect { dayCells[index].test_dayNumberFrame }
+    func test_scroll(toDay day: Date) { scroll(toDay: day) }
+    func test_scroll(byRows rows: Int) {
+        setScrollOrigin(viewportRect.minY + CGFloat(rows) * Self.rowHeight)
+        updateVisibleCells()
+        publishVisibleStart()
+        updateLoadedRows()
+    }
 
-    func test_visibleChips(at index: Int) -> [TaskDeadlineChip] { dayCells[index].visibleChips }
-    func test_visibleEvents(at index: Int) -> [CalendarEventChip] { dayCells[index].visibleEvents }
+    func test_isWeekend(at index: Int) -> Bool { test_cell(index).isWeekend }
+    func test_hasNoteMarker(at index: Int) -> Bool { test_cell(index).hasNote }
+    func test_cellFrame(at index: Int) -> NSRect { test_cell(index).frame }
+    func test_isToday(at index: Int) -> Bool { test_cell(index).isToday }
+    func test_isSelected(at index: Int) -> Bool { test_cell(index).isSelected }
+    func test_monthBadge(at index: Int) -> String? { test_cell(index).monthBadgeText }
+    func test_monthHeaderText(at index: Int) -> String { test_cell(index).test_monthHeaderText }
+    func test_monthHeaderFrame(at index: Int) -> NSRect? { test_cell(index).test_monthHeaderFrame }
+    func test_noteDotFrame(at index: Int) -> NSRect { test_cell(index).test_noteDotFrame }
+    func test_dayNumber(at index: Int) -> String { test_cell(index).test_dayNumberText }
+    func test_dayNumberFrame(at index: Int) -> NSRect { test_cell(index).test_dayNumberFrame }
+
+    func test_visibleChips(at index: Int) -> [TaskDeadlineChip] { test_cell(index).visibleChips }
+    func test_visibleEvents(at index: Int) -> [CalendarEventChip] { test_cell(index).visibleEvents }
     /// Hidden rows of both kinds — there is one shared overflow line.
-    func test_overflowCount(at index: Int) -> Int { dayCells[index].overflowCount }
-    func test_overflowButtonFrame(at index: Int) -> NSRect? { dayCells[index].test_overflowButtonFrame }
-    func test_todayMarkerRect(at index: Int) -> NSRect { dayCells[index].test_todayMarkerRect }
-    func test_headerHeight(at index: Int) -> CGFloat { dayCells[index].test_headerHeight }
-    func test_contentTop(at index: Int) -> CGFloat { dayCells[index].test_contentTop }
-    func test_overflowBadge(at index: Int) -> String? { dayCells[index].test_overflowBadgeText }
-    func test_visibleRowFrames(at index: Int) -> [NSRect] { dayCells[index].test_visibleRowFrames }
-    func test_cellAccessibilityLabel(at index: Int) -> String? { dayCells[index].test_accessibilityLabel }
+    func test_overflowCount(at index: Int) -> Int { test_cell(index).overflowCount }
+    func test_overflowButtonFrame(at index: Int) -> NSRect? { test_cell(index).test_overflowButtonFrame }
+    func test_todayMarkerRect(at index: Int) -> NSRect { test_cell(index).test_todayMarkerRect }
+    func test_headerHeight(at index: Int) -> CGFloat { test_cell(index).test_headerHeight }
+    func test_contentTop(at index: Int) -> CGFloat { test_cell(index).test_contentTop }
+    func test_overflowBadge(at index: Int) -> String? { test_cell(index).test_overflowBadgeText }
+    func test_visibleRowFrames(at index: Int) -> [NSRect] { test_cell(index).test_visibleRowFrames }
+    func test_cellAccessibilityLabel(at index: Int) -> String? { test_cell(index).test_accessibilityLabel }
     /// Row order as laid out: task rows first, then event rows.
-    func test_rowKinds(at index: Int) -> [String] { dayCells[index].test_rowKinds }
+    func test_rowKinds(at index: Int) -> [String] { test_cell(index).test_rowKinds }
     func test_eventRowFrame(at index: Int, event eventIndex: Int) -> NSRect? {
-        dayCells[index].test_eventRowFrame(at: eventIndex)
+        test_cell(index).test_eventRowFrame(at: eventIndex)
     }
     func test_chipFrame(at index: Int, chip chipIndex: Int) -> NSRect? {
-        dayCells[index].test_chipFrame(at: chipIndex)
+        test_cell(index).test_chipFrame(at: chipIndex)
     }
     func test_clickEvent(at index: Int, event eventIndex: Int) {
-        dayCells[index].test_clickEvent(at: eventIndex)
+        test_cell(index).test_clickEvent(at: eventIndex)
     }
     func test_eventAccessibility(at index: Int, event eventIndex: Int) -> (role: NSAccessibility.Role?, label: String?)? {
-        dayCells[index].test_eventAccessibility(at: eventIndex)
+        test_cell(index).test_eventAccessibility(at: eventIndex)
     }
     func test_eventToolTip(at index: Int, event eventIndex: Int) -> String? {
-        dayCells[index].test_eventToolTip(at: eventIndex)
+        test_cell(index).test_eventToolTip(at: eventIndex)
     }
     func test_hitIsEventRow(_ view: NSView?, at index: Int, event eventIndex: Int) -> Bool {
-        view === dayCells[index].test_eventView(at: eventIndex)
+        view === test_cell(index).test_eventView(at: eventIndex)
     }
 
     func test_chipAppearance(at index: Int, chip chipIndex: Int) -> (color: NSColor, isStruck: Bool, isSelected: Bool)? {
-        dayCells[index].test_chipAppearance(at: chipIndex)
+        test_cell(index).test_chipAppearance(at: chipIndex)
     }
 
     func test_chipAccessibilityLabel(at index: Int, chip chipIndex: Int) -> String? {
-        dayCells[index].test_chipAccessibilityLabel(at: chipIndex)
+        test_cell(index).test_chipAccessibilityLabel(at: chipIndex)
     }
 
-    func test_clickDay(at index: Int) { dayCells[index].test_clickDay() }
-    func test_clickChip(at index: Int, chip chipIndex: Int) { dayCells[index].test_clickChip(at: chipIndex) }
-    func test_clickOverflow(at index: Int) { dayCells[index].test_clickOverflow() }
-    func test_clickPreviousWeek() { goToPreviousWeek() }
-    func test_clickNextWeek() { goToNextWeek() }
+    func test_clickDay(at index: Int) { test_cell(index).test_clickDay() }
+    func test_doubleClickDay(at index: Int) { test_cell(index).test_doubleClickDay() }
+    func test_clickChip(at index: Int, chip chipIndex: Int) { test_cell(index).test_clickChip(at: chipIndex) }
+    func test_doubleClickChip(at index: Int, chip chipIndex: Int) {
+        test_cell(index).test_doubleClickChip(at: chipIndex)
+    }
+    func test_doubleClickEvent(at index: Int, event eventIndex: Int) {
+        test_cell(index).test_doubleClickEvent(at: eventIndex)
+    }
+    func test_clickOverflow(at index: Int) { test_cell(index).test_clickOverflow() }
     func test_clickToday() { revealToday() }
 
     func test_performDayAccessibilityPress(at index: Int) -> Bool {
-        dayCells[index].test_performAccessibilityPress()
+        test_cell(index).test_performAccessibilityPress()
     }
 
     func test_performChipAccessibilityPress(at index: Int, chip chipIndex: Int) -> Bool {
-        dayCells[index].test_performChipAccessibilityPress(at: chipIndex)
+        test_cell(index).test_performChipAccessibilityPress(at: chipIndex)
     }
 
-    func test_hitIsDayCell(_ view: NSView?, at index: Int) -> Bool { view === dayCells[index] }
+    func test_hitIsDayCell(_ view: NSView?, at index: Int) -> Bool { view === test_cell(index) }
 
     func test_hitIsChip(_ view: NSView?, at index: Int, chip chipIndex: Int) -> Bool {
-        view === dayCells[index].test_chipView(at: chipIndex)
+        view === test_cell(index).test_chipView(at: chipIndex)
     }
 
     func test_hitViewFromCalendarOnDayNumber(at index: Int) -> NSView? {
-        let cell = dayCells[index]
+        let cell = test_cell(index)
         let local = NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY)
         return test_hitTestInSelfCoordinates(convert(local, from: cell))
     }
 
     func test_hitViewFromCalendarOnChip(at index: Int, chip chipIndex: Int) -> NSView? {
-        dayCells[index].layout()
-        guard let chipView = dayCells[index].test_chipView(at: chipIndex) else { return nil }
+        let cell = test_cell(index)
+        cell.layout()
+        guard let chipView = cell.test_chipView(at: chipIndex) else { return nil }
         let local = NSPoint(x: chipView.bounds.midX, y: chipView.bounds.midY)
         return test_hitTestInSelfCoordinates(convert(local, from: chipView))
     }
@@ -508,21 +848,24 @@ extension WeekCalendarView {
     }
 
     func test_mouseDownFromCalendarOnDayNumber(at index: Int) {
-        let cell = dayCells[index]
+        let cell = test_cell(index)
         let local = NSPoint(x: cell.test_dayNumberFrame.midX, y: cell.test_dayNumberFrame.midY)
         let inSelf = convert(local, from: cell)
-        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(with: Self.testMouseEvent(at: convert(inSelf, to: nil)))
+        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(with: Self.testMouseEvent(at: convert(inSelf, to: nil), clickCount: 1))
     }
 
-    func test_mouseDownFromCalendarOnChip(at index: Int, chip chipIndex: Int) {
-        dayCells[index].layout()
-        guard let chipView = dayCells[index].test_chipView(at: chipIndex) else { return }
+    func test_mouseDownFromCalendarOnChip(at index: Int, chip chipIndex: Int, clickCount: Int = 1) {
+        let cell = test_cell(index)
+        cell.layout()
+        guard let chipView = cell.test_chipView(at: chipIndex) else { return }
         let local = NSPoint(x: chipView.bounds.midX, y: chipView.bounds.midY)
         let inSelf = convert(local, from: chipView)
-        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(with: Self.testMouseEvent(at: convert(inSelf, to: nil)))
+        test_hitTestInSelfCoordinates(inSelf)?.mouseDown(
+            with: Self.testMouseEvent(at: convert(inSelf, to: nil), clickCount: clickCount)
+        )
     }
 
-    private static func testMouseEvent(at location: NSPoint) -> NSEvent {
+    private static func testMouseEvent(at location: NSPoint, clickCount: Int) -> NSEvent {
         NSEvent.mouseEvent(
             with: .leftMouseDown,
             location: location,
@@ -531,56 +874,9 @@ extension WeekCalendarView {
             windowNumber: 0,
             context: nil,
             eventNumber: 0,
-            clickCount: 1,
+            clickCount: clickCount,
             pressure: 1
         )!
-    }
-}
-
-// MARK: - Grid
-
-private final class GridContainer: NSView {
-    var weekCount = 4
-
-    override var isFlipped: Bool { true }
-
-    /// Hairline rules under the cells; a cell only paints when it is today,
-    /// selected, or a weekend.
-    override func draw(_ dirtyRect: NSRect) {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-
-        let rows = WeekCalendarView.rowFrames(in: bounds.height)
-        let columns = WeekCalendarView.columnFrames(in: bounds.width, count: weekCount)
-
-        NSColor.separatorColor.setStroke()
-        let path = NSBezierPath()
-        path.lineWidth = 1
-
-        for row in rows {
-            let y = row.minY.rounded() + 0.5
-            path.move(to: NSPoint(x: 0, y: y))
-            path.line(to: NSPoint(x: bounds.width, y: y))
-        }
-        let bottom = bounds.height.rounded() - 0.5
-        path.move(to: NSPoint(x: 0, y: bottom))
-        path.line(to: NSPoint(x: bounds.width, y: bottom))
-
-        for column in columns.dropFirst() {
-            let x = column.minX.rounded() + 0.5
-            path.move(to: NSPoint(x: x, y: 0))
-            path.line(to: NSPoint(x: x, y: bounds.height))
-        }
-        path.stroke()
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden else { return nil }
-        let local = convert(point, from: superview)
-        guard bounds.contains(local) else { return nil }
-        for subview in subviews.reversed() {
-            if let hit = subview.hitTest(local) { return hit }
-        }
-        return self
     }
 }
 
@@ -600,8 +896,11 @@ fileprivate enum CalendarRowItem: Hashable {
 
 private final class DayCellView: NSView {
     var onChipClick: ((TaskDeadlineChip) -> Void)?
+    var onChipDoubleClick: ((TaskDeadlineChip) -> Void)?
     var onDayClick: ((Date) -> Void)?
+    var onDayDoubleClick: ((Date) -> Void)?
     var onEventClick: ((CalendarEventChip) -> Void)?
+    var onEventDoubleClick: ((CalendarEventChip) -> Void)?
 
     private(set) var day: Date = Date()
     private(set) var isToday = false
@@ -647,7 +946,7 @@ private final class DayCellView: NSView {
     private let monthLabel = NSTextField(labelWithString: "")
     private var chipViews: [DeadlineChipView] = []
     private var eventViews: [EventRowView] = []
-    private let overflowButton = NSButton(title: "", target: nil, action: nil)
+    private let overflowButton = OverflowButton(title: "", target: nil, action: nil)
     /// Stands in for `+K more` in a cell too short to give it a line of its
     /// own — otherwise a short weekend cell shows one of three items and no
     /// hint that the others exist.
@@ -665,6 +964,20 @@ private final class DayCellView: NSView {
     /// begins, so the two touch.
     private static let rowTopGap: CGFloat = 2
     private static let overflowHeight: CGFloat = 14
+    /// What `WeekCalendarView.rowHeight` is measured from: the header, then
+    /// five task rows and their spacing. Derived rather than hardcoded so it
+    /// survives a change to any of the metrics above it.
+    ///
+    /// Five rather than the three a fit-to-pane row used to settle for: rows
+    /// are a fixed height now and the pane scrolls, so the height is a straight
+    /// choice about how much of a day to show rather than a compromise with
+    /// however tall the pane happens to be.
+    fileprivate static let contentRowsPerCell = 5
+    fileprivate static let calibratedRowHeight: CGFloat =
+        headerHeight + rowTopGap
+        + CGFloat(contentRowsPerCell) * chipHeight
+        + CGFloat(contentRowsPerCell - 1) * rowSpacing
+        + contentPadding
     /// Read by `WeekCalendarView.chipTextHorizontalInset`.
     fileprivate static let inset: CGFloat = 5
     /// Vertical centre of the day number within the cell; the month header
@@ -924,6 +1237,10 @@ private final class DayCellView: NSView {
         overflowButton.contentTintColor = .secondaryLabelColor
         overflowButton.target = self
         overflowButton.action = #selector(overflowClicked)
+        overflowButton.onDoubleClick = { [weak self] in
+            guard let self else { return }
+            self.onDayDoubleClick?(self.day)
+        }
         overflowButton.isHidden = true
         addSubview(overflowButton)
 
@@ -969,6 +1286,10 @@ private final class DayCellView: NSView {
                     guard let view else { return }
                     self?.onChipClick?(view.chip)
                 }
+                view.onDoubleClick = { [weak self, weak view] in
+                    guard let view else { return }
+                    self?.onChipDoubleClick?(view.chip)
+                }
                 addSubview(view)
                 return view
             }
@@ -984,6 +1305,10 @@ private final class DayCellView: NSView {
                 view.onClick = { [weak self, weak view] in
                     guard let view else { return }
                     self?.onEventClick?(view.chip)
+                }
+                view.onDoubleClick = { [weak self, weak view] in
+                    guard let view else { return }
+                    self?.onEventDoubleClick?(view.chip)
                 }
                 addSubview(view)
                 return view
@@ -1064,7 +1389,11 @@ private final class DayCellView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onDayClick?(day)
+        if event.clickCount >= 2 {
+            onDayDoubleClick?(day)
+        } else {
+            onDayClick?(day)
+        }
     }
 
     /// Incoming point is in the superview. Skip the labels so a click on the day
@@ -1109,10 +1438,21 @@ private final class DayCellView: NSView {
     var test_dayNumberText: String { dayNumberLabel.stringValue }
 
     func test_clickDay() { onDayClick?(day) }
+    func test_doubleClickDay() { onDayDoubleClick?(day) }
 
     func test_clickChip(at index: Int) {
         guard chips.indices.contains(index) else { return }
         onChipClick?(chips[index])
+    }
+
+    func test_doubleClickChip(at index: Int) {
+        guard chips.indices.contains(index) else { return }
+        onChipDoubleClick?(chips[index])
+    }
+
+    func test_doubleClickEvent(at index: Int) {
+        guard events.indices.contains(index) else { return }
+        onEventDoubleClick?(events[index])
     }
 
     func test_clickOverflow() { overflowClicked() }
@@ -1185,6 +1525,21 @@ private final class DayCellView: NSView {
     }
 }
 
+/// The `+K more` line. A plain button would report only its action, so the
+/// second click of a double-click would read as another single one and the
+/// day's note window would never open from a full cell.
+private final class OverflowButton: NSButton {
+    var onDoubleClick: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.clickCount >= 2 else {
+            super.mouseDown(with: event)
+            return
+        }
+        onDoubleClick?()
+    }
+}
+
 private final class DeadlineChipView: NSView {
     /// Title metrics live here so the column-width calibration can measure with
     /// exactly what `draw` uses.
@@ -1200,6 +1555,7 @@ private final class DeadlineChipView: NSView {
         }
     }
     var onClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
 
     var isSelected = false {
         didSet {
@@ -1286,7 +1642,11 @@ private final class DeadlineChipView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onClick?()
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+        } else {
+            onClick?()
+        }
     }
 
     override func accessibilityPerformPress() -> Bool {
@@ -1318,6 +1678,7 @@ private final class EventRowView: NSView {
         }
     }
     var onClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
 
     override var isFlipped: Bool { true }
 
@@ -1371,7 +1732,11 @@ private final class EventRowView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onClick?()
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+        } else {
+            onClick?()
+        }
     }
 
     override func accessibilityPerformPress() -> Bool {

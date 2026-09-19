@@ -83,8 +83,36 @@ nonisolated enum MailHeaders {
         guard let value, !value.isEmpty else { return nil }
         // A malformed header can carry more than one; take the first.
         if value.contains("<") {
-            return MailThreading.referenceIDs(from: value).first
+            return referenceIDs(from: value).first
         }
         return "<\(value)>"
+    }
+
+    /// Splits a References-style value on angle brackets. Kept with header
+    /// decoding now that Planner no longer builds saved-mail conversations.
+    static func referenceIDs(from header: String?) -> [String] {
+        guard let header, !header.isEmpty else { return [] }
+        var ids: [String] = []
+        var current = ""
+        var inside = false
+        for character in header {
+            switch character {
+            case "<":
+                inside = true
+                current = ""
+            case ">":
+                guard inside else { continue }
+                inside = false
+                let id = "<" + current.trimmingCharacters(in: .whitespacesAndNewlines) + ">"
+                if id.count > 2 { ids.append(id) }
+            default:
+                if inside { current.append(character) }
+            }
+        }
+        if ids.isEmpty, !header.contains("<"), !header.contains(">") {
+            let bare = header.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !bare.isEmpty, !bare.contains(" ") { ids.append(bare) }
+        }
+        return ids
     }
 }

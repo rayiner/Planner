@@ -154,7 +154,7 @@ final class MailStatusTests: PersistenceTestCase {
     /// The range moved out of the toolbar into View → Recent Mail Window: it is
     /// set once and then left alone for weeks, which does not earn permanent
     /// toolbar width the message list has to make room for.
-    func testTheRangeMenuCoversOneThroughSevenDaysAndChecksTheCurrentOne() throws {
+    func testTheRangeMenuListsEveryWindowChoiceAndChecksTheCurrentOne() throws {
         let parent = menuItem(#selector(MainSplitViewController.showMailWindowMenu(_:)))
         _ = split.validateMenuItem(parent)
 
@@ -162,8 +162,9 @@ final class MailStatusTests: PersistenceTestCase {
         XCTAssertEqual(
             submenu.items.map(\.title),
             ["Today", "Last 2 Days", "Last 3 Days", "Last 4 Days",
-             "Last 5 Days", "Last 6 Days", "Last 7 Days"]
+             "Last 5 Days", "Last 6 Days", "Last 7 Days", "Last 30 Days"]
         )
+        XCTAssertEqual(submenu.items.map(\.tag), MailWindow.choices)
         XCTAssertEqual(submenu.items.filter { $0.state == .on }.map(\.tag), [MailWindow.defaultDays])
     }
 
@@ -180,18 +181,22 @@ final class MailStatusTests: PersistenceTestCase {
         XCTAssertEqual(submenu.items.filter { $0.state == .on }.map(\.tag), [7])
     }
 
-    /// The window length is a property of Recent Mail; over a folder it would
-    /// offer to change something the pane does not show.
-    func testTheRangeMenuIsDisabledOverAFolder() throws {
+    /// The long end of the menu: a month back, which is a different window
+    /// from anything the 1–7 entries can reach.
+    func testTheThirtyDayRangeWidensTheWindowToAMonth() throws {
         let parent = menuItem(#selector(MainSplitViewController.showMailWindowMenu(_:)))
-        XCTAssertTrue(split.validateMenuItem(parent))
+        _ = split.validateMenuItem(parent)
+        let submenu = try XCTUnwrap(parent.submenu)
 
-        let folder = try model.createMailFolder(name: "Celerity")
-        selection.selectMailbox(.folder(folder.uuid))
-        XCTAssertFalse(split.validateMenuItem(parent))
-        XCTAssertFalse(
-            split.validateMenuItem(menuItem(#selector(MainSplitViewController.setMailWindowDays(_:))))
-        )
+        split.setMailWindowDays(try XCTUnwrap(submenu.items.first { $0.tag == 30 }))
+        XCTAssertEqual(split.mail.windowDays, 30)
+
+        let days = Calendar.current.dateComponents(
+            [.day],
+            from: split.mail.window.lowerBound,
+            to: split.mail.window.upperBound
+        ).day
+        XCTAssertEqual(days, 30)
     }
 
     // MARK: - The keyboard path
@@ -200,16 +205,14 @@ final class MailStatusTests: PersistenceTestCase {
     /// down a toolbar button is not a keyboard path.
     func testEveryMailCommandIsReachableFromTheMenuBar() throws {
         let selectors: [Selector] = [
-            #selector(MainSplitViewController.newMailFolder(_:)),
-            #selector(MainSplitViewController.saveMessageToFolder(_:)),
-            #selector(MainSplitViewController.moveMessageToFolder(_:)),
-            #selector(MainSplitViewController.removeSelectedMessage(_:)),
-            #selector(MainSplitViewController.newTaskFromMessage(_:)),
+            #selector(MainSplitViewController.toggleHiddenForSelectedMessage(_:)),
             #selector(MainSplitViewController.openMessageInOutlook(_:)),
             #selector(MainSplitViewController.refreshCurrentMode(_:)),
             // Both lost their toolbar buttons, so the menu is now the only way
             // to reach them at all.
             #selector(MainSplitViewController.showMailWindowMenu(_:)),
+            #selector(MainSplitViewController.toggleShowsHiddenMail(_:)),
+            #selector(MainSplitViewController.resyncOutlookIndex(_:)),
         ]
         let menu = try XCTUnwrap(loadMainMenu())
         let actions = Set(allItems(of: menu).compactMap(\.action))

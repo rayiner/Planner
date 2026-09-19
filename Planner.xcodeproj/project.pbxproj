@@ -14,16 +14,10 @@
 		A4000000000000000000000005 /* StubMailSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000005 /* StubMailSource.swift */; };
 		A4000000000000000000000006 /* MailWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000006 /* MailWindowTests.swift */; };
 		A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000007 /* MailCoordinatorTests.swift */; };
-		A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000008 /* MailFolder+CoreData.swift */; };
-		A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000009 /* SavedMessage+CoreData.swift */; };
-		A400000000000000000000000A /* MailThreading.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000A /* MailThreading.swift */; };
-		A400000000000000000000000B /* MailThreadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000B /* MailThreadingTests.swift */; };
-		A400000000000000000000000C /* MailStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000C /* MailStoreTests.swift */; };
 		A400000000000000000000000E /* MailListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000E /* MailListViewController.swift */; };
 		A400000000000000000000000F /* MailReaderViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000000F /* MailReaderViewController.swift */; };
 		A4000000000000000000000011 /* MailLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000011 /* MailLabels.swift */; };
 		A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000012 /* ModeSwitchTests.swift */; };
-		A4000000000000000000000014 /* MailboxListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000014 /* MailboxListTests.swift */; };
 		A4000000000000000000000015 /* MailListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000015 /* MailListTests.swift */; };
 		A4000000000000000000000016 /* MailHeaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000016 /* MailHeaders.swift */; };
 		A4000000000000000000000017 /* OutlookMailScripting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000017 /* OutlookMailScripting.swift */; };
@@ -33,22 +27,12 @@
 		A400000000000000000000001A /* MailHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001A /* MailHeaderTests.swift */; };
 		A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001B /* OutlookMailSourceTests.swift */; };
 		A400000000000000000000001C /* MailListOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001C /* MailListOutlineView.swift */; };
-		A400000000000000000000001D /* MailSavingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001D /* MailSavingTests.swift */; };
-		A400000000000000000000001E /* MailTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001E /* MailTaskTests.swift */; };
 		A400000000000000000000001F /* MailStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A300000000000000000000001F /* MailStatusTests.swift */; };
 		A4000000000000000000000020 /* MailBodyFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000020 /* MailBodyFormatting.swift */; };
 		A4000000000000000000000021 /* MailBodyFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000021 /* MailBodyFormattingTests.swift */; };
-		A4000000000000000000000022 /* MailEnvelopeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000022 /* MailEnvelopeCache.swift */; };
-		A4000000000000000000000023 /* MailEnvelopeCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000023 /* MailEnvelopeCacheTests.swift */; };
-		A4000000000000000000000030 /* MailSidecarFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000030 /* MailSidecarFile.swift */; };
 		A4000000000000000000000070 /* OnDeviceLanguageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000070 /* OnDeviceLanguageModel.swift */; };
-		A4000000000000000000000071 /* MailSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000071 /* MailSummary.swift */; };
-		A4000000000000000000000072 /* MailSummaryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000072 /* MailSummaryCoordinator.swift */; };
 		A4000000000000000000000073 /* StubOnDeviceLanguageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */; };
-		A4000000000000000000000074 /* MailSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000074 /* MailSummaryTests.swift */; };
-		A4000000000000000000000031 /* MailDismissals.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000031 /* MailDismissals.swift */; };
-		A4000000000000000000000032 /* MailDismissalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000032 /* MailDismissalTests.swift */; };
-		A4000000000000000000000033 /* SavedMessageSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000033 /* SavedMessageSearch.swift */; };
+		A4000000000000000000000074 /* OnDeviceLanguageModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000074 /* OnDeviceLanguageModelTests.swift */; };
 		A40000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000001 /* AppDelegate.swift */; };
 		A40000000000000000000002 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* MainMenu.xib */; };
 		A40000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000003 /* Assets.xcassets */; };
@@ -91,21 +75,8 @@
 		A40000000000000000000028 /* EventWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002C /* EventWindowTests.swift */; };
 		A40000000000000000000029 /* EventChipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002D /* EventChipTests.swift */; };
 		A4000000000000000000002A /* EventCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002E /* EventCoordinatorTests.swift */; };
-		A4000000000000000000002B /* ICalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000002F /* ICalendar.swift */; };
-		A4000000000000000000002C /* OutlookRecurrenceRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000030 /* OutlookRecurrenceRule.swift */; };
-		A4000000000000000000002D /* OutlookRecurrence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000031 /* OutlookRecurrence.swift */; };
-		A4000000000000000000002E /* OutlookExceptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000032 /* OutlookExceptions.swift */; };
-		A4000000000000000000002F /* OutlookAgenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000033 /* OutlookAgenda.swift */; };
-		A40000000000000000000030 /* OutlookFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000034 /* OutlookFixtures.swift */; };
-		A40000000000000000000031 /* OutlookRecurrenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000035 /* OutlookRecurrenceTests.swift */; };
-		A40000000000000000000032 /* OutlookExceptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000036 /* OutlookExceptionTests.swift */; };
-		A40000000000000000000033 /* ICalendarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000037 /* ICalendarTests.swift */; };
-		A40000000000000000000034 /* OutlookAgendaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000038 /* OutlookAgendaTests.swift */; };
-		A40000000000000000000035 /* OutlookScripting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000039 /* OutlookScripting.swift */; };
 		A40000000000000000000036 /* OutlookError.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003A /* OutlookError.swift */; };
-		A40000000000000000000037 /* OutlookRecordDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003B /* OutlookRecordDecoder.swift */; };
 		A40000000000000000000038 /* OutlookEventSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003C /* OutlookEventSource.swift */; };
-		A40000000000000000000039 /* OutlookRecordDecoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003D /* OutlookRecordDecoderTests.swift */; };
 		A4000000000000000000003A /* OutlookEventSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003E /* OutlookEventSourceTests.swift */; };
 		A4000000000000000000003B /* EventLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000003F /* EventLabels.swift */; };
 		A4000000000000000000003C /* EventLabelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000040 /* EventLabelsTests.swift */; };
@@ -120,6 +91,20 @@
 		A40000000000000000000055 /* CloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000055 /* CloudSyncTests.swift */; };
 		A40000000000000000000056 /* StoreRepairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000056 /* StoreRepairTests.swift */; };
 		A40000000000000000000057 /* CloudSyncEntitlement.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000057 /* CloudSyncEntitlement.swift */; };
+		A4000000000000000000000090 /* LoopbackHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000090 /* LoopbackHTTPServer.swift */; };
+		A4000000000000000000000091 /* MCPServerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000091 /* MCPServerController.swift */; };
+		A4000000000000000000000092 /* MCPTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000092 /* MCPTools.swift */; };
+		A4000000000000000000000093 /* MCPAppBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000093 /* MCPAppBridge.swift */; };
+		A4000000000000000000000094 /* MCPSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000094 /* MCPSupport.swift */; };
+		A4000000000000000000000095 /* MCPMailToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000095 /* MCPMailToolsTests.swift */; };
+		A4000000000000000000000098 /* ItemWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000098 /* ItemWindowController.swift */; };
+		A4000000000000000000000099 /* MCPTaskToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000099 /* MCPTaskToolsTests.swift */; };
+		A4000000000000000000000096 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000002 /* MCP */; };
+		A4000000000000000000000097 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000003 /* MCP */; };
+		B400000000000000000000001 /* AssistantWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300000000000000000000001 /* AssistantWorkspace.swift */; };
+		B400000000000000000000002 /* TerminalViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300000000000000000000002 /* TerminalViewController.swift */; };
+		B400000000000000000000003 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = B900000000000000000000002 /* SwiftTerm */; };
+		B400000000000000000000004 /* AssistantWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300000000000000000000003 /* AssistantWorkspaceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -140,16 +125,10 @@
 		A3000000000000000000000005 /* StubMailSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubMailSource.swift; sourceTree = "<group>"; };
 		A3000000000000000000000006 /* MailWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWindowTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000007 /* MailCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailCoordinatorTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000008 /* MailFolder+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MailFolder+CoreData.swift"; sourceTree = "<group>"; };
-		A3000000000000000000000009 /* SavedMessage+CoreData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SavedMessage+CoreData.swift"; sourceTree = "<group>"; };
-		A300000000000000000000000A /* MailThreading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreading.swift; sourceTree = "<group>"; };
-		A300000000000000000000000B /* MailThreadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailThreadingTests.swift; sourceTree = "<group>"; };
-		A300000000000000000000000C /* MailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStoreTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000000E /* MailListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListViewController.swift; sourceTree = "<group>"; };
 		A300000000000000000000000F /* MailReaderViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailReaderViewController.swift; sourceTree = "<group>"; };
 		A3000000000000000000000011 /* MailLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailLabels.swift; sourceTree = "<group>"; };
 		A3000000000000000000000012 /* ModeSwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeSwitchTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000014 /* MailboxListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxListTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000015 /* MailListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000016 /* MailHeaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaders.swift; sourceTree = "<group>"; };
 		A3000000000000000000000017 /* OutlookMailScripting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailScripting.swift; sourceTree = "<group>"; };
@@ -159,22 +138,12 @@
 		A300000000000000000000001A /* MailHeaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHeaderTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001B /* OutlookMailSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMailSourceTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001C /* MailListOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailListOutlineView.swift; sourceTree = "<group>"; };
-		A300000000000000000000001D /* MailSavingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSavingTests.swift; sourceTree = "<group>"; };
-		A300000000000000000000001E /* MailTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailTaskTests.swift; sourceTree = "<group>"; };
 		A300000000000000000000001F /* MailStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStatusTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000000020 /* MailBodyFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailBodyFormatting.swift; sourceTree = "<group>"; };
 		A3000000000000000000000021 /* MailBodyFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailBodyFormattingTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000022 /* MailEnvelopeCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailEnvelopeCache.swift; sourceTree = "<group>"; };
-		A3000000000000000000000023 /* MailEnvelopeCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailEnvelopeCacheTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000030 /* MailSidecarFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSidecarFile.swift; sourceTree = "<group>"; };
 		A3000000000000000000000070 /* OnDeviceLanguageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceLanguageModel.swift; sourceTree = "<group>"; };
-		A3000000000000000000000071 /* MailSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummary.swift; sourceTree = "<group>"; };
-		A3000000000000000000000072 /* MailSummaryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummaryCoordinator.swift; sourceTree = "<group>"; };
 		A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubOnDeviceLanguageModel.swift; sourceTree = "<group>"; };
-		A3000000000000000000000074 /* MailSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSummaryTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000031 /* MailDismissals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailDismissals.swift; sourceTree = "<group>"; };
-		A3000000000000000000000032 /* MailDismissalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailDismissalTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000000033 /* SavedMessageSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedMessageSearch.swift; sourceTree = "<group>"; };
+		A3000000000000000000000074 /* OnDeviceLanguageModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceLanguageModelTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A30000000000000000000002 /* MainMenu.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = MainMenu.xib; sourceTree = "<group>"; };
 		A30000000000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -220,21 +189,8 @@
 		A3000000000000000000002C /* EventWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventWindowTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000002D /* EventChipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventChipTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000002E /* EventCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCoordinatorTests.swift; sourceTree = "<group>"; };
-		A3000000000000000000002F /* ICalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICalendar.swift; sourceTree = "<group>"; };
-		A30000000000000000000030 /* OutlookRecurrenceRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrenceRule.swift; sourceTree = "<group>"; };
-		A30000000000000000000031 /* OutlookRecurrence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrence.swift; sourceTree = "<group>"; };
-		A30000000000000000000032 /* OutlookExceptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookExceptions.swift; sourceTree = "<group>"; };
-		A30000000000000000000033 /* OutlookAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookAgenda.swift; sourceTree = "<group>"; };
-		A30000000000000000000034 /* OutlookFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookFixtures.swift; sourceTree = "<group>"; };
-		A30000000000000000000035 /* OutlookRecurrenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecurrenceTests.swift; sourceTree = "<group>"; };
-		A30000000000000000000036 /* OutlookExceptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookExceptionTests.swift; sourceTree = "<group>"; };
-		A30000000000000000000037 /* ICalendarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICalendarTests.swift; sourceTree = "<group>"; };
-		A30000000000000000000038 /* OutlookAgendaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookAgendaTests.swift; sourceTree = "<group>"; };
-		A30000000000000000000039 /* OutlookScripting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookScripting.swift; sourceTree = "<group>"; };
 		A3000000000000000000003A /* OutlookError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookError.swift; sourceTree = "<group>"; };
-		A3000000000000000000003B /* OutlookRecordDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecordDecoder.swift; sourceTree = "<group>"; };
 		A3000000000000000000003C /* OutlookEventSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookEventSource.swift; sourceTree = "<group>"; };
-		A3000000000000000000003D /* OutlookRecordDecoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookRecordDecoderTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000003E /* OutlookEventSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookEventSourceTests.swift; sourceTree = "<group>"; };
 		A3000000000000000000003F /* EventLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLabels.swift; sourceTree = "<group>"; };
 		A30000000000000000000040 /* EventLabelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLabelsTests.swift; sourceTree = "<group>"; };
@@ -249,8 +205,20 @@
 		A30000000000000000000055 /* CloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000056 /* StoreRepairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreRepairTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000057 /* CloudSyncEntitlement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncEntitlement.swift; sourceTree = "<group>"; };
+		A3000000000000000000000090 /* LoopbackHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackHTTPServer.swift; sourceTree = "<group>"; };
+		A3000000000000000000000091 /* MCPServerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPServerController.swift; sourceTree = "<group>"; };
+		A3000000000000000000000092 /* MCPTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPTools.swift; sourceTree = "<group>"; };
+		A3000000000000000000000093 /* MCPAppBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPAppBridge.swift; sourceTree = "<group>"; };
+		A3000000000000000000000094 /* MCPSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPSupport.swift; sourceTree = "<group>"; };
+		A3000000000000000000000095 /* MCPMailToolsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPMailToolsTests.swift; sourceTree = "<group>"; };
+		A3000000000000000000000098 /* ItemWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemWindowController.swift; sourceTree = "<group>"; };
+		A3000000000000000000000099 /* MCPTaskToolsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPTaskToolsTests.swift; sourceTree = "<group>"; };
+		B300000000000000000000001 /* AssistantWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantWorkspace.swift; sourceTree = "<group>"; };
+		B300000000000000000000002 /* TerminalViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewController.swift; sourceTree = "<group>"; };
+		B300000000000000000000003 /* AssistantWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantWorkspaceTests.swift; sourceTree = "<group>"; };
 		A30000000000000000000100 /* Planner 2.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Planner 2.xcdatamodel"; sourceTree = "<group>"; };
 		A30000000000000000000200 /* Planner 3.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Planner 3.xcdatamodel"; sourceTree = "<group>"; };
+		A30000000000000000000300 /* Planner 4.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Planner 4.xcdatamodel"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -258,6 +226,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000096 /* MCP in Frameworks */,
+				B400000000000000000000003 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,6 +235,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A4000000000000000000000097 /* MCP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,11 +249,6 @@
 				A3000000000000000000000003 /* MailSource.swift */,
 				A3000000000000000000000002 /* MailWindow.swift */,
 				A3000000000000000000000001 /* MailMessage.swift */,
-				A3000000000000000000000022 /* MailEnvelopeCache.swift */,
-				A3000000000000000000000031 /* MailDismissals.swift */,
-				A3000000000000000000000030 /* MailSidecarFile.swift */,
-				A3000000000000000000000071 /* MailSummary.swift */,
-				A3000000000000000000000072 /* MailSummaryCoordinator.swift */,
 			);
 			path = Mail;
 			sourceTree = "<group>";
@@ -305,6 +271,27 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		A2000000000000000000000011 /* MCP */ = {
+			isa = PBXGroup;
+			children = (
+				A3000000000000000000000094 /* MCPSupport.swift */,
+				A3000000000000000000000093 /* MCPAppBridge.swift */,
+				A3000000000000000000000092 /* MCPTools.swift */,
+				A3000000000000000000000091 /* MCPServerController.swift */,
+				A3000000000000000000000090 /* LoopbackHTTPServer.swift */,
+			);
+			path = MCP;
+			sourceTree = "<group>";
+		};
+		B200000000000000000000001 /* Terminal */ = {
+			isa = PBXGroup;
+			children = (
+				B300000000000000000000001 /* AssistantWorkspace.swift */,
+				B300000000000000000000002 /* TerminalViewController.swift */,
+			);
+			path = Terminal;
+			sourceTree = "<group>";
+		};
 		A20000000000000000000004 /* Planner */ = {
 			isa = PBXGroup;
 			children = (
@@ -313,6 +300,8 @@
 				A20000000000000000000009 /* Controllers */,
 				A2000000000000000000000A /* Views */,
 				A20000000000000000000008 /* Support */,
+				A2000000000000000000000011 /* MCP */,
+				B200000000000000000000001 /* Terminal */,
 				A30000000000000000000004 /* Planner.entitlements */,
 			);
 			path = Planner;
@@ -332,24 +321,20 @@
 		A20000000000000000000006 /* PlannerTests */ = {
 			isa = PBXGroup;
 			children = (
+				B300000000000000000000003 /* AssistantWorkspaceTests.swift */,
+				A3000000000000000000000095 /* MCPMailToolsTests.swift */,
+				A3000000000000000000000099 /* MCPTaskToolsTests.swift */,
 				A30000000000000000000055 /* CloudSyncTests.swift */,
 				A30000000000000000000056 /* StoreRepairTests.swift */,
 				A300000000000000000000001F /* MailStatusTests.swift */,
-				A300000000000000000000001E /* MailTaskTests.swift */,
-				A300000000000000000000001D /* MailSavingTests.swift */,
 				A300000000000000000000001B /* OutlookMailSourceTests.swift */,
 				A300000000000000000000001A /* MailHeaderTests.swift */,
-				A3000000000000000000000023 /* MailEnvelopeCacheTests.swift */,
-				A3000000000000000000000032 /* MailDismissalTests.swift */,
 				A3000000000000000000000021 /* MailBodyFormattingTests.swift */,
 				A3000000000000000000000015 /* MailListTests.swift */,
-				A3000000000000000000000014 /* MailboxListTests.swift */,
 				A3000000000000000000000012 /* ModeSwitchTests.swift */,
-				A300000000000000000000000C /* MailStoreTests.swift */,
-				A300000000000000000000000B /* MailThreadingTests.swift */,
 				A3000000000000000000000007 /* MailCoordinatorTests.swift */,
 				A3000000000000000000000073 /* StubOnDeviceLanguageModel.swift */,
-				A3000000000000000000000074 /* MailSummaryTests.swift */,
+				A3000000000000000000000074 /* OnDeviceLanguageModelTests.swift */,
 				A3000000000000000000000006 /* MailWindowTests.swift */,
 				A3000000000000000000000005 /* StubMailSource.swift */,
 				A30000000000000000000006 /* PlannerTests.swift */,
@@ -362,12 +347,6 @@
 				A3000000000000000000002C /* EventWindowTests.swift */,
 				A3000000000000000000002D /* EventChipTests.swift */,
 				A3000000000000000000002E /* EventCoordinatorTests.swift */,
-				A30000000000000000000034 /* OutlookFixtures.swift */,
-				A30000000000000000000035 /* OutlookRecurrenceTests.swift */,
-				A30000000000000000000036 /* OutlookExceptionTests.swift */,
-				A30000000000000000000037 /* ICalendarTests.swift */,
-				A30000000000000000000038 /* OutlookAgendaTests.swift */,
-				A3000000000000000000003D /* OutlookRecordDecoderTests.swift */,
 				A3000000000000000000003E /* OutlookEventSourceTests.swift */,
 				A30000000000000000000040 /* EventLabelsTests.swift */,
 				A30000000000000000000041 /* CalendarEventRenderingTests.swift */,
@@ -394,9 +373,6 @@
 			children = (
 				A20000000000000000000010 /* Sync */,
 				A2000000000000000000000D /* Intelligence */,
-				A3000000000000000000000009 /* SavedMessage+CoreData.swift */,
-				A3000000000000000000000033 /* SavedMessageSearch.swift */,
-				A3000000000000000000000008 /* MailFolder+CoreData.swift */,
 				A2000000000000000000000001 /* Mail */,
 				A3000000000000000000000E /* Planner.xcdatamodeld */,
 				A30000000000000000000008 /* PersistenceController.swift */,
@@ -416,7 +392,6 @@
 			children = (
 				A3000000000000000000000011 /* MailLabels.swift */,
 				A3000000000000000000000020 /* MailBodyFormatting.swift */,
-				A300000000000000000000000A /* MailThreading.swift */,
 				A3000000000000000000000C /* Logger+Planner.swift */,
 				A30000000000000000000014 /* Calendar+Month.swift */,
 				A30000000000000000000022 /* NoteFormatting.swift */,
@@ -436,6 +411,7 @@
 				A30000000000000000000016 /* OutlineViewController.swift */,
 				A30000000000000000000017 /* CalendarViewController.swift */,
 				A30000000000000000000018 /* InspectorViewController.swift */,
+				A3000000000000000000000098 /* ItemWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -472,14 +448,7 @@
 				A3000000000000000000000081 /* OlSyncMailDaemon.swift */,
 				A3000000000000000000000017 /* OutlookMailScripting.swift */,
 				A3000000000000000000000016 /* MailHeaders.swift */,
-				A3000000000000000000002F /* ICalendar.swift */,
-				A30000000000000000000030 /* OutlookRecurrenceRule.swift */,
-				A30000000000000000000031 /* OutlookRecurrence.swift */,
-				A30000000000000000000032 /* OutlookExceptions.swift */,
-				A30000000000000000000033 /* OutlookAgenda.swift */,
-				A30000000000000000000039 /* OutlookScripting.swift */,
 				A3000000000000000000003A /* OutlookError.swift */,
-				A3000000000000000000003B /* OutlookRecordDecoder.swift */,
 				A3000000000000000000003C /* OutlookEventSource.swift */,
 			);
 			path = Outlook;
@@ -514,6 +483,10 @@
 			dependencies = (
 			);
 			name = Planner;
+			packageProductDependencies = (
+				A90000000000000000000002 /* MCP */,
+				B900000000000000000000002 /* SwiftTerm */,
+			);
 			productName = Planner;
 			productReference = A30000000000000000000005 /* Planner.app */;
 			productType = "com.apple.product-type.application";
@@ -532,6 +505,9 @@
 				A80000000000000000000001 /* PBXTargetDependency */,
 			);
 			name = PlannerTests;
+			packageProductDependencies = (
+				A90000000000000000000003 /* MCP */,
+			);
 			productName = PlannerTests;
 			productReference = A30000000000000000000007 /* PlannerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -564,6 +540,10 @@
 				Base,
 			);
 			mainGroup = A20000000000000000000002;
+			packageReferences = (
+				A90000000000000000000001 /* XCRemoteSwiftPackageReference "swift-sdk" */,
+				B900000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
 			productRefGroup = A20000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -621,6 +601,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B400000000000000000000001 /* AssistantWorkspace.swift in Sources */,
+				B400000000000000000000002 /* TerminalViewController.swift in Sources */,
+				A4000000000000000000000090 /* LoopbackHTTPServer.swift in Sources */,
+				A4000000000000000000000091 /* MCPServerController.swift in Sources */,
+				A4000000000000000000000092 /* MCPTools.swift in Sources */,
+				A4000000000000000000000093 /* MCPAppBridge.swift in Sources */,
+				A4000000000000000000000094 /* MCPSupport.swift in Sources */,
+				A4000000000000000000000098 /* ItemWindowController.swift in Sources */,
 				A40000000000000000000057 /* CloudSyncEntitlement.swift in Sources */,
 				A40000000000000000000050 /* CloudSyncSettings.swift in Sources */,
 				A40000000000000000000051 /* StoreRepair.swift in Sources */,
@@ -636,20 +624,11 @@
 				A4000000000000000000000020 /* MailBodyFormatting.swift in Sources */,
 				A400000000000000000000000F /* MailReaderViewController.swift in Sources */,
 				A400000000000000000000000E /* MailListViewController.swift in Sources */,
-				A400000000000000000000000A /* MailThreading.swift in Sources */,
-				A4000000000000000000000009 /* SavedMessage+CoreData.swift in Sources */,
-				A4000000000000000000000033 /* SavedMessageSearch.swift in Sources */,
-				A4000000000000000000000008 /* MailFolder+CoreData.swift in Sources */,
 				A4000000000000000000000004 /* MailCoordinator.swift in Sources */,
 				A4000000000000000000000003 /* MailSource.swift in Sources */,
 				A4000000000000000000000002 /* MailWindow.swift in Sources */,
 				A4000000000000000000000001 /* MailMessage.swift in Sources */,
-				A4000000000000000000000022 /* MailEnvelopeCache.swift in Sources */,
-				A4000000000000000000000031 /* MailDismissals.swift in Sources */,
-				A4000000000000000000000030 /* MailSidecarFile.swift in Sources */,
 				A4000000000000000000000070 /* OnDeviceLanguageModel.swift in Sources */,
-				A4000000000000000000000071 /* MailSummary.swift in Sources */,
-				A4000000000000000000000072 /* MailSummaryCoordinator.swift in Sources */,
 				A40000000000000000000001 /* AppDelegate.swift in Sources */,
 				A4000000000000000000001C /* main.swift in Sources */,
 				A40000000000000000000005 /* PersistenceController.swift in Sources */,
@@ -668,14 +647,7 @@
 				A40000000000000000000010 /* Calendar+Month.swift in Sources */,
 				A4000000000000000000001E /* NoteFormatting.swift in Sources */,
 				A4000000000000000000003B /* EventLabels.swift in Sources */,
-				A4000000000000000000002B /* ICalendar.swift in Sources */,
-				A4000000000000000000002C /* OutlookRecurrenceRule.swift in Sources */,
-				A4000000000000000000002D /* OutlookRecurrence.swift in Sources */,
-				A4000000000000000000002E /* OutlookExceptions.swift in Sources */,
-				A4000000000000000000002F /* OutlookAgenda.swift in Sources */,
-				A40000000000000000000035 /* OutlookScripting.swift in Sources */,
 				A40000000000000000000036 /* OutlookError.swift in Sources */,
-				A40000000000000000000037 /* OutlookRecordDecoder.swift in Sources */,
 				A40000000000000000000038 /* OutlookEventSource.swift in Sources */,
 				A40000000000000000000023 /* CalendarEvent.swift in Sources */,
 				A40000000000000000000024 /* EventWindow.swift in Sources */,
@@ -694,24 +666,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B400000000000000000000004 /* AssistantWorkspaceTests.swift in Sources */,
+				A4000000000000000000000095 /* MCPMailToolsTests.swift in Sources */,
+				A4000000000000000000000099 /* MCPTaskToolsTests.swift in Sources */,
 				A40000000000000000000055 /* CloudSyncTests.swift in Sources */,
 				A40000000000000000000056 /* StoreRepairTests.swift in Sources */,
 				A400000000000000000000001F /* MailStatusTests.swift in Sources */,
-				A400000000000000000000001E /* MailTaskTests.swift in Sources */,
-				A400000000000000000000001D /* MailSavingTests.swift in Sources */,
 				A400000000000000000000001B /* OutlookMailSourceTests.swift in Sources */,
 				A400000000000000000000001A /* MailHeaderTests.swift in Sources */,
-				A4000000000000000000000023 /* MailEnvelopeCacheTests.swift in Sources */,
-				A4000000000000000000000032 /* MailDismissalTests.swift in Sources */,
 				A4000000000000000000000021 /* MailBodyFormattingTests.swift in Sources */,
 				A4000000000000000000000015 /* MailListTests.swift in Sources */,
-				A4000000000000000000000014 /* MailboxListTests.swift in Sources */,
 				A4000000000000000000000012 /* ModeSwitchTests.swift in Sources */,
-				A400000000000000000000000C /* MailStoreTests.swift in Sources */,
-				A400000000000000000000000B /* MailThreadingTests.swift in Sources */,
 				A4000000000000000000000007 /* MailCoordinatorTests.swift in Sources */,
 				A4000000000000000000000073 /* StubOnDeviceLanguageModel.swift in Sources */,
-				A4000000000000000000000074 /* MailSummaryTests.swift in Sources */,
+				A4000000000000000000000074 /* OnDeviceLanguageModelTests.swift in Sources */,
 				A4000000000000000000000006 /* MailWindowTests.swift in Sources */,
 				A4000000000000000000000005 /* StubMailSource.swift in Sources */,
 				A40000000000000000000004 /* PlannerTests.swift in Sources */,
@@ -724,12 +692,6 @@
 				A40000000000000000000028 /* EventWindowTests.swift in Sources */,
 				A40000000000000000000029 /* EventChipTests.swift in Sources */,
 				A4000000000000000000002A /* EventCoordinatorTests.swift in Sources */,
-				A40000000000000000000030 /* OutlookFixtures.swift in Sources */,
-				A40000000000000000000031 /* OutlookRecurrenceTests.swift in Sources */,
-				A40000000000000000000032 /* OutlookExceptionTests.swift in Sources */,
-				A40000000000000000000033 /* ICalendarTests.swift in Sources */,
-				A40000000000000000000034 /* OutlookAgendaTests.swift in Sources */,
-				A40000000000000000000039 /* OutlookRecordDecoderTests.swift in Sources */,
 				A4000000000000000000003A /* OutlookEventSourceTests.swift in Sources */,
 				A4000000000000000000003C /* EventLabelsTests.swift in Sources */,
 				A4000000000000000000003D /* CalendarEventRenderingTests.swift in Sources */,
@@ -891,7 +853,7 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar and recent mail to show them alongside your tasks. It never modifies your calendar or your mail.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar and recent mail, and changes the Hide category when you hide or unhide a message. It never modifies your calendar.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -926,7 +888,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar and recent mail to show them alongside your tasks. It never modifies your calendar or your mail.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Planner reads your Outlook calendar and recent mail, and changes the Hide category when you hide or unhide a message. It never modifies your calendar.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026";
 				INFOPLIST_KEY_NSMainNibFile = MainMenu;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -1014,15 +976,53 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A90000000000000000000001 /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.0;
+			};
+		};
+		B900000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.20.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A90000000000000000000002 /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000001 /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
+		A90000000000000000000003 /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000001 /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
+		B900000000000000000000002 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B900000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin XCVersionGroup section */
 		A3000000000000000000000E /* Planner.xcdatamodeld */ = {
 			isa = XCVersionGroup;
 			children = (
+				A30000000000000000000300 /* Planner 4.xcdatamodel */,
 				A30000000000000000000200 /* Planner 3.xcdatamodel */,
 				A30000000000000000000100 /* Planner 2.xcdatamodel */,
 				A3000000000000000000000D /* Planner.xcdatamodel */,
 			);
-			currentVersion = A30000000000000000000200 /* Planner 3.xcdatamodel */;
+			currentVersion = A30000000000000000000300 /* Planner 4.xcdatamodel */;
 			path = Planner.xcdatamodeld;
 			sourceTree = "<group>";
 			versionGroupType = wrapper.xcdatamodel;

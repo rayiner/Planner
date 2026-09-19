@@ -34,16 +34,12 @@ final class MailListTests: PersistenceTestCase {
             defaults: defaults
         )
         list = MailListViewController(
-            persistence: persistence,
-            model: model,
             selection: selection,
             mail: coordinator,
             calendar: listCalendar,
             now: { anchor }
         )
         reader = MailReaderViewController(
-            persistence: persistence,
-            model: model,
             selection: selection,
             mail: coordinator,
             calendar: listCalendar,
@@ -76,7 +72,10 @@ final class MailListTests: PersistenceTestCase {
         subject: String = "Subject",
         sender: String = "Ada Lovelace",
         address: String = "ada@example.com",
-        isRead: Bool = false
+        isRead: Bool = false,
+        isHidden: Bool = false,
+        categoryIDs: Set<Int64> = [],
+        preview: String = ""
     ) -> MailMessage {
         MailMessage(
             id: id,
@@ -84,7 +83,10 @@ final class MailListTests: PersistenceTestCase {
             senderName: sender,
             senderAddress: address,
             receivedAt: listCalendar.date(byAdding: .hour, value: hour, to: day(dayOffset))!,
-            isRead: isRead
+            isRead: isRead,
+            isHidden: isHidden,
+            categoryIDs: categoryIDs,
+            preview: preview
         )
     }
 
@@ -171,6 +173,60 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertEqual(list.test_rows.count, 2)
     }
 
+    func testARowShowsOneLineOfTheBody() async throws {
+        await load([message(id: 1, dayOffset: 0, preview: "The deposition is moved to Friday.")])
+        let row = try XCTUnwrap(list.test_rows.first)
+        XCTAssertEqual(list.test_previewLine(for: row), "The deposition is moved to Friday.")
+    }
+
+    /// The line is dropped rather than shown blank, so an empty field never
+    /// reads as a body that failed to load.
+    func testARowWithNoBodyHidesThePreviewLine() async throws {
+        await load([message(id: 1, dayOffset: 0)])
+        let row = try XCTUnwrap(list.test_rows.first)
+        XCTAssertNil(list.test_previewLine(for: row))
+    }
+
+    func testHiddenMessagesAreOmittedFromRecentMailByDefault() async {
+        await load([
+            message(id: 1, dayOffset: 0),
+            message(id: 2, dayOffset: -1, isHidden: true),
+        ])
+        XCTAssertEqual(list.test_rows.map(\.message.id), [1])
+
+        coordinator.setShowsHiddenMessages(true)
+        list.reload()
+
+        XCTAssertEqual(list.test_rows.map(\.message.id), [1, 2])
+    }
+
+    func testHidingHiddenMailAgainDropsAHiddenSelection() async {
+        await load([
+            message(id: 1, dayOffset: 0),
+            message(id: 2, dayOffset: -1, isHidden: true),
+        ])
+        coordinator.setShowsHiddenMessages(true)
+        list.reload()
+        selection.selectMessage(.recent(2))
+
+        coordinator.setShowsHiddenMessages(false)
+        list.reload()
+
+        XCTAssertEqual(list.test_rows.map(\.message.id), [1])
+        XCTAssertTrue(selection.messages.isEmpty)
+    }
+
+    func testQuickSearchMailboxExecutesItsStoredQuery() async throws {
+        await load([message(id: 1, dayOffset: 0)])
+        let saved = try XCTUnwrap(coordinator.saveQuickSearch(name: "Work", query: "work"))
+
+        selection.selectMailbox(.quickSearch(saved.id))
+        await settle { self.source.pendingSearchCount == 1 }
+        XCTAssertEqual(source.requestedSearchQueries, ["work"])
+        source.finishSearch(with: [message(id: 2, dayOffset: -20)])
+        await settle { self.list.test_rows.map(\.message.id) == [2] }
+    }
+
     // MARK: - Selection
 
     func testSelectingARowPublishesTheMessage() async {
@@ -194,14 +250,52 @@ final class MailListTests: PersistenceTestCase {
             message(id: 2, dayOffset: 0, hour: 9),
             message(id: 3, dayOffset: -1),
         ])
-        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(1)), .recent(2))
-        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(2)), .recent(3))
-        XCTAssertEqual(list.messageToSelectAfterRemoving(.recent(3)), .recent(2))
+        XCTAssertEqual(list.messageToSelectAfterMoving(.recent(1)), .recent(2))
+        XCTAssertEqual(list.messageToSelectAfterMoving(.recent(2)), .recent(3))
+        XCTAssertEqual(list.messageToSelectAfterMoving(.recent(3)), .recent(2))
     }
 
     func testTheNeighbourAfterTheOnlyRowIsNothing() async {
         await load([message(id: 1, dayOffset: 0)])
-        XCTAssertNil(list.messageToSelectAfterRemoving(.recent(1)))
+        XCTAssertNil(list.messageToSelectAfterMoving(.recent(1)))
+    }
+
+    func testSelectingMultipleRowsPublishesEveryMessage() async {
+        await load([
+            message(id: 1, dayOffset: 0),
+            message(id: 2, dayOffset: 0, hour: 8),
+            message(id: 3, dayOffset: -1),
+        ])
+        let first = list.outlineView.row(forItem: list.test_rows[0])
+        let second = list.outlineView.row(forItem: list.test_rows[1])
+        list.outlineView.selectRowIndexes(IndexSet([first, second]), byExtendingSelection: false)
+        XCTAssertEqual(Set(selection.messages), [.recent(1), .recent(2)])
+        XCTAssertEqual(selection.message, .recent(2))
+    }
+
+    func testTheNeighbourAfterARemovedRangeIsTheNextRemaining() async {
+        await load([
+            message(id: 1, dayOffset: 0, hour: 14),
+            message(id: 2, dayOffset: 0, hour: 9),
+            message(id: 3, dayOffset: -1),
+        ])
+        XCTAssertEqual(
+            list.messageToSelectAfterMoving([.recent(1), .recent(2)]),
+            .recent(3)
+        )
+    }
+
+    func testAModelSelectionRevealsEverySelectedRow() async {
+        await load([
+            message(id: 1, dayOffset: 0),
+            message(id: 2, dayOffset: -1),
+            message(id: 3, dayOffset: -2),
+        ])
+        selection.selectMessages([.recent(1), .recent(3)])
+        let selected = list.outlineView.selectedRowIndexes.compactMap {
+            (list.outlineView.item(atRow: $0) as? MailListRow)?.message.id
+        }
+        XCTAssertEqual(Set(selected), [1, 3])
     }
 
     // MARK: - Empty states
@@ -212,13 +306,28 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertEqual(list.test_emptyStateText, "No mail in the last 3 days.")
     }
 
+    func testEmptyRecentMailIsUnchangedWhenTheOnlyMessagesAreHidden() async {
+        await load([message(id: 1, dayOffset: 0, isHidden: true)])
+        XCTAssertTrue(list.test_isEmptyStateVisible)
+        XCTAssertEqual(list.test_emptyStateText, "No mail in the last 3 days.")
+    }
+
+    func testEmptyQuickSearchReportsNoMatches() async throws {
+        await load([message(id: 1, dayOffset: 0)])
+        let saved = try XCTUnwrap(coordinator.saveQuickSearch(name: "Work", query: "work"))
+        selection.selectMailbox(.quickSearch(saved.id))
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(with: [])
+        await settle { self.coordinator.searchState == .loaded([]) }
+        XCTAssertTrue(list.test_isEmptyStateVisible)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptySearch)
+    }
+
     /// A null source is a different fact from an empty inbox, and only one of
     /// them is worth acting on.
     func testWithNoMailSourceTheEmptyStateExplainsWhatThePaneIsFor() {
         let coordinator = MailCoordinator(source: NullMailSource(), defaults: defaults)
         let list = MailListViewController(
-            persistence: persistence,
-            model: model,
             selection: selection,
             mail: coordinator,
             calendar: listCalendar,
@@ -233,24 +342,6 @@ final class MailListTests: PersistenceTestCase {
         await sweep { self.coordinator.setWindowDays(1) } answering: { [] }
         list.reload()
         XCTAssertEqual(list.test_emptyStateText, "No mail today.")
-    }
-
-    // MARK: - Saved messages
-
-    func testAnAlreadySavedMessageCarriesItsFolderName() async throws {
-        let folder = try model.createMailFolder(name: "Celerity")
-        let envelope = message(id: 5, dayOffset: 0)
-        // Saved *with* headers, as a real save is: the row still has to match
-        // it, which is why the match is on Outlook's record id.
-        try model.saveMessage(envelope, detail: .fixture(id: 5, messageID: "<five@x>"), into: folder)
-
-        await load([envelope])
-        XCTAssertEqual(list.test_rows.first?.savedFolderName, "Celerity")
-    }
-
-    func testAnUnsavedMessageHasNoChip() async {
-        await load([message(id: 5, dayOffset: 0)])
-        XCTAssertNil(list.test_rows.first?.savedFolderName)
     }
 
     // MARK: - The reader
@@ -393,7 +484,7 @@ final class MailListTests: PersistenceTestCase {
     func testTheOldestMessageWarnsThatItIsLeaving() async {
         await load([message(id: 1, dayOffset: -2, hour: 9)])
         selection.selectMessage(.recent(1))
-        XCTAssertEqual(reader.test_expiryText, "Leaves Recent Mail tomorrow. Save it to keep it.")
+        XCTAssertEqual(reader.test_expiryText, "Leaves Recent Mail tomorrow.")
     }
 
     /// On day one of a three-day window the banner would just be noise.
@@ -403,89 +494,112 @@ final class MailListTests: PersistenceTestCase {
         XCTAssertNil(reader.test_expiryText)
     }
 
-    // MARK: - Folder search
-
-    func testTheSearchFieldIsHiddenOnRecentMailAndShownInAFolder() throws {
-        XCTAssertTrue(list.test_searchFieldIsHidden)
-        XCTAssertEqual(list.test_searchFieldMaximumRecents, 0)
-
-        let folder = try model.createMailFolder(name: "Celerity")
-        selection.selectMailbox(.folder(folder.uuid))
-        XCTAssertFalse(list.test_searchFieldIsHidden)
-
-        selection.selectMailbox(.recent)
-        XCTAssertTrue(list.test_searchFieldIsHidden)
+    func testHiddenMessageStillShowsRecentMailExpiryBannerWhenShown() async {
+        await load([message(id: 1, dayOffset: -2, hour: 9, isHidden: true)])
+        coordinator.setShowsHiddenMessages(true)
+        list.reload()
+        selection.selectMessage(.recent(1))
+        XCTAssertEqual(reader.test_expiryText, "Leaves Recent Mail tomorrow.")
     }
 
-    func testSearchEmptyStatesDistinguishAMissFromAnEmptyFolder() throws {
-        let folder = try model.createMailFolder(name: "Celerity")
-        selection.selectMailbox(.folder(folder.uuid))
-        list.reload()
-        XCTAssertTrue(list.test_isEmptyStateVisible)
-        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptyFolder(name: "Celerity"))
+    // MARK: - Search
 
-        try model.saveMessage(
-            message(id: 9, dayOffset: 0, subject: "Deposition prep"),
-            detail: .fixture(id: 9, messageID: "<nine@x>"),
-            into: folder
-        )
-        list.test_applySearch("no-such-token")
-        XCTAssertTrue(list.test_isEmptyStateVisible)
-        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptySearch)
+    func testTheSearchFieldIsShownOnlyForSearchMailbox() {
+        XCTAssertTrue(list.test_searchFieldIsHidden)
+        selection.selectMailbox(.search)
+        XCTAssertFalse(list.test_searchFieldIsHidden)
+        XCTAssertEqual(list.test_searchFieldMaximumRecents, 0)
+    }
 
-        list.test_applySearch("deposition")
+    func testSearchMailboxStartsEmptyEvenWhenRecentMailIsLoaded() async {
+        await load([message(id: 1, dayOffset: 0)])
+        selection.selectMailbox(.search)
+
+        XCTAssertTrue(list.test_rows.isEmpty)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptySearchPrompt)
+        XCTAssertEqual(source.pendingSearchCount, 0)
+    }
+
+    func testSearchExecutesOnlyWhenSubmittedAndGroupsWholeIndexHits() async {
+        await load([
+            message(id: 1, dayOffset: 0, subject: "Other"),
+        ])
+        selection.selectMailbox(.search)
+        list.test_searchField.stringValue = "body:deposition"
+        XCTAssertEqual(source.pendingSearchCount, 0)
+
+        list.test_applySearch("body:deposition")
+        await settle { self.source.pendingSearchCount == 1 }
+        XCTAssertEqual(source.requestedSearchQueries, ["body:deposition"])
+        XCTAssertTrue(list.test_isEmptyStateVisible)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.searching)
+
+        source.finishSearch(with: [message(id: 2, dayOffset: -30, subject: "Deposition")])
+        await settle { self.list.test_rows.map(\.message.id) == [2] }
+
+        XCTAssertEqual(list.test_groupTitles, ["Wednesday, July 8"])
         XCTAssertFalse(list.test_isEmptyStateVisible)
     }
 
-    /// Reloads must not wipe the query; a save is the reload that happens
-    /// while the user is still looking at these results.
-    func testASaveKeepsTheAppliedSearchQuery() throws {
-        let folder = try model.createMailFolder(name: "Celerity")
-        try model.saveMessage(
-            message(id: 1, dayOffset: 0, subject: "Ada report"),
-            detail: .fixture(id: 1, messageID: "<one@x>"),
-            into: folder
-        )
-        selection.selectMailbox(.folder(folder.uuid))
-        list.reload()
-        list.test_applySearch("ada")
-        XCTAssertEqual(list.test_searchQuery, "ada")
+    func testCompletedSearchCanBeSavedWithAName() async throws {
+        await load([])
+        selection.selectMailbox(.search)
+        list.test_applySearch("from:ada")
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(with: [])
+        await settle { self.list.test_saveSearchIsEnabled }
 
-        try model.saveMessage(
-            message(id: 2, dayOffset: 0, subject: "Ada again"),
-            detail: .fixture(id: 2, messageID: "<two@x>"),
-            into: folder
-        )
-        XCTAssertEqual(list.test_searchQuery, "ada")
+        list.test_saveSearch(name: "Ada")
+
+        let saved = try XCTUnwrap(coordinator.quickSearches.first)
+        XCTAssertEqual(saved.name, "Ada")
+        XCTAssertEqual(saved.query, "from:ada")
+        XCTAssertEqual(selection.mailbox, .quickSearch(saved.id))
     }
 
-    func testAQueryThatDropsTheOpenMessageClearsSelectionAndAHitKeepsIt() throws {
-        let folder = try model.createMailFolder(name: "Celerity")
-        let ada = try model.saveMessage(
-            message(id: 1, dayOffset: 0, subject: "Ada report"),
-            detail: .fixture(id: 1, messageID: "<one@x>"),
-            into: folder
-        )
-        let grace = try model.saveMessage(
-            message(
-                id: 2,
-                dayOffset: 0,
-                subject: "Grace notes",
-                sender: "Grace Hopper",
-                address: "grace@example.com"
-            ),
-            detail: .fixture(id: 2, messageID: "<two@x>"),
-            into: folder
-        )
-        selection.selectMailbox(.folder(folder.uuid))
-        list.reload()
+    func testSearchMissAndFailureHaveDifferentEmptyStates() async {
+        await load([message(id: 1, dayOffset: 0)])
+        selection.selectMailbox(.search)
 
-        selection.selectMessage(.saved(grace.uuid))
-        list.test_applySearch("ada")
-        XCTAssertNil(selection.message)
+        list.test_applySearch("no-such-token")
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(with: [])
+        await settle { self.list.test_emptyStateText == MailLabels.emptySearch }
 
-        selection.selectMessage(.saved(ada.uuid))
-        list.test_applySearch("report")
-        XCTAssertEqual(selection.message, .saved(ada.uuid))
+        list.test_applySearch("bad:")
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(throwing: OlSyncMailError.querySyntax("bad query"))
+        await settle { self.list.test_emptyStateText == MailLabels.searchFailed }
     }
+
+    func testSearchClearsASelectionThatIsNotAHit() async {
+        await load([message(id: 1, dayOffset: 0), message(id: 2, dayOffset: 0, hour: 8)])
+        selection.selectMailbox(.search)
+        selection.selectMessage(.recent(1))
+
+        list.test_applySearch("second")
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(with: [message(id: 2, dayOffset: 0, hour: 8)])
+        await settle { self.selection.message == nil }
+
+        XCTAssertEqual(list.test_rows.map(\.message.id), [2])
+    }
+
+    func testClearingSearchReturnsSearchMailboxToItsEmptyPrompt() async {
+        await load([
+            message(id: 1, dayOffset: 0),
+            message(id: 2, dayOffset: -1),
+        ])
+        selection.selectMailbox(.search)
+        list.test_applySearch("first")
+        await settle { self.source.pendingSearchCount == 1 }
+        source.finishSearch(with: [message(id: 1, dayOffset: 0)])
+        await settle { self.list.test_rows.count == 1 }
+
+        list.test_applySearch("")
+        XCTAssertTrue(list.test_rows.isEmpty)
+        XCTAssertEqual(list.test_emptyStateText, MailLabels.emptySearchPrompt)
+        XCTAssertEqual(coordinator.searchState, .idle)
+    }
+
 }

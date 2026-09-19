@@ -3,12 +3,12 @@ import XCTest
 
 @MainActor
 final class EventLabelsTests: XCTestCase {
-    private let calendar = OutlookFixtures.calendar
+    private let calendar = EventLabelsTests.testCalendar
 
     private func chip(
         title: String = "Design review",
-        start: Date? = OutlookFixtures.at(2026, 8, 14, 9, 30),
-        end: Date? = OutlookFixtures.at(2026, 8, 14, 10, 0),
+        start: Date? = EventLabelsTests.at(2026, 8, 14, 9, 30),
+        end: Date? = EventLabelsTests.at(2026, 8, 14, 10, 0),
         isAllDay: Bool = false,
         continuesFrom: Bool = false,
         continuesTo: Bool = false,
@@ -21,7 +21,7 @@ final class EventLabelsTests: XCTestCase {
         CalendarEventChip(
             id: "e1|2026-8-14",
             title: title,
-            day: OutlookFixtures.at(2026, 8, 14),
+            day: EventLabelsTests.at(2026, 8, 14),
             startTime: start,
             endTime: end,
             isAllDay: isAllDay,
@@ -120,7 +120,7 @@ final class EventLabelsTests: XCTestCase {
     }
 
     func testAZeroLengthEventReadsAsASingleTime() {
-        let instant = OutlookFixtures.at(2026, 8, 14, 9, 30)
+        let instant = EventLabelsTests.at(2026, 8, 14, 9, 30)
         let label = EventLabels.accessibilityLabel(for: chip(start: instant, end: instant))
         XCTAssertFalse(label.contains(" to "), label)
     }
@@ -130,5 +130,23 @@ final class EventLabelsTests: XCTestCase {
             for: chip(start: nil, end: nil, continuesFrom: true)
         )
         XCTAssertTrue(label.contains("Continues"), label)
+    }
+
+    private static var testCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        return calendar
+    }
+
+    private static func at(
+        _ year: Int,
+        _ month: Int,
+        _ day: Int,
+        _ hour: Int = 0,
+        _ minute: Int = 0
+    ) -> Date {
+        testCalendar.date(from: DateComponents(
+            year: year, month: month, day: day, hour: hour, minute: minute
+        ))!
     }
 }

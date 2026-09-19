@@ -155,8 +155,8 @@ final class EventCoordinatorTests: XCTestCase {
         )
     }
 
-    /// The source wraps a blocking Apple event that never observes cancellation,
-    /// so the coordinator's timer has to fire without waiting for it.
+    /// A source can be inside a non-cancellable index operation, so the
+    /// coordinator's timer has to fire without waiting for it.
     func testHungSourceTimesOutAndKeepsPreviousChips() async {
         coordinator.refresh()
         await waitForRequests(1)

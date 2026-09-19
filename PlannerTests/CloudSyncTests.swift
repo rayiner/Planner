@@ -285,21 +285,19 @@ final class CloudSyncEntitlementTests: XCTestCase {
 
 // MARK: - Model version migration
 
-/// `Planner 3` relaxes optionality on every attribute CloudKit would otherwise
-/// reject and adds a `uuid` index to each entity. Both are inferrable changes —
-/// but "inferrable" is a claim worth testing rather than assuming, and a store
-/// that fails to migrate is a library the user cannot open.
+/// The current model still opens an older store while dropping the retired
+/// saved-mail entities.
 @MainActor
 final class ModelVersionMigrationTests: XCTestCase {
-    func testAV2StoreMigratesToV3AndKeepsItsRows() throws {
+    func testAV3StoreMigratesAndKeepsTaskData() throws {
         let bundle = Bundle(for: DayNote.self)
         let momd = try XCTUnwrap(bundle.url(forResource: "Planner", withExtension: "momd"))
-        let v2 = try XCTUnwrap(
-            NSManagedObjectModel(contentsOf: momd.appendingPathComponent("Planner 2.mom"))
+        let v3 = try XCTUnwrap(
+            NSManagedObjectModel(contentsOf: momd.appendingPathComponent("Planner 3.mom"))
         )
 
         let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("V2MigrationTest-\(UUID().uuidString).sqlite")
+            .appendingPathComponent("V3MigrationTest-\(UUID().uuidString).sqlite")
         defer {
             for suffix in ["", "-wal", "-shm"] {
                 try? FileManager.default.removeItem(
@@ -310,7 +308,7 @@ final class ModelVersionMigrationTests: XCTestCase {
 
         let projectUUID = UUID()
         let messageUUID = UUID()
-        try writeV2Store(at: storeURL, model: v2, projectUUID: projectUUID, messageUUID: messageUUID)
+        try writeLegacyStore(at: storeURL, model: v3, projectUUID: projectUUID, messageUUID: messageUUID)
 
         let migrated = NSPersistentContainer(name: "Planner")
         let description = NSPersistentStoreDescription(url: storeURL)
@@ -321,17 +319,14 @@ final class ModelVersionMigrationTests: XCTestCase {
 
         var loadError: Error?
         migrated.loadPersistentStores { _, error in loadError = error }
-        XCTAssertNil(loadError, "the v2 store did not migrate")
+        XCTAssertNil(loadError, "the v3 store did not migrate")
 
         let projects = Project.fetchRequest()
         projects.predicate = NSPredicate(format: "uuid == %@", projectUUID as CVarArg)
         XCTAssertEqual(try migrated.viewContext.fetch(projects).first?.title, "Carried over")
 
-        let messages = SavedMessage.fetchRequest()
-        messages.predicate = NSPredicate(format: "uuid == %@", messageUUID as CVarArg)
-        let message = try XCTUnwrap(try migrated.viewContext.fetch(messages).first)
-        XCTAssertEqual(message.subject, "Kept")
-        XCTAssertEqual(message.folder?.name, "Archive")
+        XCTAssertNil(migrated.managedObjectModel.entitiesByName["MailFolder"])
+        XCTAssertNil(migrated.managedObjectModel.entitiesByName["SavedMessage"])
 
         // The relaxed optionality is what CloudKit needed, and it survived.
         let attribute = try XCTUnwrap(
@@ -344,7 +339,7 @@ final class ModelVersionMigrationTests: XCTestCase {
         }
     }
 
-    private func writeV2Store(
+    private func writeLegacyStore(
         at url: URL,
         model: NSManagedObjectModel,
         projectUUID: UUID,

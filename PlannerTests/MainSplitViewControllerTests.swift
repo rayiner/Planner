@@ -344,24 +344,19 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertEqual(selection.visibleWeekStart, Calendar.current.startOfDay(for: Date()))
     }
 
-    func testPreviousAndNextWeekShiftVisibleWeekByColumnCount() {
+    /// The week buttons are gone: scrolling is how the calendar moves through
+    /// time, and Today is the only command left that jumps it.
+    func testTodayIsTheOnlyCalendarNavigationCommand() {
         let selection = SelectionModel(defaults: isolatedDefaults())
-        let start = selection.visibleWeekStart
         let (split, _) = makeSplit(selection: selection)
-        let calendar = Calendar.current
-        let step = split.test_visibleColumnCount
 
-        split.goToNextWeek(nil)
-        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: step, to: start)!)
-
-        split.goToPreviousWeek(nil)
-        XCTAssertEqual(selection.visibleWeekStart, start)
-
-        split.goToPreviousWeek(nil)
-        XCTAssertEqual(selection.visibleWeekStart, calendar.date(byAdding: .day, value: -step, to: start)!)
-
-        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToNextWeek(_:)))))
-        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.goToPreviousWeek(_:)))))
+        XCTAssertTrue(split.validateMenuItem(menuItem(#selector(MainSplitViewController.revealToday(_:)))))
+        XCTAssertFalse(split.responds(to: Selector("goToNextWeek:")))
+        XCTAssertFalse(split.responds(to: Selector("goToPreviousWeek:")))
+        XCTAssertFalse(
+            split.identifiers(for: .tasks).contains(NSToolbarItem.Identifier("WeekNavigation"))
+        )
+        XCTAssertTrue(split.identifiers(for: .tasks).contains(.today))
     }
 
     func testSidebarStartsExpandedAndOnlyCollapsesOnPurpose() {
@@ -446,35 +441,65 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
 
     func testSplitPanesHaveMinimumThickness() {
         let (split, _) = makeSplit()
-        XCTAssertEqual(split.splitViewItems.count, 3, "sidebar, calendar, trailing inspector")
+        XCTAssertEqual(split.splitViewItems.count, 2, "sidebar and nested right side")
+        XCTAssertEqual(split.test_contentSplitItems.count, 1, "the calendar, and nothing trailing it")
 
         let sidebar = split.splitViewItems[0]
         XCTAssertGreaterThanOrEqual(sidebar.minimumThickness, 220)
         XCTAssertEqual(sidebar.maximumThickness, sidebar.minimumThickness * 2)
-        XCTAssertGreaterThanOrEqual(split.splitViewItems[1].minimumThickness, 420)
+        XCTAssertGreaterThanOrEqual(split.test_contentSplitItems[0].minimumThickness, 420)
+        XCTAssertFalse(split.test_contentSplitItems[0].canCollapse)
+    }
 
-        let inspector = split.splitViewItems[2]
-        XCTAssertGreaterThanOrEqual(inspector.minimumThickness, 240)
-        XCTAssertLessThanOrEqual(inspector.maximumThickness, 420)
-        XCTAssertFalse(inspector.canCollapse, "the notes pane must never disappear")
+    /// The inspector pane is gone; Get Info opens the same window a double
+    /// click does.
+    func testTasksModeHasNoInspectorPaneOrToggle() {
+        let (split, _) = makeSplit()
+        XCTAssertFalse(
+            split.test_contentSplitItems.contains { $0.viewController is InspectorViewController }
+        )
+        XCTAssertFalse(split.identifiers(for: .tasks).contains(NSToolbarItem.Identifier("InspectorTitle")))
+        // `toggleInspector:` is still inherited from NSSplitViewController; it
+        // is the command that is gone, so it no longer validates.
+        XCTAssertFalse(
+            split.validateMenuItem(menuItem(#selector(NSSplitViewController.toggleInspector(_:))))
+        )
     }
 
     func testSplitPaneHoldingPrioritiesStayBelowWindowResizePriority() {
         let (split, _) = makeSplit()
         // Above 500 a pane outranks the window's own resize priority, which turns
         // its restored thickness into a hard, self-growing window minimum.
-        for item in split.splitViewItems {
+        for item in [split.splitViewItems[0]] + split.test_contentSplitItems {
             XCTAssertLessThan(item.holdingPriority.rawValue, 500)
         }
     }
 
-    /// The inspector is the notes pane and, like the mail reader, cannot
-    /// collapse — so the toggle command is dead, not merely tasks-only.
-    func testTheInspectorCannotCollapseAndHasNoToggle() {
-        let (split, _) = makeSplit()
-        XCTAssertTrue(split.isInspectorVisible)
-        XCTAssertFalse(split.splitViewItems[2].canCollapse)
-        XCTAssertFalse(split.validateMenuItem(menuItem(#selector(MainSplitViewController.toggleInspector(_:)))))
+    func testOpenDayNoteWindowReusesOneWindowPerDay() {
+        let selection = SelectionModel(defaults: isolatedDefaults())
+        let (split, _) = makeSplit(selection: selection)
+        let day = Calendar.current.startOfDay(for: Date())
+        selection.selectDay(day)
+        defer { ItemWindowController.closeAll() }
+
+        split.openDayNoteWindow(nil)
+        XCTAssertTrue(ItemWindowController.openSubjects.contains(.day(day)))
+
+        split.openDayNoteWindow(nil)
+        XCTAssertEqual(ItemWindowController.openSubjects.filter { $0 == .day(day) }.count, 1)
+    }
+
+    func testDoubleClickingACalendarDayOpensItsNoteWindow() {
+        let selection = SelectionModel(defaults: isolatedDefaults())
+        let (split, _) = makeSplit(selection: selection)
+        split.test_weekView.layoutSubtreeIfNeeded()
+        defer { ItemWindowController.closeAll() }
+
+        let day = Calendar.current.startOfDay(for: split.test_weekView.test_days[0])
+        split.test_weekView.test_doubleClickDay(at: 0)
+
+        XCTAssertEqual(selection.selectedDay, day)
+        XCTAssertTrue(ItemWindowController.openSubjects.contains(.day(day)))
     }
 
     /// Get Info no longer has a collapse to undo; what is left to gate is the
@@ -504,8 +529,6 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         let next = findItem(.next)
         XCTAssertFalse(split.test_isCommandEnabled(for: show.action))
 
-        let folder = try model.createMailFolder(name: "Celerity")
-        selection.selectMailbox(.folder(folder.uuid))
         split.firstResponderForValidation = split.mailListViewController.outlineView
         XCTAssertTrue(split.validateMenuItem(show))
         XCTAssertFalse(split.validateMenuItem(next))
@@ -519,6 +542,18 @@ final class MainSplitViewControllerTests: PersistenceTestCase {
         XCTAssertTrue(split.validateMenuItem(next))
         XCTAssertTrue(split.validateMenuItem(findItem(.previous)))
         XCTAssertTrue(split.validateMenuItem(findItem(.setFindString)))
+    }
+
+    func testFindCommandSelectsTheSearchMailbox() {
+        let selection = SelectionModel(defaults: isolatedDefaults())
+        selection.setMode(.mail)
+        let (split, _) = makeSplit(selection: selection)
+        split.mailListViewController.loadViewIfNeeded()
+
+        split.performFindPanelAction(findItem(.showFindPanel))
+
+        XCTAssertEqual(selection.mailbox, .search)
+        XCTAssertFalse(split.mailListViewController.test_searchFieldIsHidden)
     }
 
     private func findItem(_ action: NSFindPanelAction) -> NSMenuItem {

@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 
 /// Wire types and helpers for the `olsyncmail daemon` NDJSON protocol.
 ///
@@ -10,13 +9,20 @@ import SQLite3
 nonisolated enum OlSyncMailProtocol {
     /// Bumped only on incompatible changes. `hello` reports it; refuse a
     /// daemon that answers something else.
-    static let version: UInt32 = 1
+    ///
+    /// 2 — the daemon gained `categories` and `category_items`, and `message`
+    /// now carries the item's categories.
+    /// 3 — search hits and `message` carry `is_read`. The helper ships in this
+    /// bundle, so the two move together.
+    /// 4 — search hits and `message` carry `account_uid`, which is what says
+    /// which categories a message may be given.
+    /// 5 — calendar occurrence listing and event sync/open counters.
+    static let version: UInt32 = 5
 
     static let databaseFileName = "olsyncmail.sqlite"
 
-    /// `~/Library/Application Support/Planner/olsyncmail.sqlite`, matching the
-    /// envelope and dismissal sidecars. Created on first open; the daemon
-    /// owns the schema.
+    /// `~/Library/Application Support/Planner/olsyncmail.sqlite`. Created on
+    /// first open; the daemon owns the schema.
     static func databaseURL(fileManager: FileManager = .default) -> URL {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
@@ -113,7 +119,8 @@ nonisolated enum OlSyncMailProtocol {
 
     static func envelope(
         hit: [String: Any],
-        isRead: Bool
+        isHidden: Bool = false,
+        categoryIDs: Set<Int64> = []
     ) -> MailMessage? {
         let recordID = int64(hit["record_id"])
         let messageID = int64(hit["message_id"])
@@ -126,8 +133,22 @@ nonisolated enum OlSyncMailProtocol {
             senderName: mailbox.name,
             senderAddress: mailbox.address,
             receivedAt: date,
-            isRead: isRead
+            isRead: bool(hit["is_read"]),
+            isHidden: isHidden,
+            categoryIDs: categoryIDs,
+            accountUID: int64(hit["account_uid"]) ?? 0,
+            preview: preview(hit["preview"])
         )
+    }
+
+    /// The index stores the snippet with runs of whitespace already collapsed,
+    /// but not every indexer pass did, and a stray newline would push the rest
+    /// of the line out of a single-line label. Collapse again and cap the length:
+    /// a row shows one line, and 255 characters is far more than fits.
+    static func preview(_ value: Any?) -> String {
+        guard let text = value as? String else { return "" }
+        let flattened = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return String(flattened.prefix(255))
     }
 
     static func detail(from object: [String: Any], fallbackID: Int64) -> MailMessageDetail {
@@ -157,6 +178,64 @@ nonisolated enum OlSyncMailProtocol {
             hasAttachments: !names.isEmpty || parsed.hasAttachments,
             attachmentNames: names.isEmpty ? nil : names.joined(separator: "\n")
         )
+    }
+
+    /// Decode the `categories` reply.
+    ///
+    /// The daemon groups by account because a category name is unique only
+    /// within one — two accounts can each define "Hide" — so the account comes
+    /// back with every category and is kept on the way in.
+    static func categories(from object: [String: Any]) -> [OutlookCategory] {
+        guard let accounts = object["accounts"] as? [[String: Any]] else { return [] }
+        var out: [OutlookCategory] = []
+        for account in accounts {
+            let uid = int64(account["account_uid"]) ?? 0
+            let name = nonempty(account["account"] as? String)
+            for raw in account["categories"] as? [[String: Any]] ?? [] {
+                guard let id = int64(raw["id"]),
+                      let categoryName = nonempty(raw["name"] as? String)
+                else { continue }
+                out.append(OutlookCategory(
+                    id: id,
+                    name: categoryName,
+                    recordID: int64(raw["record_id"]),
+                    accountUID: uid,
+                    account: name,
+                    colorHex: nonempty(raw["color"] as? String)
+                ))
+            }
+        }
+        return out
+    }
+
+    /// The categories on one message, from the `message` reply.
+    static func categories(fromMessage object: [String: Any]) -> [OutlookCategory] {
+        (object["categories"] as? [[String: Any]] ?? []).compactMap { raw in
+            guard let id = int64(raw["id"]),
+                  let name = nonempty(raw["name"] as? String)
+            else { return nil }
+            return OutlookCategory(
+                id: id,
+                name: name,
+                recordID: nil,
+                accountUID: int64(raw["account_uid"]) ?? 0,
+                account: nonempty(raw["account"] as? String),
+                colorHex: nonempty(raw["color"] as? String)
+            )
+        }
+    }
+
+    /// Decode the `folders` reply: distinct index paths and their counts.
+    static func folders(from object: [String: Any]) -> [MailFolder] {
+        (object["folders"] as? [[String: Any]] ?? []).compactMap { raw in
+            guard let name = nonempty(raw["name"] as? String) else { return nil }
+            return MailFolder(name: name, messageCount: Int(int64(raw["message_count"]) ?? 0))
+        }
+    }
+
+    /// Local category ids carried directly on a daemon search hit.
+    static func categoryIDs(fromHit object: [String: Any]) -> Set<Int64> {
+        Set((object["category_ids"] as? [Any] ?? []).compactMap(int64))
     }
 
     static func int64(_ value: Any?) -> Int64? {
@@ -195,7 +274,7 @@ nonisolated enum OlSyncMailProtocol {
 
     private static func bracketed(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
-        if value.contains("<") { return MailThreading.referenceIDs(from: value).first }
+        if value.contains("<") { return MailHeaders.referenceIDs(from: value).first }
         return "<\(value)>"
     }
 
@@ -233,54 +312,6 @@ nonisolated enum OlSyncMailProtocol {
                 throw OlSyncMailError.badRequest("unknown event \(name)")
             }
         }
-    }
-}
-
-/// Read flags are not on the search hit. They are in the `Status` header the
-/// indexer stored, and the protocol already expects the client to open the
-/// database read-only (that is how attachment bytes are read). WAL mode means
-/// this is safe while a sync is writing.
-nonisolated enum OlSyncMailReadFlags {
-    static func load(database: URL, recordIDs: [Int64]) -> [Int64: Bool] {
-        guard !recordIDs.isEmpty else { return [:] }
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
-        guard sqlite3_open_v2(database.path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            return [:]
-        }
-        defer { sqlite3_close(handle) }
-        sqlite3_busy_timeout(handle, 250)
-        _ = sqlite3_exec(handle, "PRAGMA query_only = ON", nil, nil, nil)
-
-        var flagsByID: [Int64: Bool] = [:]
-        let chunkSize = 200
-        var start = 0
-        while start < recordIDs.count {
-            let chunk = Array(recordIDs[start..<min(start + chunkSize, recordIDs.count)])
-            start += chunkSize
-            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
-            let sql = """
-            SELECT m.record_id, h.value
-              FROM headers h
-              JOIN messages m ON m.id = h.message_id
-             WHERE lower(h.name) = 'status'
-               AND m.record_id IN (\(placeholders))
-            """
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-                continue
-            }
-            defer { sqlite3_finalize(statement) }
-            for (index, id) in chunk.enumerated() {
-                sqlite3_bind_int64(statement, Int32(index + 1), id)
-            }
-            while sqlite3_step(statement) == SQLITE_ROW {
-                let id = sqlite3_column_int64(statement, 0)
-                let text = sqlite3_column_text(statement, 1).map { String(cString: $0) }
-                flagsByID[id] = OlSyncMailProtocol.isRead(status: text)
-            }
-        }
-        return flagsByID
     }
 }
 

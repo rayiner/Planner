@@ -275,5 +275,5 @@ private final class EventRecordingDelegate: WeekCalendarViewDelegate {
     func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekStart date: Date) {
         weekStarts.append(date)
     }
-    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekCount count: Int) {}
+    func weekCalendar(_ view: WeekCalendarView, didChangeLoadedRange range: Range<Date>) {}
 }

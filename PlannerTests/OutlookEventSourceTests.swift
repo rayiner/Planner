@@ -1,186 +1,151 @@
 import XCTest
 @testable import Planner
 
-/// Covers the parts of the Outlook source that do not require Outlook:
-/// configuration resolution, consent-status mapping, and error copy.
-///
-/// The three `whose` queries themselves are the one untested surface in this
-/// feature, deliberately — testing them would mean depending on a running
-/// Outlook and on someone's real calendar.
 final class OutlookEventSourceTests: XCTestCase {
-    private typealias Configuration = OutlookEventSource.Configuration
+    func testSharedDaemonQueueNeverOverlapsMailAndCalendarSyncs() async throws {
+        let queue = OlSyncJobQueue()
+        let recorder = SyncRecorder()
 
-    private func defaults(_ values: [String: String?]) -> UserDefaults {
-        let suite = UserDefaults(suiteName: "OutlookEventSourceTests.\(UUID().uuidString)")!
-        for (key, value) in values {
-            if let value { suite.set(value, forKey: key) } else { suite.removeObject(forKey: key) }
+        async let first: Void = queue.enqueue {
+            await recorder.begin("mail")
+            try await Task.sleep(for: .milliseconds(30))
+            await recorder.end("mail")
         }
-        return suite
+        async let second: Void = queue.enqueue {
+            await recorder.begin("calendar")
+            await recorder.end("calendar")
+        }
+        _ = try await (first, second)
+
+        let result = await recorder.result()
+        XCTAssertFalse(result.overlapped)
+        XCTAssertEqual(result.names.count, 2)
     }
 
-    // MARK: - Configuration
+    func testConfigurationDefaultsToCalendarAndAcceptsOverrides() {
+        let suite = "OlSyncEventSourceTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
 
-    func testDefaultsToTheFirstExchangeAccountAndACalendarNamedCalendar() {
-        let configuration = Configuration.fromDefaults(defaults([:]))
-        XCTAssertNil(configuration.accountName, "nil means whichever account Outlook lists first")
-        XCTAssertEqual(configuration.calendarName, "Calendar")
-    }
-
-    func testDefaultsCanBeOverridden() {
-        let configuration = Configuration.fromDefaults(defaults([
-            Configuration.accountDefaultsKey: "work@example.com",
-            Configuration.calendarDefaultsKey: "Matters",
-        ]))
-        XCTAssertEqual(configuration.accountName, "work@example.com")
-        XCTAssertEqual(configuration.calendarName, "Matters")
-    }
-
-    /// A blank value in `defaults` is a mistake, not an instruction to look for
-    /// a calendar with no name.
-    func testBlankOverridesFallBackToTheDefaults() {
-        let configuration = Configuration.fromDefaults(defaults([
-            Configuration.accountDefaultsKey: "   ",
-            Configuration.calendarDefaultsKey: "",
-        ]))
-        XCTAssertNil(configuration.accountName)
-        XCTAssertEqual(configuration.calendarName, "Calendar")
-    }
-
-    func testDisplayNameIsTheCalendarName() {
-        let source = OutlookEventSource(
-            configuration: Configuration(accountName: nil, calendarName: "Matters")
+        XCTAssertEqual(
+            OlSyncEventSource.Configuration.fromDefaults(defaults),
+            .init(accountName: nil, calendarName: "Calendar")
         )
-        XCTAssertEqual(source.displayName, "Matters")
-        XCTAssertEqual(source.sourceID, "outlook")
-    }
-
-    // MARK: - Consent mapping
-
-    func testAutomationPermissionMapsTheStatusCodesThatMatter() {
-        XCTAssertEqual(AutomationPermission(status: 0), .granted)
-        XCTAssertEqual(AutomationPermission(status: -1743), .denied)         // errAEEventNotPermitted
-        XCTAssertEqual(AutomationPermission(status: -1744), .notDetermined)  // would require consent
-        XCTAssertEqual(AutomationPermission(status: -600), .targetMissing)   // procNotFound
-        XCTAssertEqual(AutomationPermission(status: -1712), .denied, "an unknown failure is not consent")
-    }
-
-    /// The preflight must never prompt, so it is safe to call at launch.
-    func testAutomationPermissionPreflightIsAnswerable() {
-        let permission = OutlookEventSource.automationPermission()
-        XCTAssertTrue(
-            [.granted, .denied, .notDetermined, .targetMissing].contains(permission),
-            "got \(permission)"
+        defaults.set("account@example.com", forKey: "events.accountName")
+        defaults.set("Team Calendar", forKey: "events.calendarName")
+        XCTAssertEqual(
+            OlSyncEventSource.Configuration.fromDefaults(defaults),
+            .init(accountName: "account@example.com", calendarName: "Team Calendar")
         )
     }
 
-    // MARK: - Errors
-
-    func testOnlyDeniedConsentPointsAtSystemSettings() {
-        XCTAssertTrue(OutlookError.permissionDenied.needsAutomationSettings)
-        XCTAssertFalse(OutlookError.notRunning.needsAutomationSettings)
-        XCTAssertFalse(OutlookError.noExchangeAccounts.needsAutomationSettings)
-        XCTAssertNotNil(OutlookError.automationSettingsURL)
-    }
-
-    /// Naming what *is* there is the discovery mechanism while the account and
-    /// calendar are defaults with no settings UI behind them.
-    func testANotFoundErrorNamesTheAlternatives() {
-        let error = OutlookError.calendarNotFound(
-            name: "Matters", available: ["Calendar", "Birthdays"]
-        )
-        let message = error.errorDescription ?? ""
-        XCTAssertTrue(message.contains("Matters"))
-        XCTAssertTrue(message.contains("Calendar"), message)
-        XCTAssertTrue(message.contains("Birthdays"), message)
-    }
-
-    func testANotFoundErrorWithNoAlternativesSaysSo() {
-        let message = OutlookError.calendarNotFound(name: "Matters", available: []).errorDescription ?? ""
-        XCTAssertTrue(message.contains("No calendars are available"), message)
-    }
-
-    /// A calendar with no name is exactly the case that broke the spike; it
-    /// must not surface as an empty entry in the list of alternatives.
-    func testUnnamedCalendarsAreNotOfferedAsAlternatives() {
-        let message = OutlookError.calendarNotFound(
-            name: "Matters", available: ["", "Calendar"]
-        ).errorDescription ?? ""
-        XCTAssertFalse(message.contains(", ,"), message)
-        XCTAssertTrue(message.contains("Available: Calendar."), message)
-    }
-
-    func testEveryErrorHasAMessage() {
-        let errors: [OutlookError] = [
-            .notRunning, .permissionDenied, .scriptingUnavailable, .noExchangeAccounts,
-            .accountNotFound(name: "a", available: []),
-            .calendarNotFound(name: "c", available: []),
-            .appleEvent(code: -1712),
-            .consentRequired,
+    func testDaemonHitMapsEveryDisplayedFieldAndStableIdentity() throws {
+        let raw: [String: Any] = [
+            "event_id": 9,
+            "record_id": 44,
+            "ical_uid": "series@example.com",
+            "account_uid": 60129542145,
+            "start_utc": 1_800_000_000,
+            "end_utc": 1_800_003_600,
+            "all_day": false,
+            "subject": "Review",
+            "location": "Room 4",
+            "organizer": "owner@example.com",
+            "folder": "Mailbox/Team Calendar",
+            "is_recurring": true,
+            "is_rescheduled": false,
         ]
-        for error in errors {
-            XCTAssertFalse(error.errorDescription?.isEmpty ?? true, "\(error) needs a message")
-        }
+        let hit = try XCTUnwrap(OlSyncEventHit(raw))
+        let event = OlSyncEventProtocol.event(
+            from: hit,
+            fallbackCalendarName: "Calendar",
+            calendar: utcCalendar()
+        )
+
+        XCTAssertEqual(event.id, "outlook|series@example.com|1800000000")
+        XCTAssertEqual(event.title, "Review")
+        XCTAssertEqual(event.location, "Room 4")
+        XCTAssertEqual(event.organizer, "owner@example.com")
+        XCTAssertEqual(event.calendarName, "Team Calendar")
+        XCTAssertTrue(event.isRecurring)
+        XCTAssertFalse(event.isRescheduled)
     }
 
-    func testNotRunningTellsTheUserPlannerWillNotLaunchOutlook() {
-        let suggestion = OutlookError.notRunning.recoverySuggestion ?? ""
-        XCTAssertTrue(suggestion.contains("won’t launch it"), suggestion)
+    func testModifiedOccurrenceIsRecurringAndRescheduled() throws {
+        let hit = try XCTUnwrap(OlSyncEventHit([
+            "event_id": 9,
+            "record_id": 44,
+            "start_utc": 1_800_000_000,
+            "end_utc": 1_800_003_600,
+            "all_day": false,
+            "subject": "Moved review",
+            "is_recurring": false,
+            "is_rescheduled": true,
+        ]))
+        let event = OlSyncEventProtocol.event(
+            from: hit,
+            fallbackCalendarName: "Calendar",
+            calendar: utcCalendar()
+        )
+        XCTAssertTrue(event.isRecurring)
+        XCTAssertTrue(event.isRescheduled)
     }
 
-    /// An empty collection is a successful match-nothing; a failed send must
-    /// not be allowed to look like that.
-    func testALastErrorBecomesAnAppleEventFailure() {
-        XCTAssertThrowsError(
-            try OutlookError.throwIfSendFailed(NSError(domain: NSOSStatusErrorDomain, code: -1712))
-        ) { error in
-            XCTAssertEqual(error as? OutlookError, .appleEvent(code: -1712))
-        }
-    }
-
-    func testANilLastErrorIsSuccess() {
-        XCTAssertNoThrow(try OutlookError.throwIfSendFailed(nil))
-    }
-
-    func testAConsentRevokedMidFetchMapsToPermissionDenied() {
-        XCTAssertThrowsError(
-            try OutlookError.throwIfSendFailed(NSError(domain: NSOSStatusErrorDomain, code: -1743))
-        ) { error in
-            XCTAssertEqual(error as? OutlookError, .permissionDenied)
-        }
-    }
-
-    // MARK: - Consent gating
-
-    func testAnAutomaticRefreshDoesNotPromptWhenConsentIsUndetermined() {
-        XCTAssertThrowsError(
-            try OutlookEventSource.allowFetch(permission: .notDetermined, userInitiated: false)
-        ) { error in
-            XCTAssertEqual(error as? OutlookError, .consentRequired)
-        }
-        XCTAssertFalse(OutlookError.consentRequired.needsAutomationSettings)
-    }
-
-    func testAnExplicitRefreshMayPromptWhenConsentIsUndetermined() {
-        XCTAssertNoThrow(
-            try OutlookEventSource.allowFetch(permission: .notDetermined, userInitiated: true)
+    func testAllDayUTCBoundariesBecomeLocalCalendarDays() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let hit = try XCTUnwrap(OlSyncEventHit([
+            "event_id": 1,
+            "start_utc": 1_775_865_600, // 2026-04-11 00:00 UTC
+            "end_utc": 1_775_779_200,   // deliberately invalid/earlier
+            "all_day": true,
+            "subject": "Holiday",
+            "is_recurring": false,
+            "is_rescheduled": false,
+        ]))
+        let event = OlSyncEventProtocol.event(
+            from: hit,
+            fallbackCalendarName: "Calendar",
+            calendar: calendar
+        )
+        XCTAssertTrue(event.isAllDay)
+        XCTAssertEqual(
+            calendar.dateComponents([.year, .month, .day], from: event.start),
+            DateComponents(year: 2026, month: 4, day: 11)
+        )
+        XCTAssertEqual(
+            calendar.dateComponents([.year, .month, .day], from: event.end),
+            DateComponents(year: 2026, month: 4, day: 12)
         )
     }
 
-    func testDeniedConsentFailsWhetherOrNotTheRefreshIsExplicit() {
-        XCTAssertThrowsError(
-            try OutlookEventSource.allowFetch(permission: .denied, userInitiated: false)
-        ) { error in
-            XCTAssertEqual(error as? OutlookError, .permissionDenied)
-        }
-        XCTAssertThrowsError(
-            try OutlookEventSource.allowFetch(permission: .denied, userInitiated: true)
-        ) { error in
-            XCTAssertEqual(error as? OutlookError, .permissionDenied)
-        }
+    func testMalformedHitIsRejected() {
+        XCTAssertNil(OlSyncEventHit(["event_id": 1, "subject": "No dates"]))
     }
 
-    func testGrantedConsentAlwaysProceeds() {
-        XCTAssertNoThrow(try OutlookEventSource.allowFetch(permission: .granted, userInitiated: false))
-        XCTAssertNoThrow(try OutlookEventSource.allowFetch(permission: .granted, userInitiated: true))
+    private func utcCalendar() -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+}
+
+private actor SyncRecorder {
+    private var active = false
+    private var overlap = false
+    private var completed: [String] = []
+
+    func begin(_ name: String) {
+        if active { overlap = true }
+        active = true
+        completed.append(name)
+    }
+
+    func end(_: String) {
+        active = false
+    }
+
+    func result() -> (overlapped: Bool, names: [String]) {
+        (overlap, completed)
     }
 }

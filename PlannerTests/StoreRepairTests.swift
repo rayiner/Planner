@@ -81,20 +81,6 @@ final class StoreRepairTests: PersistenceTestCase {
         XCTAssertEqual(note.value(forKey: "day") as? Date, testCalendar.startOfDay(for: created))
     }
 
-    func testASavedMessageWithNoReceivedDateFallsBackToWhenItArrived() throws {
-        let created = date(year: 2026, month: 4, day: 2)
-        insert("SavedMessage", [
-            "uuid": UUID(), "messageID": "<a@b>", "subject": "No date",
-            "senderName": "A", "senderAddress": "a@b", "hasAttachments": false,
-            "outlookID": Int64(0), "createdAt": created, "updatedAt": created,
-        ])
-
-        try repair()
-
-        let message = try XCTUnwrap(fetch("SavedMessage").first)
-        XCTAssertEqual(message.value(forKey: "receivedAt") as? Date, created)
-    }
-
     func testAnEmptyTitleIsFilledRatherThanLeftBlank() throws {
         insert("Project", ["uuid": UUID(), "title": "", "sortIndex": Int64(0), "createdAt": Date(), "updatedAt": Date()])
 
@@ -192,29 +178,12 @@ final class StoreRepairTests: PersistenceTestCase {
         XCTAssertEqual(task.project?.title, StoreRepair.recoveryProjectTitle)
     }
 
-    // MARK: - Mail
-
-    func testAMessageWithNoFolderIsRefiledRatherThanLeftInvisible() throws {
-        insert("SavedMessage", [
-            "uuid": UUID(), "messageID": "<loose@example.com>", "subject": "Loose",
-            "senderName": "A", "senderAddress": "a@example.com", "hasAttachments": false,
-            "outlookID": Int64(0), "receivedAt": Date(), "createdAt": Date(), "updatedAt": Date(),
-        ])
-
-        let summary = try repair()
-
-        XCTAssertEqual(summary.messagesRefiled, 1)
-        let message = try XCTUnwrap(context.fetch(SavedMessage.fetchRequest()).first)
-        XCTAssertEqual(message.folder?.name, StoreRepair.recoveryFolderName)
-    }
-
     // MARK: - Restraint
 
     func testAHealthyStoreIsLeftAlone() throws {
         let project = try model.createProject()
         let parent = try model.createTask(in: project)
         _ = try model.createSubtask(under: parent)
-        _ = try model.createMailFolder(name: "Keep")
         try model.setDayNote("Note", on: date(year: 2026, month: 5, day: 1), calendar: testCalendar)
 
         let summary = try repair()
@@ -226,10 +195,6 @@ final class StoreRepairTests: PersistenceTestCase {
     func testRepairIsIdempotent() throws {
         wellFormedProject()
         insert("Project", ["title": "Broken", "sortIndex": Int64(0)])
-        insert("SavedMessage", [
-            "uuid": UUID(), "messageID": "<x@y>", "subject": "Loose",
-            "senderName": "A", "senderAddress": "a@b", "hasAttachments": false, "outlookID": Int64(0),
-        ])
 
         let first = try repair()
         XCTAssertFalse(first.isEmpty)

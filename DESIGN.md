@@ -53,7 +53,7 @@ Pain points a naïve implementation would hit, and that this design exists to av
 
 - CloudKit / iCloud sync, sharing, or multi-device merge UX.
 - Drag-and-drop reordering or reparenting (sibling `sortIndex` is still stored; new items append; duplicate indices are legal).
-- Recurring **tasks**, reminders, or notifications. (Recurring *calendar events* are read and expanded — see §8.6. EventKit remains rejected as a store and as a UI; the external feed is Outlook over Apple events.)
+- Recurring **tasks**, reminders, or notifications. (Recurring calendar occurrences are read from olsyncmail — see §8.6. EventKit remains rejected as a store and as a UI.)
 - Tags, priorities, projects-on-the-calendar, or project deadlines. Completion is **in** v1 (task flag only; no rollup).
 - Multiple windows, tabs, or a document-based architecture.
 - SwiftUI or SwiftData as the primary stack; Catalyst; iOS/iPad companion.
@@ -104,8 +104,8 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Save | `viewContext` save after each meaningful edit; debounce notes 0.4s. Create/delete **throw** after rollback; they never return a rolled-back object. | Typical Core Data Mac app. A failed save leaves the tree unchanged. |
 | Sidebar collapse | `canCollapse = true`, `canCollapseFromWindowResize = false` | The toolbar carries a Hide Sidebar button and View → Hide Sidebar (⌃⌘S), so there is always a way back. Resize-driven collapse stays off: the outline is the only place to create a project, so it should only vanish when the user asks. |
 | Sync | Not in v1 | Model + lifecycle are prepared; container subclass, entitlements, and history consumer wait. |
-| Calendar events source | Microsoft Outlook running locally, over **ScriptingBridge** (Apple events). Read-only; never writes, never contacts Exchange. | The user's calendar already lives in Outlook on this Mac. Validated by spike (§8.6.7). |
-| Event storage | **Not Core Data.** In-memory `Sendable` values only. | The store is CloudKit-bound and `ModelController` is its only writer. Mirroring a read-only foreign feed into it would add a second writer, sync junk to CloudKit later, and create a delete-reconcile problem when events vanish upstream. Cost: events are absent for ~2s after launch, which is what asynchronous population means. |
+| Calendar events source | The local **olsyncmail daemon API**, backed by Outlook’s profile files. Read-only; never contacts Exchange. | Shares the same derived index and process as mail, avoids per-refresh Automation access, and works while Outlook is closed. |
+| Event storage | **Not Core Data.** In-memory `Sendable` values backed by olsyncmail’s rebuildable local index. | The CloudKit store remains Planner-owned; Outlook data stays local and is discarded from the UI window on quit. |
 | Event fetch window | `[today − 2 months, today + 3 months)`, snapped outward to whole weeks; fetched in **one** refresh, not per visible span. | Cost tracks the number of Apple-event queries, not the span. One slow refresh then instant paging beats re-fetching as the user pages. |
 | Recurrence expansion | Local, in Swift. Outlook returns masters at their *first* occurrence plus per-slot exceptions; it does **not** expand series. | Without expansion a 3-month window shows 22 of 70 events on the author's calendar. This is the bulk of the feature. |
 | Event selection | Event chips are **not** selectable. Clicking one selects the day. | `PlannerSelection` stays `.node | .day`. An `.event` case would ripple into every `changedFields` consumer to represent something with no detail view. |
@@ -132,9 +132,9 @@ Pain points a naïve implementation would hit, and that this design exists to av
 | Swift language mode | Swift 6, with `@MainActor` on all AppKit types |
 | UI | AppKit. Programmatic window and view controllers. `MainMenu.xib` only. |
 | Lifecycle | `NSApplicationDelegate` via `@main`, not SwiftUI `@main` |
-| Sandbox | **Off.** Reading Outlook over Apple events (§8.6) needs it off; the sanctioned `com.apple.security.scripting-targets` route requires the target app to publish scripting access groups, and Outlook does not. App Store submission is already a non-goal. |
-| Hardened Runtime | On (notarization-ready). Requires `com.apple.security.automation.apple-events` to send Apple events — that gate is the Hardened Runtime's, not the sandbox's, so it survives turning the sandbox off. |
-| Entitlements | `com.apple.security.automation.apple-events` only. The `app-sandbox` key is removed, not set to `false`. |
+| Sandbox | **Off.** olsyncmail reads Outlook’s local profile under Full Disk Access. Mail’s explicit reveal/category actions still use Outlook automation. |
+| Hardened Runtime | On (notarization-ready). Mail mutations retain `com.apple.security.automation.apple-events`; calendar reads do not use it. |
+| Entitlements | `com.apple.security.automation.apple-events` remains for mail actions. The `app-sandbox` key is removed, not set to `false`. |
 | Document type | None (single local store, not NSDocument). |
 
 **Why macOS 15, not 14 or 26-only.** APIs used here (`NSSplitViewController`, `NSOutlineView`, `NSPersistentHistoryTrackingKey`, `UUID` attributes, `NSSplitViewItem(sidebarWithViewController:)`) exist well before Sequoia. Targeting 15 (roughly current-minus-one as of August 2026) covers machines that still receive OS updates without forcing Tahoe-only APIs. Drop to 14.0 if Sonoma support is a hard requirement; nothing in this design depends on 15-only symbols. Do not target 26-only.
@@ -187,7 +187,7 @@ Info.plist can remain the generated “generate Info.plist” file. Required key
 - `NSMainNibFile` = `MainMenu`
 - `LSMinimumSystemVersion` = `15.0`
 - `NSHumanReadableCopyright` = placeholder
-- `NSAppleEventsUsageDescription` = “Planner reads your Outlook calendar to show events alongside your task deadlines. It never modifies your calendar.” Required by TCC on macOS 10.14+ **regardless of sandbox**; without it the first Apple event is denied outright rather than prompting.
+- `NSAppleEventsUsageDescription` discloses that Planner reads Outlook calendar/mail and changes the `Hide` category only for explicit Hide/Unhide actions. Required by TCC on macOS 10.14+ **regardless of sandbox**; without it the first Apple event is denied outright rather than prompting.
 - Do **not** set `NSMainStoryboardFile`
 
 **Store location.** With the sandbox off, `NSApplicationSupportDirectory` is no longer container-redirected: the store is `~/Library/Application Support/Planner/Planner.sqlite` and defaults live in `~/Library/Preferences/com.rihscb.Planner.plist`. Anything written while the app was sandboxed sits under `~/Library/Containers/com.rihscb.Planner/Data/…` and must be copied across by hand (all three of `.sqlite`, `-shm`, `-wal` — dropping the WAL loses whatever has not checkpointed).
@@ -1301,17 +1301,18 @@ There is no AppKit calendar grid. EventKit’s calendar UI is for calendar event
    ├──────────┼──────────┼──────────┤
    │   6 ▒▒▒▒ │   7      │   8      │
    ├──────────┼──────────┼──────────┤
-   │   …      │   …      │   …      │      (7 rows in all)
+   │   …      │   …      │   …      │      (up to 7 rows)
    └──────────┴──────────┴──────────┘
 ```
 
-- Days flow in **reading order**: the first visible Monday at the top left, each row filling left to right before the next begins. A row holds one day per visible week — the column count the pane width allows — so the grid is always **seven uniform rows** and paging still moves by whole weeks.
+- Days flow in **reading order**: the first visible Monday at the top left, each row filling left to right before the next begins. A row holds one day per visible week — the column count the pane width allows — and paging moves by one row of days at a time.
+- The **row count follows the pane height** the way the column count follows its width, capped at seven. Rows share the height while all seven fit; below that they hold `targetRowHeight` (a day header plus three rows of content) and the grid ends above the pane's bottom edge. Growing the terminal therefore takes rows away instead of thinning the ones that stay, so a slow drag of the divider never resizes the whole calendar. Only a pane too short for two rows squeezes them, and the window's minimum keeps that out of reach.
 - Every cell is full size, weekends included; a **gray wash** on Saturday and Sunday is what marks the week rhythm. (This superseded the original weeks-as-columns layout, which gave the weekend half-height rows and a 34pt `MON`…`SUN` gutter — with days no longer sharing a weekday per row, a per-row label cannot exist, and the gutter went with it.)
 - Each cell carries its day number. The **first day of a month** additionally gets a small-caps month header, which is what supplies month context now that there is no month title.
 - Chips fill the remaining cell height; capacity is computed per cell, with a `+K more` row when it overflows.
 - No spillover concept: every visible cell is inside the fetched range by construction.
 
-Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility); frames come from `bounds`. `rowFrames(in:)` (seven equal bands) and `columnFrames(in:count:)` are static and unit-tested.
+Layout is manual. Each day is a `DayCellView: NSView` (hit-testing and accessibility); frames come from `bounds`. `rowFrames(in:count:)` (equal bands from the top) and `columnFrames(in:count:)` are static and unit-tested.
 
 **Header.** The range label and `‹ Today ›` navigation live in the **toolbar**, but positioned as if they were a header bar inside the calendar pane. Two `NSTrackingSeparatorToolbarItem`s do this: one at `dividerIndex: 0` (sidebar | calendar) and one at `dividerIndex: 1` (calendar | inspector). Items between them are confined to the calendar pane's width; a leading flexible space pushes the sidebar's own group up against divider 0 so it hugs the splitter the way mail's reader actions hug divider 1:
 
@@ -1481,7 +1482,7 @@ protocol CalendarEventSource: Sendable {
 }
 ```
 
-Not `@MainActor`. Implementations: `OutlookEventSource` (§8.6.4), `NullEventSource` (returns `[]`, the default when Outlook is unavailable), `StubEventSource` (tests). The protocol is the seam that keeps every Apple-event concern out of PRs 11, 12 and 14.
+Not `@MainActor`. Implementations: `OlSyncEventSource` (§8.6.4), `NullEventSource` (returns `[]`), and `StubEventSource` (tests).
 
 #### 8.6.3 Window
 
@@ -1500,7 +1501,27 @@ The bound applies **asymmetrically by record kind**, which is the part that is e
 
 No age cutoff on the master scan. CalendarList's `--max-age-months` defaults to 0 for a measured reason: cost tracks query count, so a cutoff buys ~0.2s of a ~1.9s run while silently dropping whole long-running series (38 of 70 events across four series at a six-month cutoff). Do not add the knob.
 
-#### 8.6.4 `OutlookEventSource`
+#### 8.6.4 `OlSyncEventSource`
+
+Planner and Recent Mail share one `OlSyncOutlookSession`. The session owns one
+`olsyncmail daemon`, performs protocol/schema preparation once, and serializes
+mail and calendar sync jobs. An event refresh sends a bounded calendar-only
+sync (`calendar`, `no_mail`, `since`, `until`, `prune`) and then calls the
+daemon's `events` method for overlapping occurrences in the configured account
+and calendar.
+
+The event index stores Outlook's occurrence rows directly. Planner therefore
+does not replay recurrence rules: ordinary recurring occurrences arrive as
+rows, modified occurrences carry `master_record_id`, and deleted occurrences
+are absent. The API returns iCalendar UID, account/folder, organizer, all-day,
+recurring, and rescheduled metadata. Planner retains only the half-day
+normalization required for Outlook's UTC-midnight all-day dates.
+
+The `events.accountName` and `events.calendarName` defaults remain supported.
+When no account is named, the first account UID represented in the requested
+calendar window is selected. Events remain in memory and never enter Core Data.
+
+#### 8.6.5 Legacy ScriptingBridge design (removed)
 
 Three `whose` queries, each asking the matching collection for `properties` so one Apple event returns every field of every match:
 
@@ -1521,7 +1542,7 @@ Setup and guards:
 
 **Threading.** A dedicated **serial `DispatchQueue`**, not an actor: Apple events block the caller and `SBApplication` wants thread affinity, which the cooperative pool does not provide. `events(in:)` wraps the synchronous fetch in `withCheckedThrowingContinuation`. Only `[CalendarEvent]` crosses back, so no ScriptingBridge object — none of which are `Sendable` — ever leaves the queue. Combined with events never reaching Core Data, **no managed object and no SB object ever crosses a thread boundary in this feature.**
 
-#### 8.6.5 ScriptingBridge facts of life
+#### 8.6.6 Historical ScriptingBridge facts
 
 Each of these cost a debugging cycle in the spike; none are guessable from the docs.
 
@@ -1543,7 +1564,7 @@ Each of these cost a debugging cycle in the spike; none are guessable from the d
 6. **An Exchange account does not answer `properties`.** The bulk call returns an *empty* array rather than failing, which strands the fetch on a bogus "no Exchange accounts". Accounts are therefore read one object at a time by KVC — there are only ever one to three, and per-object reads are index-safe by construction. Calendars and events do answer `properties` normally. (`perform()` cannot be used for this: `id` returns `NSInteger` and `perform` reads the integer as an object pointer, which segfaults.)
 7. `ordinal`, `dayOfMonth` and `monthNumber` are **absent keys**, not null values, when the pattern does not use them; `location` is `NSNull` rather than an absent key when empty. Every read has to tolerate both.
 
-#### 8.6.6 Recurrence expansion
+#### 8.6.7 Historical local recurrence expansion
 
 Outlook exposes a series as one master at its **first** occurrence plus one exception per individually moved, edited or cancelled slot. Listing a range means replaying the rule locally. This is the bulk of the feature and it is pure, synchronous, fully testable Swift.
 
@@ -2087,16 +2108,15 @@ default moved out of `ModelController`. What the work actually took:
 6. **History drain, not history merge.** `viewContext.automaticallyMergesChangesFromParent`
    already folds in the mirroring delegate's saves. `PersistentHistoryDrain`
    exists for the two things that flag cannot give: a signal that a change came
-   from outside this process (`.plannerStoreDidChangeRemotely`, because the
-   calendar and mail list only listen for did-save and a merge is not a save),
-   and a point at which to run repair. History is deliberately **not** purged:
+   from outside this process (`.plannerStoreDidChangeRemotely`) and a point at
+   which to run repair. History is deliberately **not** purged:
    the CloudKit delegate is a second consumer of the same history.
 7. **Import repair, as planned in item 9 of the old list** — `StoreRepair`, run
    on the drain's background context under author `planner.repair`, which the
    drain skips so it cannot chase its own tail. It fills missing identity and
    timestamps, fills empty titles, resolves the project/parentTask xor in favour
-   of `parentTask`, cuts parent cycles, adopts orphan tasks into a *Recovered
-   Items* project, and refiles folderless messages into *Recovered Mail*.
+   of `parentTask`, cuts parent cycles, and adopts orphan tasks into a *Recovered
+   Items* project.
    Nothing is deleted; every pass is idempotent.
 8. **Merge policy unchanged.** `mergeByPropertyObjectTrump` is last-writer-wins
    per attribute, which is why `ModelController` guarding `updatedAt` bumps
@@ -2181,10 +2201,6 @@ out of that, and both are worth knowing before someone "fixes" them again:
 
 ### Known limits
 
-- **A saved message larger than a CloudKit record cannot export.** `body` and
-  `htmlBody` are Strings, not external binary storage, so a very large HTML mail
-  counts against the ~1 MB record limit. It fails as an export error in the sync
-  status, not as data loss — the row stays local and legible.
 - **No conflict UX.** Property-level last-writer-wins is the whole story; there
   is no merge sheet and no version history.
 - **Not tested against two live devices.** Item 11 of the old list stands: the
@@ -2275,7 +2291,7 @@ Incremental, each PR reviewable and mergeable on its own. No feature-flag scaffo
 - **Title:** Add delayed-click and Return-to-rename on the outline
 - **Files/components:** `TitleTextField.swift`, `PlannerOutlineView.swift` (`mouseDown` snapshot, `keyDown` for `\r` and `\u{3}`), `OutlineViewController.swift` (`beginEditingTitle`, commit via `setTitle`)
 - **Depends on:** PR 6
-- **Description:** Implement §5 exactly. This PR owns **every** `editColumn` call, including the post-create “New Folder” begin-edit (next run loop). `viewFor` always clears `allowsFirstResponder`; failed `editColumn` calls `endTitleEditing`; `endTitleEditing` clears a weak `editingField` and every visible `TitleTextField`. Empty titles rejected. Escape cancels. No overlay field. No `shouldEdit`. The title field editor shares the window/Core Data undo manager; commit is one `Rename` group.
+- **Description:** Implement §5 exactly. This PR owns **every** `editColumn` call, including post-create project/task editing on the next run loop. `viewFor` always clears `allowsFirstResponder`; failed `editColumn` calls `endTitleEditing`; `endTitleEditing` clears a weak `editingField` and every visible `TitleTextField`. Empty titles rejected. Escape cancels. No overlay field. No `shouldEdit`. The title field editor shares the window/Core Data undo manager; commit is one `Rename` group.
 
 ### PR 8 — Inspector writes notes and deadlines
 

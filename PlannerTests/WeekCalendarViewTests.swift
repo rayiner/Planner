@@ -141,7 +141,8 @@ final class WeekCalendarViewTests: XCTestCase {
         let view = makeView()
         let calendar = Calendar.current
 
-        XCTAssertEqual(view.test_dayCount, view.test_weekCount * 7)
+        XCTAssertEqual(view.test_dayCount, view.test_weekCount * view.visibleRowCount)
+        // The sheet opens on today, which the range is snapped to begin a row.
         XCTAssertEqual(view.test_days[0], calendar.startOfDay(for: Date()))
         XCTAssertEqual(view.visibleWeekStart, calendar.startOfDay(for: Date()))
 
@@ -182,28 +183,146 @@ final class WeekCalendarViewTests: XCTestCase {
         }
     }
 
-    func testRowsSplitTheHeightEvenly() {
-        let rows = WeekCalendarView.rowFrames(in: 490)
-        XCTAssertEqual(rows.count, 7, "the grid is always seven rows deep")
-        XCTAssertEqual(rows.map(\.height).reduce(0, +), 490, accuracy: 0.001)
+    /// Every row is the same fixed height, wherever it sits on the sheet.
+    func testEveryRowIsTheFixedHeight() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        let columns = view.test_weekCount
 
-        // Every row — the weekend's included — is the same height.
-        for row in 1..<rows.count {
-            XCTAssertEqual(rows[row].height, rows[0].height, accuracy: 0.001)
+        for index in 0..<view.test_dayCount {
+            XCTAssertEqual(
+                view.test_cellFrame(at: index).height,
+                WeekCalendarView.rowHeight,
+                accuracy: 0.001
+            )
         }
 
         // Rows stack without gaps.
-        for row in 1..<rows.count {
-            XCTAssertEqual(rows[row].minY, rows[row - 1].maxY, accuracy: 0.001)
+        for row in 1..<(view.test_dayCount / columns) {
+            XCTAssertEqual(
+                view.test_cellFrame(at: row * columns).minY,
+                view.test_cellFrame(at: (row - 1) * columns).maxY,
+                accuracy: 0.001
+            )
         }
     }
 
-    func testColumnFramesSplitTheWidthEvenly() {
-        let columns = WeekCalendarView.columnFrames(in: 700, count: 4)
-        XCTAssertEqual(columns.count, 4)
-        XCTAssertEqual(columns.map(\.width).reduce(0, +), 700, accuracy: 0.001)
-        for column in columns {
-            XCTAssertEqual(column.width, 175, accuracy: 0.001)
+    /// The row height was calibrated on the header plus five content rows, up
+    /// from the three a fit-to-pane row settled for.
+    func testTheRowHeightFitsFiveContentRows() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(WeekCalendarView.rowHeight, 100)
+        XCTAssertEqual(view.test_contentTop(at: 0) + 5 * 18 + 4 * 2 + 4, WeekCalendarView.rowHeight)
+    }
+
+    /// A shorter pane shows fewer rows and scrolls for the rest; it never
+    /// thins the rows that are on screen.
+    func testAShorterPaneKeepsRowHeightAndShowsFewerRows() {
+        let view = WeekCalendarView(
+            frame: NSRect(x: 0, y: 0, width: 720, height: WeekCalendarView.rowHeight * 7)
+        )
+        view.layoutSubtreeIfNeeded()
+        let columns = view.test_weekCount
+        XCTAssertEqual(view.visibleRowCount, 7)
+        XCTAssertEqual(view.test_dayCount, columns * 7)
+        let firstRowHeight = view.test_cellFrame(at: 0).height
+
+        view.frame = NSRect(x: 0, y: 0, width: 720, height: WeekCalendarView.rowHeight * 5)
+        view.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(view.visibleRowCount, 5)
+        XCTAssertEqual(view.test_dayCount, columns * 5)
+        XCTAssertEqual(view.visibleDayCount, columns * 5)
+        XCTAssertEqual(
+            view.test_cellFrame(at: 0).height,
+            firstRowHeight,
+            accuracy: 0.001,
+            "the rows that stayed changed height"
+        )
+    }
+
+    /// The sheet reaches years either side of today, so there is always
+    /// somewhere to scroll and the pane's height never bounds it.
+    func testTheSheetIsFarTallerThanThePane() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(view.test_rowCount, view.visibleRowCount * 10)
+        XCTAssertEqual(
+            view.documentHeight,
+            CGFloat(view.test_rowCount) * WeekCalendarView.rowHeight,
+            accuracy: 0.001
+        )
+    }
+
+    /// Today begins a row whatever the column count, so a reflow never slides
+    /// today's cell sideways.
+    func testTodayBeginsARowAtEveryColumnCount() {
+        let view = makeView()
+        let today = Calendar.current.startOfDay(for: Date())
+        for columns in WeekCalendarView.minimumWeekCount...WeekCalendarView.maximumWeekCount {
+            view.test_setWeekCount(columns)
+            view.scroll(toDay: today)
+            XCTAssertEqual(view.test_days.first, today, "\(columns) columns put today mid-row")
+        }
+    }
+
+    /// Scrolling is what moves the sheet through time, a whole row at a step.
+    func testScrollingMovesTheVisibleStartByWholeRows() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let calendar = Calendar.current
+        let original = view.visibleWeekStart
+        let columns = view.test_weekCount
+
+        view.test_scroll(byRows: 2)
+
+        XCTAssertEqual(
+            view.visibleWeekStart,
+            calendar.date(byAdding: .day, value: 2 * columns, to: original)!
+        )
+        XCTAssertEqual(recorder.weekStarts.last, view.visibleWeekStart)
+        XCTAssertEqual(view.test_days.first, view.visibleWeekStart)
+
+        view.test_scroll(byRows: -2)
+        XCTAssertEqual(view.visibleWeekStart, original)
+    }
+
+    /// The fetch window is padded a screenful either side, so scrolling within
+    /// it costs nothing and scrolling past it slides the window.
+    func testTheFetchWindowSlidesOnlyWhenTheScrollLeavesIt() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let beforeRange = view.test_loadedRange
+
+        view.test_scroll(byRows: 1)
+        XCTAssertTrue(recorder.loadedRanges.isEmpty, "a scroll inside the window refetched")
+        XCTAssertEqual(view.test_loadedRange, beforeRange)
+
+        view.test_scroll(byRows: view.visibleRowCount * 3)
+        XCTAssertFalse(recorder.loadedRanges.isEmpty, "a scroll past the window did not refetch")
+        XCTAssertNotEqual(view.test_loadedRange, beforeRange)
+        // Whatever is on screen is always inside the window.
+        XCTAssertLessThanOrEqual(view.test_loadedRange.lowerBound, view.test_days[0])
+        XCTAssertGreaterThan(view.test_loadedRange.upperBound, view.test_days.last!)
+    }
+
+    func testColumnEdgesSplitTheWidthEvenlyAndLeaveNoSeam() {
+        let edges = WeekCalendarView.columnEdges(in: 700, count: 4)
+        XCTAssertEqual(edges, [0, 175, 350, 525, 700])
+
+        // A width that does not divide evenly still spans the pane end to end,
+        // and every column abuts the next rather than leaving a rounding seam.
+        let ragged = WeekCalendarView.columnEdges(in: 703, count: 5)
+        XCTAssertEqual(ragged.first, 0)
+        XCTAssertEqual(ragged.last, 703)
+        XCTAssertEqual(ragged.count, 6)
+        for index in 1..<ragged.count {
+            XCTAssertGreaterThan(ragged[index], ragged[index - 1])
         }
     }
 
@@ -340,49 +459,70 @@ final class WeekCalendarViewTests: XCTestCase {
         }
     }
 
-    func testVisibleWeekStartSetterDoesNotFireDelegate() {
+    /// Rows are fixed slots on the sheet, so assigning a mid-row day scrolls to
+    /// the row holding it and reports the day that row actually begins with —
+    /// otherwise the model and the sheet would disagree about where it is.
+    func testVisibleWeekStartSetterSnapsToTheRowAndReportsIt() {
         let view = makeView()
-        let recorder = RecordingDelegate()
-        view.delegate = recorder
-        let next = Calendar.current.date(byAdding: .day, value: 7, to: view.visibleWeekStart)!
-
-        view.visibleWeekStart = next
-
-        XCTAssertEqual(view.visibleWeekStart, Calendar.current.startOfDay(for: next))
-        XCTAssertTrue(recorder.taskIDs.isEmpty)
-        XCTAssertTrue(recorder.days.isEmpty)
-        XCTAssertTrue(recorder.weekStarts.isEmpty)
-    }
-
-    func testPrevNextAndTodayNavigateByColumnAndOnlyCallTheDelegate() {
-        let view = makeView()
+        view.layoutSubtreeIfNeeded()
         let recorder = RecordingDelegate()
         view.delegate = recorder
         let calendar = Calendar.current
-        let original = view.visibleWeekStart
-        let step = view.test_weekCount
+        let columns = view.test_weekCount
+        let midRow = calendar.date(byAdding: .day, value: columns + 1, to: view.visibleWeekStart)!
 
-        view.test_clickNextWeek()
-        view.test_clickPreviousWeek()
-        view.test_clickToday()
+        view.visibleWeekStart = midRow
 
-        XCTAssertEqual(view.visibleWeekStart, original, "gestures never mutate the view directly")
-        XCTAssertEqual(recorder.weekStarts.count, 3)
-        XCTAssertEqual(
-            calendar.startOfDay(for: recorder.weekStarts[0]),
-            calendar.date(byAdding: .day, value: step, to: original)!
-        )
-        XCTAssertEqual(
-            calendar.startOfDay(for: recorder.weekStarts[1]),
-            calendar.date(byAdding: .day, value: -step, to: original)!
-        )
-        XCTAssertEqual(calendar.startOfDay(for: recorder.weekStarts[2]), calendar.startOfDay(for: Date()))
+        let rowStart = calendar.date(byAdding: .day, value: columns, to: view.test_days[0])!
+        XCTAssertEqual(view.visibleWeekStart, view.test_days[0])
+        XCTAssertLessThanOrEqual(view.visibleWeekStart, calendar.startOfDay(for: midRow))
+        XCTAssertLessThan(calendar.startOfDay(for: midRow), rowStart, "the day asked for is off screen")
+        XCTAssertEqual(recorder.weekStarts, [view.visibleWeekStart])
         XCTAssertTrue(recorder.taskIDs.isEmpty)
         XCTAssertTrue(recorder.days.isEmpty)
     }
 
-    func testMoveSelectionWalksDaysAndPagesOnlyWhenLeavingTheScreen() {
+    /// A day that already begins a row is not moved at all, and nothing is
+    /// reported because nothing changed.
+    func testVisibleWeekStartSetterOnARowBoundaryReportsNothing() {
         let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let calendar = Calendar.current
+        let next = calendar.date(byAdding: .day, value: view.test_weekCount, to: view.visibleWeekStart)!
+
+        view.visibleWeekStart = next
+
+        XCTAssertEqual(view.visibleWeekStart, calendar.startOfDay(for: next))
+        XCTAssertTrue(recorder.weekStarts.isEmpty)
+    }
+
+    /// Today is the only jump left — the week buttons are gone — and like the
+    /// old gestures it only tells the delegate.
+    func testTodayIsTheOnlyJumpAndOnlyCallsTheDelegate() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        view.test_scroll(byRows: 20)
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let scrolled = view.visibleWeekStart
+
+        view.test_clickToday()
+
+        XCTAssertEqual(view.visibleWeekStart, scrolled, "the gesture never mutates the view directly")
+        XCTAssertEqual(recorder.weekStarts.count, 1)
+        XCTAssertEqual(
+            Calendar.current.startOfDay(for: recorder.weekStarts[0]),
+            Calendar.current.startOfDay(for: Date())
+        )
+        XCTAssertTrue(recorder.taskIDs.isEmpty)
+        XCTAssertTrue(recorder.days.isEmpty)
+    }
+
+    func testMoveSelectionWalksDaysAndScrollsOnlyWhenLeavingTheScreen() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
         let recorder = RecordingDelegate()
         view.delegate = recorder
         let calendar = Calendar.current
@@ -391,20 +531,56 @@ final class WeekCalendarViewTests: XCTestCase {
 
         view.moveSelection(byDays: 1)
         XCTAssertEqual(recorder.days.last, calendar.date(byAdding: .day, value: 1, to: anchor)!)
-        XCTAssertTrue(recorder.weekStarts.isEmpty, "staying on screen must not page")
+        XCTAssertTrue(recorder.weekStarts.isEmpty, "staying on screen must not scroll")
 
         view.selectedDay = anchor
-        view.moveSelection(byDays: 7)
-        XCTAssertEqual(recorder.days.last, calendar.date(byAdding: .day, value: 7, to: anchor)!)
+        view.moveSelection(byDays: view.test_weekCount)
+        XCTAssertEqual(
+            recorder.days.last,
+            calendar.date(byAdding: .day, value: view.test_weekCount, to: anchor)!
+        )
         XCTAssertTrue(recorder.weekStarts.isEmpty)
 
-        // Stepping back off the first visible day pages one column earlier.
+        // Stepping back off the first visible day scrolls one row earlier —
+        // exactly one, not a whole screen.
         view.selectedDay = anchor
         view.moveSelection(byDays: -1)
         XCTAssertEqual(recorder.weekStarts.count, 1)
         XCTAssertEqual(
             calendar.startOfDay(for: recorder.weekStarts[0]),
             calendar.date(byAdding: .day, value: -view.test_weekCount, to: anchor)!
+        )
+    }
+
+    /// Walking the selection off the bottom leaves the sheet on a row
+    /// boundary, so the top row is never shown as a sliver.
+    func testScrollingASelectionIntoViewLandsOnARowBoundary() {
+        let view = makeView()
+        view.layoutSubtreeIfNeeded()
+        // A viewport that is not a whole number of rows tall is the case that
+        // used to leave a half row at the top.
+        view.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 720,
+            height: WeekCalendarView.rowHeight * 4 + WeekCalendarView.rowHeight / 2
+        )
+        view.layoutSubtreeIfNeeded()
+        view.selectedDay = view.test_days[0]
+
+        for _ in 0..<8 { view.moveSelection(byDays: view.test_weekCount) }
+
+        XCTAssertGreaterThan(view.test_scrollOrigin, 0, "the selection never left the screen")
+        XCTAssertEqual(
+            view.test_scrollOrigin.truncatingRemainder(dividingBy: WeekCalendarView.rowHeight),
+            0,
+            accuracy: 0.001,
+            "the sheet came to rest mid-row"
+        )
+        XCTAssertEqual(view.test_cellFrame(at: 0).minY, view.test_scrollOrigin, accuracy: 0.001)
+        XCTAssertTrue(
+            view.test_days.contains(view.selectedDay!),
+            "the selected day scrolled out of view"
         )
     }
 
@@ -462,6 +638,72 @@ final class WeekCalendarViewTests: XCTestCase {
         XCTAssertEqual(recorder.days.count, 2)
         XCTAssertTrue(recorder.days.allSatisfy { Calendar.current.isDate($0, inSameDayAs: day) })
         XCTAssertTrue(recorder.weekStarts.isEmpty)
+        XCTAssertTrue(recorder.doubleClickedDays.isEmpty)
+    }
+
+    /// Chips, event rows and the overflow button sit on top of the cell, so a
+    /// double-click that lands on one must not be swallowed as a single click.
+    func testDoubleClickingAChipReportsTheTaskNotTheDay() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let day = futureDay(in: view)
+        let index = view.test_days.firstIndex(of: day)!
+        let chip = TaskDeadlineChip(uuid: UUID(), title: "Brief", day: day, isCompleted: false)
+        view.deadlines = [chip]
+
+        view.test_mouseDownFromCalendarOnChip(at: index, chip: 0, clickCount: 2)
+
+        XCTAssertEqual(recorder.doubleClickedTaskIDs, [chip.uuid])
+        XCTAssertEqual(recorder.taskIDs, [chip.uuid], "the task is selected first")
+        XCTAssertTrue(recorder.doubleClickedDays.isEmpty, "a chip is a task, not its day")
+    }
+
+    func testDoubleClickingAnEventRowOpensItsDay() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let day = futureDay(in: view)
+        let index = view.test_days.firstIndex(of: day)!
+        view.events = [
+            CalendarEventChip(
+                id: UUID().uuidString,
+                title: "Standup",
+                day: day,
+                startTime: Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: day),
+                endTime: nil,
+                isAllDay: false,
+                continuesFromPreviousDay: false,
+                continuesToNextDay: false,
+                location: nil,
+                organizer: nil,
+                calendarName: "Work",
+                isRecurring: false,
+                isRescheduled: false
+            )
+        ]
+        view.layoutSubtreeIfNeeded()
+
+        view.test_doubleClickEvent(at: index, event: 0)
+
+        XCTAssertEqual(recorder.doubleClickedDays.count, 1)
+        XCTAssertTrue(Calendar.current.isDate(recorder.doubleClickedDays[0], inSameDayAs: day))
+        XCTAssertTrue(recorder.taskIDs.isEmpty)
+    }
+
+    func testDoubleClickingADaySelectsItAndReportsTheDoubleClick() {
+        let view = makeView()
+        let recorder = RecordingDelegate()
+        view.delegate = recorder
+        let index = 1
+        let day = view.test_days[index]
+
+        view.test_doubleClickDay(at: index)
+
+        XCTAssertEqual(recorder.days.count, 1)
+        XCTAssertEqual(recorder.doubleClickedDays.count, 1)
+        XCTAssertTrue(Calendar.current.isDate(recorder.days[0], inSameDayAs: day))
+        XCTAssertTrue(Calendar.current.isDate(recorder.doubleClickedDays[0], inSameDayAs: day))
     }
 
     func testCompletedChipsAreDimmedAndStruck() {
@@ -662,25 +904,36 @@ final class WeekCalendarViewTests: XCTestCase {
 
 @MainActor
 final class CalendarViewControllerTests: PersistenceTestCase {
+    /// The model asks for a day; the sheet scrolls to its row and hands the
+    /// snapped day back, so the two never drift apart.
     func testObserverAppliesVisibleWeekFromSelectionModel() {
         let selection = SelectionModel()
         let calendarVC = makeCalendar(selection: selection)
         let originalTitle = calendarVC.test_title
-        let next = Calendar.current.date(byAdding: .day, value: 7, to: selection.visibleWeekStart)!
+        let calendar = Calendar.current
+        let next = calendar.date(byAdding: .day, value: 7, to: selection.visibleWeekStart)!
 
         selection.setVisibleWeekStart(next)
 
-        XCTAssertEqual(calendarVC.weekView.visibleWeekStart, Calendar.current.startOfDay(for: next))
+        let weekView = calendarVC.weekView
+        XCTAssertEqual(weekView.visibleWeekStart, selection.visibleWeekStart)
+        XCTAssertEqual(weekView.visibleWeekStart, weekView.test_days[0])
+        XCTAssertTrue(
+            weekView.test_days.contains(calendar.startOfDay(for: next)),
+            "the day that was asked for is not on screen"
+        )
         XCTAssertNotEqual(calendarVC.test_title, originalTitle)
     }
 
-    func testGesturesWriteSelectionThenViewUpdatesFromObserver() {
+    /// A scroll writes the selection, and the observer coming back round does
+    /// not scroll on top of it.
+    func testScrollingWritesSelectionThenViewUpdatesFromObserver() {
         let selection = SelectionModel()
         let calendarVC = makeCalendar(selection: selection)
         let original = selection.visibleWeekStart
         let originalNode = selection.selectedNodeUUID
 
-        calendarVC.weekView.test_clickNextWeek()
+        calendarVC.weekView.test_scroll(byRows: 1)
 
         let expected = Calendar.current.date(
             byAdding: .day,
@@ -689,6 +942,7 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         )!
         XCTAssertEqual(selection.visibleWeekStart, expected)
         XCTAssertEqual(calendarVC.weekView.visibleWeekStart, expected)
+        XCTAssertEqual(calendarVC.weekView.test_days.first, expected)
         XCTAssertEqual(selection.selectedNodeUUID, originalNode)
     }
 
@@ -728,7 +982,7 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         XCTAssertNil(calendarVC.weekView.selectedTaskID)
     }
 
-    func testFetchCoversVisibleWeeksIncludingCompletedButNotProjectsOrNilDeadlines() throws {
+    func testFetchCoversTheWindowIncludingCompletedButNotProjectsOrNilDeadlines() throws {
         let selection = SelectionModel()
         let calendarVC = makeCalendar(selection: selection)
         let project = try model.createProject()
@@ -739,8 +993,11 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         let last = days[days.count - 1]
         let middle = days[days.count / 2]
         let calendar = Calendar.current
-        let before = calendar.date(byAdding: .day, value: -1, to: first)!
-        let after = calendar.date(byAdding: .day, value: 1, to: last)!
+        // The fetch window reaches a screenful past what is on screen, so
+        // "outside it" has to be measured from the window, not from the pane.
+        let window = calendarVC.weekView.loadedRange
+        let before = calendar.date(byAdding: .day, value: -1, to: window.lowerBound)!
+        let after = window.upperBound
 
         let open = try makeTask(in: project, title: "Open", deadline: middle)
         let done = try makeTask(in: project, title: "Done", deadline: middle)
@@ -757,21 +1014,21 @@ final class CalendarViewControllerTests: PersistenceTestCase {
         XCTAssertFalse(chips.contains { $0.title == "Garden" })
     }
 
-    func testWideningThePaneFetchesTheExtraWeeks() throws {
+    /// Scrolling towards a day outside the window slides the window and the
+    /// deadline arrives with it.
+    func testScrollingFetchesDaysThatWereOutsideTheWindow() throws {
         let selection = SelectionModel()
         let calendarVC = makeCalendar(selection: selection)
         let project = try model.createProject()
-        let calendar = Calendar.current
-        let visibleWeeks = calendarVC.weekView.visibleWeekCount
-        // The first day just past the last visible week.
-        let farOut = calendar.endOfWeeks(from: selection.visibleWeekStart, count: visibleWeeks)
+        let weekView = calendarVC.weekView
+        let farOut = weekView.loadedRange.upperBound
         let task = try makeTask(in: project, title: "Far", deadline: farOut)
 
-        XCTAssertFalse(calendarVC.weekView.deadlines.contains { $0.uuid == task.uuid })
+        XCTAssertFalse(weekView.deadlines.contains { $0.uuid == task.uuid })
 
-        calendarVC.test_setWeekCount(visibleWeeks + 1)
+        weekView.scroll(toDay: farOut)
 
-        XCTAssertTrue(calendarVC.weekView.deadlines.contains { $0.uuid == task.uuid })
+        XCTAssertTrue(weekView.deadlines.contains { $0.uuid == task.uuid })
     }
 
     private func makeCalendar(selection: SelectionModel) -> CalendarViewController {
@@ -798,9 +1055,11 @@ final class CalendarViewControllerTests: PersistenceTestCase {
 @MainActor
 private final class RecordingDelegate: WeekCalendarViewDelegate {
     var taskIDs: [UUID] = []
+    var doubleClickedTaskIDs: [UUID] = []
     var days: [Date] = []
+    var doubleClickedDays: [Date] = []
     var weekStarts: [Date] = []
-    var weekCounts: [Int] = []
+    var loadedRanges: [Range<Date>] = []
 
     func weekCalendar(_ view: WeekCalendarView, didSelectTaskID uuid: UUID) {
         taskIDs.append(uuid)
@@ -810,11 +1069,19 @@ private final class RecordingDelegate: WeekCalendarViewDelegate {
         days.append(date)
     }
 
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickDay date: Date) {
+        doubleClickedDays.append(date)
+    }
+
+    func weekCalendar(_ view: WeekCalendarView, didDoubleClickTaskID uuid: UUID) {
+        doubleClickedTaskIDs.append(uuid)
+    }
+
     func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekStart date: Date) {
         weekStarts.append(date)
     }
 
-    func weekCalendar(_ view: WeekCalendarView, didChangeVisibleWeekCount count: Int) {
-        weekCounts.append(count)
+    func weekCalendar(_ view: WeekCalendarView, didChangeLoadedRange range: Range<Date>) {
+        loadedRanges.append(range)
     }
 }

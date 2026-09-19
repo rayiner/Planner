@@ -39,6 +39,25 @@
                                     <action selector="showCloudSyncStatus:" target="-1" id="iCl-st-act0"/>
                                 </connections>
                             </menuItem>
+                            <menuItem isSeparatorItem="YES" id="mcp-sp-sep0"/>
+                            <menuItem title="MCP server" enabled="NO" id="mcp-st-atus">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="showMCPServerStatus:" target="-1" id="mcp-st-act0"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Turn Off MCP Server" id="mcp-tg-gle">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="toggleMCPServer:" target="-1" id="mcp-tg-act0"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Copy MCP Server URL" id="mcp-cp-yurl">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="copyMCPServerURL:" target="-1" id="mcp-cp-act0"/>
+                                </connections>
+                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="wFC-TO-SCJ"/>
                             <menuItem title="Services" id="NMo-om-nkz">
                                 <modifierMask key="keyEquivalentModifierMask"/>
@@ -85,12 +104,6 @@
                                     <action selector="newTask:" target="-1" id="nTk-ac-tion"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="New Folder" keyEquivalent="n" id="nFl-dr-new">
-                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
-                                <connections>
-                                    <action selector="newMailFolder:" target="-1" id="nFl-ac-tion"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Rename" id="Ren-se-lec">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
@@ -104,33 +117,16 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="Mai-se-p001"/>
-                            <menuItem title="Save to Folder…" keyEquivalent="s" id="Sav-ms-gmnu">
-                                <connections>
-                                    <action selector="saveMessageToFolder:" target="-1" id="Sav-ms-gact"/>
-                                </connections>
-                            </menuItem>
-                            <menuItem title="Move to Folder…" id="Mov-ms-gmnu">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="moveMessageToFolder:" target="-1" id="Mov-ms-gact"/>
-                                </connections>
-                            </menuItem>
-                            <menuItem title="New Task from Message" id="NTk-ms-gmnu">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="newTaskFromMessage:" target="-1" id="NTk-ms-gact"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Open in Outlook" keyEquivalent="o" id="Opn-ms-gmnu">
                                 <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
                                 <connections>
                                     <action selector="openMessageInOutlook:" target="-1" id="Opn-ms-gact"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Remove Message…" id="Rem-ms-gmnu">
+                            <menuItem title="Hide Message" id="Rem-ms-gmnu">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="removeSelectedMessage:" target="-1" id="Rem-ms-gact"/>
+                                    <action selector="toggleHiddenForSelectedMessage:" target="-1" id="Rem-ms-gact"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="m54-Is-iLE"/>
@@ -371,18 +367,6 @@
                                     <action selector="revealToday:" target="-1" id="Tdy-ac-tio"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Previous Week" keyEquivalent="[" id="Prv-vw-mnu">
-                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
-                                <connections>
-                                    <action selector="goToPreviousWeek:" target="-1" id="Prv-ac-tio"/>
-                                </connections>
-                            </menuItem>
-                            <menuItem title="Next Week" keyEquivalent="]" id="Nxt-vw-mnu">
-                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
-                                <connections>
-                                    <action selector="goToNextWeek:" target="-1" id="Nxt-ac-tio"/>
-                                </connections>
-                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="Vw0-sp-rtr"/>
                             <menuItem title="Recent Mail Window" id="Win-rg-mnu">
                                 <modifierMask key="keyEquivalentModifierMask"/>
@@ -391,10 +375,22 @@
                                     <action selector="showMailWindowMenu:" target="-1" id="Win-rg-act"/>
                                 </connections>
                             </menuItem>
+                            <menuItem title="Show Hidden Mail" id="Hid-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="toggleShowsHiddenMail:" target="-1" id="Hid-vw-act"/>
+                                </connections>
+                            </menuItem>
                             <menuItem title="Refresh" keyEquivalent="r" id="Rfr-vw-mnu">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                                 <connections>
                                     <action selector="refreshCurrentMode:" target="-1" id="Rfr-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Full Outlook Resync" id="Rsy-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="resyncOutlookIndex:" target="-1" id="Rsy-ac-tio"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="Vw1-sp-rtr"/>
@@ -402,6 +398,18 @@
                                 <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                 <connections>
                                     <action selector="toggleSidebar:" target="-1" id="Sbr-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Show Terminal" keyEquivalent="t" id="Trm-vw-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                <connections>
+                                    <action selector="toggleTerminal:" target="-1" id="Trm-ac-tio"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Restart Terminal" keyEquivalent="r" id="Trm-rs-mnu">
+                                <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                <connections>
+                                    <action selector="restartTerminal:" target="-1" id="Trm-rs-act"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="Vw2-sp-rtr"/>

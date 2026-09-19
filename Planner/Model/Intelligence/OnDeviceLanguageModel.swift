@@ -32,16 +32,16 @@ nonisolated enum OnDeviceModelAvailability: Equatable, Sendable {
 /// One question for the model: standing instructions, the prompt itself, and
 /// the two generation knobs every caller ends up wanting.
 ///
-/// Every feature that uses the model — mail summaries first — builds one of
-/// these rather than talking to a `LanguageModelSession` directly, so the
-/// framework is behind one seam and tests can stand in a stub.
+/// Every feature that uses the model builds one of these rather than talking
+/// to a `LanguageModelSession` directly, so the framework is behind one seam
+/// and tests can stand in a stub.
 nonisolated struct OnDeviceModelRequest: Hashable, Sendable {
     var instructions: String
     var prompt: String
-    /// A cap on the reply. A summary wants a sentence; without a cap the model
-    /// is free to write a page, and the caller pays for it in latency.
+    /// A cap on the reply. Without one the model is free to write a page, and
+    /// the caller pays for it in latency.
     var maximumResponseTokens: Int?
-    /// Lower is more deterministic. Summaries want to be boring.
+    /// Lower is more deterministic. Most callers want a boring answer.
     var temperature: Double?
 
     init(
@@ -74,8 +74,8 @@ nonisolated enum OnDeviceModelError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unavailable(reason): return reason.userDescription
-        case .promptTooLong: return "The message is too long to summarize."
-        case .refused: return "Apple Intelligence declined to summarize this message."
+        case .promptTooLong: return "The prompt is too long for Apple Intelligence."
+        case .refused: return "Apple Intelligence declined to answer."
         case .rateLimited: return "Apple Intelligence is busy. Try again in a moment."
         case let .failed(message): return message
         }

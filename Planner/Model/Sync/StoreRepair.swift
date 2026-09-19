@@ -6,8 +6,8 @@ import CoreData
 /// DESIGN.md §3 deliberately keeps `validateForInsert`/`validateForUpdate` free
 /// of throws so that a CloudKit import can never abort partway and strand the
 /// store. The price of that choice is paid here: the xor between `project` and
-/// `parentTask`, non-empty titles, acyclic parent chains, and a folder on every
-/// saved message are all *code* invariants, and a record that arrives from
+/// `parentTask`, non-empty titles, and acyclic parent chains are all *code*
+/// invariants, and a record that arrives from
 /// another device — or from an older, buggier build of this app — can break any
 /// of them. Mirroring also means every attribute is optional in the model
 /// (CloudKit fills absent fields with nil), so identity and timestamps can be
@@ -27,9 +27,8 @@ nonisolated enum StoreRepair {
     static let transactionAuthor = "planner.repair"
 
     static let recoveryProjectTitle = "Recovered Items"
-    static let recoveryFolderName = "Recovered Mail"
 
-    private static let entityNames = ["Project", "Task", "DayNote", "MailFolder", "SavedMessage"]
+    private static let entityNames = ["Project", "Task", "DayNote"]
 
     struct Summary: Equatable {
         var identitiesFilled = 0
@@ -38,12 +37,10 @@ nonisolated enum StoreRepair {
         var dualParentsResolved = 0
         var cyclesBroken = 0
         var orphansAdopted = 0
-        var messagesRefiled = 0
 
         var isEmpty: Bool {
             identitiesFilled == 0 && timestampsFilled == 0 && titlesFilled == 0
                 && dualParentsResolved == 0 && cyclesBroken == 0 && orphansAdopted == 0
-                && messagesRefiled == 0
         }
     }
 
@@ -65,7 +62,6 @@ nonisolated enum StoreRepair {
         summary.dualParentsResolved = try resolveDualParents(in: context)
         summary.cyclesBroken = try breakCycles(in: context)
         summary.orphansAdopted = try adoptOrphanTasks(in: context, now: now)
-        summary.messagesRefiled = try refileLooseMessages(in: context, now: now)
 
         if context.hasChanges {
             try context.save()
@@ -111,12 +107,6 @@ nonisolated enum StoreRepair {
             filled += 1
         }
 
-        // `receivedAt` orders every mail list and is a fetch index.
-        for message in try context.fetch(rows("SavedMessage", where: "receivedAt == nil")) {
-            let created = message.value(forKey: "createdAt") as? Date ?? now
-            message.setValue(created, forKey: "receivedAt")
-            filled += 1
-        }
         return filled
     }
 
@@ -126,7 +116,6 @@ nonisolated enum StoreRepair {
         let blanks: [(entity: String, key: String, replacement: String)] = [
             ("Project", "title", "Untitled Project"),
             ("Task", "title", "Untitled Task"),
-            ("MailFolder", "name", "Untitled Folder"),
         ]
         for blank in blanks {
             let request = rows(blank.entity, where: "\(blank.key) == nil OR \(blank.key) == ''")
@@ -200,20 +189,6 @@ nonisolated enum StoreRepair {
         return orphans.count
     }
 
-    /// `ModelController` never writes a folderless message, but a merge that
-    /// deletes a folder on one device while another files into it can leave one.
-    /// Nullify (not cascade) is the right delete rule; this is its cleanup.
-    private static func refileLooseMessages(in context: NSManagedObjectContext, now: Date) throws -> Int {
-        let loose = try context.fetch(rows("SavedMessage", where: "folder == nil"))
-        guard !loose.isEmpty else { return 0 }
-
-        let recovery = try recoveryFolder(in: context, now: now)
-        for message in loose {
-            message.setValue(recovery, forKey: "folder")
-        }
-        return loose.count
-    }
-
     // MARK: - Recovery containers
 
     /// Found by title rather than by a marker attribute, so the user can rename
@@ -230,19 +205,6 @@ nonisolated enum StoreRepair {
         project.setValue(now, forKey: "createdAt")
         project.setValue(now, forKey: "updatedAt")
         return project
-    }
-
-    private static func recoveryFolder(in context: NSManagedObjectContext, now: Date) throws -> NSManagedObject {
-        if let existing = try first("MailFolder", where: "name == %@", recoveryFolderName, in: context) {
-            return existing
-        }
-        let folder = NSEntityDescription.insertNewObject(forEntityName: "MailFolder", into: context)
-        folder.setValue(UUID(), forKey: "uuid")
-        folder.setValue(recoveryFolderName, forKey: "name")
-        folder.setValue(try maxSortIndex(rows("MailFolder", where: "TRUEPREDICATE"), in: context) + 1, forKey: "sortIndex")
-        folder.setValue(now, forKey: "createdAt")
-        folder.setValue(now, forKey: "updatedAt")
-        return folder
     }
 
     // MARK: - Helpers

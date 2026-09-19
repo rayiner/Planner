@@ -11,6 +11,10 @@ final class CalendarCellOverflowTests: XCTestCase {
     /// the pane insets are taken out the grid is roughly this tall, which makes
     /// a row about 64pt.
     private static let minimumGridHeight: CGFloat = 450
+    /// Every row is exactly `WeekCalendarView.rowHeight` now and the pane
+    /// scrolls, so a cell is never squeezed by the pane's height — the only way
+    /// to run one out of room is to fill it with more than it holds.
+    private static let fullCellItemCount = 8
 
     private func makeView(height: CGFloat = minimumGridHeight) -> WeekCalendarView {
         let view = WeekCalendarView(frame: NSRect(x: 0, y: 0, width: 720, height: height))
@@ -118,11 +122,13 @@ final class CalendarCellOverflowTests: XCTestCase {
 
     /// A cell too short for the `+K more` line still has to say that
     /// something is hidden, or it silently shows one of three items.
-    func testAShortCellShowsTheCountAsABadgeInstead() {
-        let view = makeView(height: 320)
+    func testAFullCellAnnouncesWhatItCannotShow() {
+        let view = makeView()
         let day = view.test_days[saturday]
         view.deadlines = [task("Anna math", day: day)]
-        view.events = (0..<2).map { event("Event \($0)", day: day, id: "e\($0)") }
+        view.events = (0..<(Self.fullCellItemCount - 1)).map {
+            event("Event \($0)", day: day, id: "e\($0)")
+        }
         view.layoutSubtreeIfNeeded()
 
         XCTAssertGreaterThan(view.test_overflowCount(at: saturday), 0)
@@ -162,7 +168,9 @@ final class CalendarCellOverflowTests: XCTestCase {
         let view = makeView()
         let day = view.test_days[saturday]
         view.deadlines = [task("Anna math", day: day)]
-        view.events = (0..<2).map { event("Event \($0)", day: day, id: "e\($0)") }
+        view.events = (0..<(Self.fullCellItemCount - 1)).map {
+            event("Event \($0)", day: day, id: "e\($0)")
+        }
         view.layoutSubtreeIfNeeded()
 
         let label = view.test_cellAccessibilityLabel(at: saturday) ?? ""
@@ -277,11 +285,15 @@ final class CalendarDayHeaderTests: XCTestCase {
         let weekStart = calendar.date(from: DateComponents(year: 2026, month: 8, day: 31))!
         let view = makeView(weekStart: weekStart)
 
-        XCTAssertEqual(view.test_dayNumber(at: 0), "31")
-        XCTAssertEqual(view.test_dayNumber(at: 1), "1")
+        // Rows are fixed slots on a sheet anchored on today, so scrolling to a
+        // date lands on the row holding it rather than starting a row with it.
+        let last = view.test_days.firstIndex { calendar.component(.day, from: $0) == 31 }
+        let first = try! XCTUnwrap(last).advanced(by: 1)
+        XCTAssertEqual(view.test_dayNumber(at: first - 1), "31")
+        XCTAssertEqual(view.test_dayNumber(at: first), "1")
 
-        let twoDigit = view.test_todayMarkerRect(at: 0)
-        let singleDigit = view.test_todayMarkerRect(at: 1)
+        let twoDigit = view.test_todayMarkerRect(at: first - 1)
+        let singleDigit = view.test_todayMarkerRect(at: first)
         XCTAssertGreaterThan(twoDigit.width, singleDigit.width, "a wider number needs a wider marker")
         XCTAssertEqual(twoDigit.height, singleDigit.height, accuracy: 0.01, "same band, same height")
         for marker in [twoDigit, singleDigit] {

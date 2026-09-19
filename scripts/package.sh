@@ -57,7 +57,7 @@ fi
 # than failing with "No profiles for 'com.rihscb.Planner' were found".
 xcode() {
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIGURATION" \
-        -allowProvisioningUpdates "$@"
+        -allowProvisioningUpdates -skipPackagePluginValidation "$@"
 }
 
 # Ask xcodebuild where the product lands rather than hardcoding a DerivedData

@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
     static let plannerMailDidChange = Notification.Name("plannerMailDidChange")
+    static let plannerMailSearchDidChange = Notification.Name("plannerMailSearchDidChange")
     /// Posted when one message's body/headers finish loading or fail. Carries
     /// `MailChangeUserInfoKey.messageID`, so a reader showing a different
     /// message can ignore it instead of rebinding.
@@ -12,6 +13,12 @@ enum MailChangeUserInfoKey {
     static let messageID = "messageID"
 }
 
+nonisolated struct MailQuickSearch: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    var name: String
+    var query: String
+}
+
 /// Owns the Recent Mail feed: when to sweep, what is currently loaded, whether
 /// the last attempt worked, and the per-message bodies fetched since launch.
 ///
@@ -19,11 +26,13 @@ enum MailChangeUserInfoKey {
 /// keep-stale-on-failure rule, same timeout backstop, same day-rollover
 /// refresh — because the two feeds have the same shape: slow, foreign,
 /// read-only, and rendered by a view that must stay honest while a fetch is in
-/// flight. Two things are new: the window length is a user setting rather than
-/// a constant, and message bodies are lazy, so there is a second, per-message
-/// loading state to track.
+/// flight. The window length is a user setting, message bodies are lazy, and
+/// explicit hide/unhide commands write Outlook's `Hide` category.
 @MainActor
 final class MailCoordinator {
+    static let quickSearchesDefaultsKey = "mail.quickSearches"
+    static let showsHiddenMessagesDefaultsKey = "mail.showsHiddenMessages"
+
     enum State: Equatable {
         case idle
         case loading
@@ -39,9 +48,20 @@ final class MailCoordinator {
         case failed(String)
     }
 
+    enum SearchState: Equatable {
+        case idle
+        case loading
+        case loaded([MailMessage])
+        case failed(String)
+    }
+
     /// Backstop so the UI can always leave `.loading`. A first `olsyncmail`
     /// index of a large mailbox is minutes, not seconds; later refreshes are
     /// incremental and return almost immediately.
+    ///
+    /// Measured from the last word out of the helper, not from the start of
+    /// the sweep: a job still reporting progress is alive, however long it
+    /// takes. See `OutlookSyncProgressReporter.waitForSilence(seconds:startedAt:)`.
     static let timeoutSeconds = 300
     /// A message body is one small read; if it has not landed in this long,
     /// something is wrong rather than slow.
@@ -51,33 +71,30 @@ final class MailCoordinator {
     private let calendar: Calendar
     private let now: @MainActor () -> Date
     private let defaults: UserDefaults
-    private let envelopeStore: MailEnvelopeStore
-    private let dismissalStore: MailDismissalStore
-    /// One-line summaries of the window, produced by the on-device model.
-    /// Owned here because it feeds on `messages` and on the shared body fetch,
-    /// and because the list reads it wherever it reads the coordinator.
-    let summaries: MailSummaryCoordinator
 
     private(set) var state: State = .idle
     private(set) var window: Range<Date>
     private(set) var windowDays: Int
     /// Newest first, which is both the source's order and the list's.
     ///
-    /// The window **minus** what the user has dismissed. Everything that draws
-    /// Recent Mail reads this, so a dismissal leaves the list and the sidebar
-    /// count together and no caller has to know dismissals exist.
+    /// The Recent Mail window, with Outlook's `Hide` category filtered out
+    /// unless `showsHiddenMessages` is on.
     private(set) var messages: [MailMessage] = []
-    /// The window as the source reported it, dismissals included.
-    ///
-    /// Kept because dropping dismissed messages here instead would wreck the
-    /// incremental sweep: `MailEnvelopeSweep.plan` decides between a cheap
-    /// prefix read and a full re-read by asking which inbox ids we already have
-    /// envelopes for, and a dismissed message sitting mid-inbox would read as
-    /// an unknown id in the tail — forcing every later refresh down the full
-    /// ~60ms-per-message path. So the sweep and the cache see everything, and
-    /// the filter is applied at exactly one place: `republish`.
+    /// The same window, containing only messages carrying Outlook's `Hide`
+    /// category.
+    private(set) var hiddenMessages: [MailMessage] = []
+    /// Off by default: Hidden is a view filter, not a mailbox.
+    private(set) var showsHiddenMessages = false
+    /// Outlook's available non-Hide categories, alphabetized by the source.
+    private(set) var categories: [OutlookCategory] = []
+    /// User-named, whole-index searches persisted in sidebar order.
+    private(set) var quickSearches: [MailQuickSearch] = []
+    private(set) var searchState: SearchState = .idle
+    private var searchQuery = ""
+    /// Complete-index results, including messages outside the Recent window.
+    private var allSearchResults: [MailMessage] = []
+    /// The window as the source reported it, before the Hidden filter.
     private(set) var allMessages: [MailMessage] = []
-    private var dismissals = MailDismissalSet()
     /// Set when the last failure is one the user fixes in System Settings, so
     /// the error affordance can offer that instead of a pointless retry.
     private(set) var failureSettingsURL: URL?
@@ -88,15 +105,14 @@ final class MailCoordinator {
     private var detailStates: [Int64: DetailState] = [:]
     /// One fetch per message, however many callers want it.
     ///
-    /// Opening a message and saving it are two different code paths that want
-    /// the same body at almost the same moment — the reader asks on selection,
-    /// and Save asks again a click later. Two Apple events for one message is
-    /// wasteful; worse, whichever reply arrives second finds its caller already
-    /// gone. Sharing the task makes the second caller wait for the first.
+    /// Sharing the task prevents duplicate body reads when multiple callers
+    /// request the same selected message.
     private var detailTasks: [Int64: Task<MailMessageDetail, Error>] = [:]
 
     private var loadTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration = 0
     /// Bumped on every refresh so a late reply from a superseded one is dropped
     /// rather than painted over newer data.
     private var generation = 0
@@ -109,10 +125,6 @@ final class MailCoordinator {
         calendar: Calendar = .current,
         now: @escaping @MainActor () -> Date = { Date() },
         defaults: UserDefaults = .standard,
-        envelopeStore: MailEnvelopeStore = .disabled,
-        dismissalStore: MailDismissalStore = .disabled,
-        summaryModel: OnDeviceLanguageModel = UnavailableOnDeviceLanguageModel(),
-        summaryStore: MailSummaryStore = .disabled,
         timeoutSeconds: Int = MailCoordinator.timeoutSeconds,
         detailTimeoutSeconds: Int = MailCoordinator.detailTimeoutSeconds
     ) {
@@ -120,31 +132,15 @@ final class MailCoordinator {
         self.calendar = calendar
         self.now = now
         self.defaults = defaults
-        self.envelopeStore = envelopeStore
-        self.dismissalStore = dismissalStore
         self.timeoutSeconds = timeoutSeconds
         self.detailTimeoutSeconds = detailTimeoutSeconds
+        if let data = defaults.data(forKey: Self.quickSearchesDefaultsKey),
+           let saved = try? JSONDecoder().decode([MailQuickSearch].self, from: data) {
+            quickSearches = saved.sorted(by: Self.quickSearchLessThan)
+        }
+        showsHiddenMessages = defaults.bool(forKey: Self.showsHiddenMessagesDefaultsKey)
         windowDays = MailWindow.days(from: defaults)
         window = MailWindow.current(days: windowDays, now: now(), calendar: calendar)
-        summaries = MailSummaryCoordinator(
-            model: summaryModel,
-            store: summaryStore,
-            sourceID: source.sourceID,
-            calendar: calendar,
-            now: now
-        )
-        // Bodies for summaries go through the same shared, cached fetch the
-        // reader uses, so opening a message never costs a second Apple event
-        // because the summarizer got there first.
-        summaries.detailLoader = { [weak self] id in
-            guard let self else { throw CancellationError() }
-            return try await self.loadDetail(for: id)
-        }
-        // Before the envelopes, so the very first list a launch paints is
-        // already filtered and a dismissed row never flashes up.
-        restoreDismissals()
-        restoreCachedEnvelopes()
-
         // Recent Mail is anchored on *today*, so at midnight yesterday's window
         // is one day stale. See `EventCoordinator` for why this is the
         // selector form, and why the @objc entry hops to the main actor.
@@ -159,8 +155,8 @@ final class MailCoordinator {
     deinit {
         loadTask?.cancel()
         timeoutTask?.cancel()
+        searchTask?.cancel()
         for task in detailTasks.values { task.cancel() }
-        // `summaries` cancels its own in-flight work in its deinit.
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -189,7 +185,7 @@ final class MailCoordinator {
     /// Changes the window length and re-sweeps. Persisted, so the choice
     /// survives relaunch the way the visible week does.
     func setWindowDays(_ days: Int, userInitiated: Bool = true) {
-        let clamped = min(MailWindow.maximumDays, max(MailWindow.minimumDays, days))
+        let clamped = MailWindow.choice(for: days)
         guard clamped != windowDays else { return }
         windowDays = clamped
         defaults.set(clamped, forKey: MailWindow.daysDefaultsKey)
@@ -202,6 +198,15 @@ final class MailCoordinator {
     /// - Parameter userInitiated: Launch and day-rollover must not raise a
     ///   consent dialog; the menu command and the error-button retry may.
     func refresh(userInitiated: Bool = false) {
+        startLoad(userInitiated: userInitiated, rebuildIndex: false)
+    }
+
+    /// Re-indexes every Outlook message and event, then reloads Recent Mail.
+    func rebuildIndex(userInitiated: Bool = true) {
+        startLoad(userInitiated: userInitiated, rebuildIndex: true)
+    }
+
+    private func startLoad(userInitiated: Bool, rebuildIndex: Bool) {
         loadTask?.cancel()
         timeoutTask?.cancel()
         generation &+= 1
@@ -220,19 +225,20 @@ final class MailCoordinator {
         // The timer only flips the UI; a late real result still applies via the
         // generation gate.
         //
-        // Unfiltered on purpose — see `allMessages`. Handing the sweep the
-        // filtered list would make every dismissed message look like an id we
-        // have never seen.
-        let known = allMessages
         loadTask = Task { [weak self] in
             do {
-                let messages = try await source.envelopes(
-                    in: target,
-                    known: known,
-                    userInitiated: userInitiated
-                )
+                if rebuildIndex {
+                    try await source.rebuildIndex()
+                }
+                let messages = try await source.envelopes(in: target, userInitiated: userInitiated)
+                let categories = try await source.availableCategories()
                 guard !Task.isCancelled else { return }
-                self?.apply(messages, window: target, generation: generation)
+                self?.apply(
+                    messages,
+                    categories: categories,
+                    window: target,
+                    generation: generation
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -241,7 +247,7 @@ final class MailCoordinator {
             }
         }
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            await OutlookSyncProgressReporter.shared.waitForSilence(seconds: seconds)
             guard !Task.isCancelled else { return }
             self?.timeoutIfStillLoading(generation: generation, seconds: seconds)
         }
@@ -252,13 +258,162 @@ final class MailCoordinator {
         loadTask = nil
         timeoutTask?.cancel()
         timeoutTask = nil
+        searchTask?.cancel()
+        searchTask = nil
         for task in detailTasks.values { task.cancel() }
         detailTasks.removeAll()
-        summaries.cancel()
     }
 
     func message(id: Int64) -> MailMessage? {
-        messages.first { $0.id == id }
+        allMessages.first { $0.id == id }
+            ?? allSearchResults.first { $0.id == id }
+    }
+
+    var searchResults: [MailMessage] {
+        guard case let .loaded(messages) = searchState else { return [] }
+        return visible(messages)
+    }
+
+    /// Hidden messages stay in the index; this only changes whether lists
+    /// include them. The default is off, matching a Hide that is meant to
+    /// get a message out of the way.
+    func setShowsHiddenMessages(_ show: Bool) {
+        guard showsHiddenMessages != show else { return }
+        showsHiddenMessages = show
+        defaults.set(show, forKey: Self.showsHiddenMessagesDefaultsKey)
+        republish()
+        postChange()
+    }
+
+    func messages(categoryID: Int64) -> [MailMessage] {
+        messages.filter { $0.categoryIDs.contains(categoryID) }
+    }
+
+    func category(id: Int64) -> OutlookCategory? {
+        categories.first { $0.id == id }
+    }
+
+    /// The categories that may be applied to `messages`.
+    ///
+    /// Outlook offers categories per account, so a message can only take the
+    /// ones its own account defines. Outlook's built-in set (`accountUID` 0)
+    /// belongs to no account and is left out: those eight names are the ones
+    /// nobody in this profile uses.
+    ///
+    /// A selection spanning two accounts has nothing in common — a category is
+    /// defined in exactly one account — so it offers none rather than an item
+    /// that would fail on half the messages.
+    func categories(applicableTo messages: [MailMessage]) -> [OutlookCategory] {
+        let accounts = Set(messages.map(\.accountUID))
+        guard accounts.count == 1, let account = accounts.first, account != 0 else { return [] }
+        return categories.filter { $0.accountUID == account }
+    }
+
+    func quickSearch(id: UUID) -> MailQuickSearch? {
+        quickSearches.first { $0.id == id }
+    }
+
+    /// Names are unique case-insensitively. Saving an existing name updates its
+    /// query instead of leaving two indistinguishable folders in the sidebar.
+    @discardableResult
+    func saveQuickSearch(name rawName: String, query rawQuery: String) -> MailQuickSearch? {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !query.isEmpty else { return nil }
+        let saved: MailQuickSearch
+        if let index = quickSearches.firstIndex(where: {
+            $0.name.caseInsensitiveCompare(name) == .orderedSame
+        }) {
+            quickSearches[index].name = name
+            quickSearches[index].query = query
+            saved = quickSearches[index]
+        } else {
+            saved = MailQuickSearch(id: UUID(), name: name, query: query)
+            quickSearches.append(saved)
+        }
+        quickSearches.sort(by: Self.quickSearchLessThan)
+        persistQuickSearches()
+        postChange()
+        return saved
+    }
+
+    func deleteQuickSearch(id: UUID) {
+        guard let index = quickSearches.firstIndex(where: { $0.id == id }) else { return }
+        quickSearches.remove(at: index)
+        persistQuickSearches()
+        postChange()
+    }
+
+    private func persistQuickSearches() {
+        guard let data = try? JSONEncoder().encode(quickSearches) else { return }
+        defaults.set(data, forKey: Self.quickSearchesDefaultsKey)
+    }
+
+    private static func quickSearchLessThan(_ lhs: MailQuickSearch, _ rhs: MailQuickSearch) -> Bool {
+        let order = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        return order == .orderedSame
+            ? lhs.id.uuidString < rhs.id.uuidString
+            : order == .orderedAscending
+    }
+
+    /// Distinct folder paths in the local index, for `folder:` search and MCP.
+    func folders() async throws -> [MailFolder] {
+        try await source.folders()
+    }
+
+    /// A complete-index search that waits for the result. MCP uses this so an
+    /// agent query is a request/response rather than the sidebar's fire-and-forget
+    /// search, and so it does not steal the user's query. Hidden messages follow
+    /// the same filter as the rest of the feed.
+    func searchIndex(_ rawQuery: String) async throws -> [MailMessage] {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let results = try await source.search(query: query)
+        let visible = visible(Self.sorted(results))
+        remember(visible)
+        return visible
+    }
+
+    /// Keeps envelopes MCP (or a later open) can address after a search that
+    /// did not go through the sidebar's `searchState`.
+    func remember(_ messages: [MailMessage]) {
+        let known = Set(allMessages.map(\.id)).union(Set(allSearchResults.map(\.id)))
+        for message in messages where !known.contains(message.id) {
+            allSearchResults.append(message)
+        }
+    }
+
+    /// Searches the complete index. Generation gating gives a fast second
+    /// query ownership over a late first reply.
+    func search(_ rawQuery: String) {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchTask?.cancel()
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        searchQuery = query
+
+        guard !query.isEmpty else {
+            allSearchResults = []
+            searchState = .idle
+            postSearchChange()
+            return
+        }
+
+        searchState = .loading
+        postSearchChange()
+        let source = source
+        searchTask = Task { [weak self] in
+            do {
+                let results = try await source.search(query: query)
+                guard !Task.isCancelled else { return }
+                self?.applySearch(results, query: query, generation: generation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.failSearch(error, query: query, generation: generation)
+            }
+        }
     }
 
     /// The day `message` drops out of the window, for the reader's banner.
@@ -266,55 +421,89 @@ final class MailCoordinator {
         MailWindow.expiryDay(for: message.receivedAt, days: windowDays, calendar: calendar)
     }
 
-    // MARK: - Dismissals
+    // MARK: - Hidden category
 
-    /// Takes `message` out of Recent Mail and remembers that across refreshes
-    /// and relaunches.
-    ///
-    /// **Outlook is not touched.** The message stays where it is, unread stays
-    /// unread; this hides a row in Planner's own list and nothing more.
-    func dismiss(_ message: MailMessage) {
-        guard !dismissals.contains(message) else { return }
-        dismissals.insert(message)
-        persistDismissals()
-        republish()
-        PlannerLog.mail.info("Dismissed message \(message.id, privacy: .public) from Recent Mail")
-        postChange()
+    /// Changes Outlook first, then moves the envelopes between Planner's two
+    /// in-memory mailbox partitions. A later failure still keeps the earlier
+    /// successes; the thrown error is the first one Outlook reported.
+    func setHidden(_ hidden: Bool, messages: [MailMessage]) async throws {
+        let targets = messages.filter { $0.isHidden != hidden }
+        guard !targets.isEmpty else { return }
+        var succeeded: Set<Int64> = []
+        var firstError: Error?
+        for message in targets {
+            do {
+                try await source.setHidden(hidden, messageID: message.id)
+                succeeded.insert(message.id)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        if !succeeded.isEmpty {
+            allMessages = allMessages.map {
+                succeeded.contains($0.id) ? $0.with(isHidden: hidden) : $0
+            }
+            allSearchResults = allSearchResults.map {
+                succeeded.contains($0.id) ? $0.with(isHidden: hidden) : $0
+            }
+            republish()
+            PlannerLog.mail.info(
+                "\(hidden ? "Hid" : "Unhid") \(succeeded.count, privacy: .public) message(s) in Outlook"
+            )
+            postChange()
+        }
+        if let firstError { throw firstError }
     }
 
-    /// Undoes a dismissal. The envelope never left `allMessages`, so the row
-    /// comes back without a round trip to Outlook.
-    func restore(_ message: MailMessage) {
-        guard dismissals.contains(message) else { return }
-        dismissals.remove(message)
-        persistDismissals()
-        republish()
-        postChange()
+    func setHidden(_ hidden: Bool, message: MailMessage) async throws {
+        try await setHidden(hidden, messages: [message])
     }
 
-    func isDismissed(_ message: MailMessage) -> Bool { dismissals.contains(message) }
+    // MARK: - Ordinary categories
 
-    /// Test seam and the shape any future "restore everything" command wants.
-    var dismissedCount: Int { dismissals.count }
-
-    private func restoreDismissals() {
-        guard let record = dismissalStore.load(), record.sourceID == source.sourceID else { return }
-        dismissals = MailDismissalSet(record.dismissals).pruned(before: pruneCutoff())
-    }
-
-    private func persistDismissals() {
-        dismissals = dismissals.pruned(before: pruneCutoff())
-        dismissalStore.save(
-            MailDismissalRecord(sourceID: source.sourceID, dismissals: dismissals.entries)
-        )
-    }
-
-    /// The oldest instant a message could still re-enter the window at. Uses
-    /// the maximum window, not the current one, so widening the window later
-    /// does not resurrect what was dismissed while it was narrow.
-    private func pruneCutoff() -> Date {
-        let today = calendar.startOfDay(for: now())
-        return calendar.date(byAdding: .day, value: -MailWindow.maximumDays, to: today) ?? .distantPast
+    /// Adds or removes one ordinary category, retaining successful writes if a
+    /// later message fails. Generic UI only exposes the add direction; remove
+    /// exists so Undo can faithfully reverse an application.
+    func setCategory(
+        _ categoryID: Int64,
+        present: Bool,
+        messages: [MailMessage]
+    ) async throws {
+        guard category(id: categoryID) != nil else { return }
+        let targets = messages.filter { $0.categoryIDs.contains(categoryID) != present }
+        guard !targets.isEmpty else { return }
+        var succeeded: Set<Int64> = []
+        var firstError: Error?
+        for message in targets {
+            do {
+                try await source.setCategory(
+                    categoryID,
+                    present: present,
+                    messageID: message.id
+                )
+                succeeded.insert(message.id)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        if !succeeded.isEmpty {
+            allMessages = allMessages.map {
+                succeeded.contains($0.id)
+                    ? $0.with(categoryID: categoryID, present: present)
+                    : $0
+            }
+            allSearchResults = allSearchResults.map {
+                succeeded.contains($0.id)
+                    ? $0.with(categoryID: categoryID, present: present)
+                    : $0
+            }
+            republish()
+            PlannerLog.mail.info(
+                "\(present ? "Applied" : "Removed") category \(categoryID, privacy: .public) on \(succeeded.count, privacy: .public) message(s)"
+            )
+            postChange()
+        }
+        if let firstError { throw firstError }
     }
 
     // MARK: - Bodies
@@ -338,14 +527,11 @@ final class MailCoordinator {
         }
     }
 
-    /// Already-fetched body, without starting a fetch. Used where a miss is
-    /// simply "not yet", e.g. deciding whether saving needs a round trip.
+    /// Already-fetched body, without starting a fetch.
     func cachedDetail(for id: Int64) -> MailMessageDetail? { detailCache[id] }
 
-    /// Fetches the body for a save or a task-creation, returning it directly
-    /// rather than through the cache-and-notify path the reader uses. The
-    /// caller is a command that can put the failure in an alert, so this one
-    /// throws instead of only recording a state.
+    /// Fetches the body directly rather than through the
+    /// cache-and-notify path the reader uses.
     func loadDetail(for id: Int64) async throws -> MailMessageDetail {
         if let cached = detailCache[id] { return cached }
         let task = sharedDetailTask(for: id)
@@ -414,7 +600,12 @@ final class MailCoordinator {
 
     // MARK: - Applying results
 
-    private func apply(_ messages: [MailMessage], window applied: Range<Date>, generation: Int) {
+    private func apply(
+        _ messages: [MailMessage],
+        categories: [OutlookCategory],
+        window applied: Range<Date>,
+        generation: Int
+    ) {
         // Two gates, because either can be stale on its own: a newer refresh
         // may already have started, or the window may have moved under us.
         guard generation == self.generation, applied == window else { return }
@@ -422,38 +613,56 @@ final class MailCoordinator {
         // between refreshes. Newest first; id breaks ties so two messages that
         // arrived in the same second keep a stable order.
         allMessages = Self.sorted(messages)
+        self.categories = categories
+            .filter {
+                $0.name.caseInsensitiveCompare(OutlookCategory.hiddenName) != .orderedSame
+            }
+            .sorted {
+                let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+            }
         republish()
         state = .loaded(now())
-        persistEnvelopes()
         postChange()
+        // A refresh may have changed indexed content under an active query.
+        if !searchQuery.isEmpty { search(searchQuery) }
     }
 
-    private func restoreCachedEnvelopes() {
-        guard let record = envelopeStore.load(), record.sourceID == source.sourceID else { return }
-        let kept = record.messages.filter { window.contains($0.receivedAt) }
-        guard !kept.isEmpty else { return }
-        allMessages = Self.sorted(kept)
-        republish()
-        state = .loaded(record.fetchedAt)
-    }
-
-    private func persistEnvelopes() {
-        envelopeStore.save(
-            MailEnvelopeRecord(
-                sourceID: source.sourceID,
-                windowDays: windowDays,
-                fetchedAt: now(),
-                messages: allMessages
-            )
-        )
-    }
-
-    /// The one place the dismissal filter is applied — and so the one place
-    /// the summarizer learns what is in the window. A dismissed message is not
-    /// worth a model call, and one that ages out leaves the queue with it.
+    /// The one place Outlook's category flag is applied as a view filter.
     private func republish() {
-        messages = dismissals.isEmpty ? allMessages : allMessages.filter { !dismissals.contains($0) }
-        summaries.update(messages: messages)
+        messages = visible(allMessages)
+        hiddenMessages = allMessages.filter(\.isHidden)
+        republishSearch()
+    }
+
+    private func visible(_ messages: [MailMessage]) -> [MailMessage] {
+        showsHiddenMessages ? messages : messages.filter { !$0.isHidden }
+    }
+
+    private func republishSearch() {
+        guard case .loaded = searchState else { return }
+        searchState = .loaded(allSearchResults)
+        postSearchChange()
+    }
+
+    private func applySearch(
+        _ messages: [MailMessage],
+        query: String,
+        generation: Int
+    ) {
+        guard generation == searchGeneration, query == searchQuery else { return }
+        allSearchResults = Self.sorted(messages)
+        searchState = .loaded(allSearchResults)
+        postSearchChange()
+    }
+
+    private func failSearch(_ error: Error, query: String, generation: Int) {
+        guard generation == searchGeneration, query == searchQuery else { return }
+        allSearchResults = []
+        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        PlannerLog.mail.error("Mail search failed: \(message, privacy: .public)")
+        searchState = .failed(message)
+        postSearchChange()
     }
 
     private static func sorted(_ messages: [MailMessage]) -> [MailMessage] {
@@ -481,6 +690,10 @@ final class MailCoordinator {
 
     private func postChange() {
         NotificationCenter.default.post(name: .plannerMailDidChange, object: self)
+    }
+
+    private func postSearchChange() {
+        NotificationCenter.default.post(name: .plannerMailSearchDidChange, object: self)
     }
 
     private func postDetailChange(id: Int64) {

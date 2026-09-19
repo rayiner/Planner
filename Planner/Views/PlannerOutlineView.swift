@@ -67,18 +67,14 @@ final class PlannerOutlineView: NSOutlineView {
                     ("Get Info", #selector(MainSplitViewController.showTaskInfo(_:))),
                     ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
                 ])
-            case is RecentMailbox:
+            case is QuickSearchMailbox:
                 selectForMenu(row: row)
                 return Self.makeMenu([
-                    ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
+                    ("Delete Quick Search", #selector(MainSplitViewController.deleteQuickSearch(_:))),
                 ])
-            case is MailFolder:
+            case is RecentMailbox, is SearchMailbox:
                 selectForMenu(row: row)
-                return Self.makeMenu([
-                    ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
-                    ("Rename", #selector(MainSplitViewController.renameSelected(_:))),
-                    ("Delete\u{2026}", #selector(MainSplitViewController.deleteSelected(_:))),
-                ])
+                return NSMenu()
             default:
                 // A section header or the placeholder: labels get the
                 // background menu, not a selection.
@@ -87,7 +83,6 @@ final class PlannerOutlineView: NSOutlineView {
         }
         return Self.makeMenu([
             ("New Project", #selector(MainSplitViewController.newProject(_:))),
-            ("New Folder", #selector(MainSplitViewController.newMailFolder(_:))),
         ])
     }
 

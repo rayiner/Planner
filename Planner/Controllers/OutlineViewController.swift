@@ -1,6 +1,82 @@
 import AppKit
 import CoreData
 
+/// The one-line summary at the foot of the unified sidebar. It reports the
+/// shared Outlook-backed feeds conservatively: "updated" means both mail and
+/// calendar have completed, at the older of their two completion times.
+struct OutlookSyncPresentation: Equatable {
+    let text: String
+    let toolTip: String?
+
+    @MainActor
+    init(
+        events: EventCoordinator.State,
+        mail: MailCoordinator.State,
+        progress: OutlookSyncProgress? = nil
+    ) {
+        if Self.isLoading(events) || Self.isLoading(mail) {
+            if let progress, progress.total > 0 {
+                let done = progress.done.formatted()
+                let total = progress.total.formatted()
+                text = "Syncing Outlook… \(done) of \(total)"
+                toolTip = progress.phase == "starting"
+                    ? "Preparing to index \(total) Outlook items."
+                    : "Indexed \(done) of \(total) Outlook items."
+            } else {
+                text = "Syncing Outlook…"
+                toolTip = "Refreshing Outlook mail and calendar data."
+            }
+            return
+        }
+
+        let failures = [Self.failure(events), Self.failure(mail)].compactMap { $0 }
+        if !failures.isEmpty {
+            text = "Outlook sync failed"
+            toolTip = failures.joined(separator: "\n")
+            return
+        }
+
+        if case let .loaded(eventDate) = events,
+           case let .loaded(mailDate) = mail
+        {
+            let date = min(eventDate, mailDate)
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            text = "Outlook updated \(formatter.string(from: date))"
+            toolTip = "Mail and calendar data are current as of \(date.formatted(.dateTime))."
+            return
+        }
+
+        text = "Waiting for Outlook sync"
+        toolTip = "Planner has not finished loading both Outlook mail and calendar data."
+    }
+
+    @MainActor
+    private static func isLoading(_ state: EventCoordinator.State) -> Bool {
+        if case .loading = state { return true }
+        return false
+    }
+
+    @MainActor
+    private static func isLoading(_ state: MailCoordinator.State) -> Bool {
+        if case .loading = state { return true }
+        return false
+    }
+
+    @MainActor
+    private static func failure(_ state: EventCoordinator.State) -> String? {
+        if case let .failed(message) = state { return "Events: \(message)" }
+        return nil
+    }
+
+    @MainActor
+    private static func failure(_ state: MailCoordinator.State) -> String? {
+        if case let .failed(message) = state { return "Mail: \(message)" }
+        return nil
+    }
+}
+
 /// A group header in the unified sidebar. `NSOutlineView` addresses rows by
 /// object identity, so each section is a singleton.
 final class SidebarSection: NSObject {
@@ -15,15 +91,28 @@ final class SidebarSection: NSObject {
     }
 }
 
-/// Stands in for "Recent Mail" in the sidebar's item list.
-///
-/// `NSOutlineView` addresses rows by object identity, and Recent Mail is not a
-/// row in the store — it is a view over a foreign feed. A singleton sentinel
-/// keeps the data source honest about that rather than inventing a placeholder
-/// `MailFolder` that would then have to be excluded from every fetch.
+/// Stands in for Recent Mail in the sidebar.
 final class RecentMailbox: NSObject {
     static let shared = RecentMailbox()
     private override init() { super.init() }
+}
+
+/// A whole-index mail search. Its list is empty until a query is executed.
+final class SearchMailbox: NSObject {
+    static let shared = SearchMailbox()
+    private override init() { super.init() }
+}
+
+/// A user-named whole-index query.
+final class QuickSearchMailbox: NSObject {
+    let id: UUID
+    var name: String
+
+    init(search: MailQuickSearch) {
+        id = search.id
+        name = search.name
+        super.init()
+    }
 }
 
 /// A dimmed, unselectable hint shown while the Projects section is empty. A row
@@ -40,8 +129,18 @@ final class SidebarPlaceholder: NSObject {
     }
 }
 
+/// Footer separator without an opaque background, so the split item's sidebar
+/// material remains continuous behind the status and terminal button.
+private final class PlannerSidebarFooterView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSColor.separatorColor.setFill()
+        NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
+    }
+}
+
 /// The unified navigation sidebar: a Projects section holding the task outline,
-/// then a Mail section holding Recent Mail and the user's folders. One sidebar
+/// then a Mail section holding Recent and Hidden fields. One sidebar
 /// for both modes — selecting a row switches the trailing panes to whichever
 /// mode can show it.
 final class OutlineViewController: NSViewController {
@@ -50,12 +149,16 @@ final class OutlineViewController: NSViewController {
     let persistence: PersistenceController
     let model: ModelController
     let selection: SelectionModel
+    let events: EventCoordinator
     let mail: MailCoordinator
     let outlineView = PlannerOutlineView()
 
     private let userDefaults: UserDefaults
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let terminalButton = NSButton()
+    private static let footerHeight: CGFloat = 32
     private var projects: [Project] = []
-    private var folders: [MailFolder] = []
+    private var quickSearchMailboxes: [QuickSearchMailbox] = []
     private var isApplyingProgrammaticSelection = false
     private var isUpdatingUI = false
     private var renameTimer: Timer?
@@ -65,18 +168,19 @@ final class OutlineViewController: NSViewController {
 
     /// Tests observe begin-edit attempts; `editColumn` requires a window.
     var beginEditingTitleHandler: ((OutlineNode) -> Void)?
-    var beginEditingNameHandler: ((MailFolder) -> Void)?
 
     init(
         persistence: PersistenceController,
         model: ModelController,
         selection: SelectionModel,
+        events: EventCoordinator,
         mail: MailCoordinator,
         userDefaults: UserDefaults = .standard
     ) {
         self.persistence = persistence
         self.model = model
         self.selection = selection
+        self.events = events
         self.mail = mail
         self.userDefaults = userDefaults
         super.init(nibName: nil, bundle: nil)
@@ -104,14 +208,47 @@ final class OutlineViewController: NSViewController {
         // lets it through instead of stacking a second effect view on top of it.
         // Section headers are group rows inside the outline, not chrome above it.
         let root = NSView()
+        let footer = PlannerSidebarFooterView()
+        footer.translatesAutoresizingMaskIntoConstraints = false
+
+        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        footer.addSubview(statusLabel)
+
+        configureChromeButton(
+            terminalButton,
+            symbol: "terminal",
+            tooltip: "Show or Hide Terminal (⌘⌃T)",
+            action: #selector(MainSplitViewController.toggleTerminal(_:))
+        )
+        footer.addSubview(terminalButton)
+
         root.addSubview(scrollView)
+        root.addSubview(footer)
         view = root
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 4),
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: footer.topAnchor),
+
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            footer.heightAnchor.constraint(equalToConstant: Self.footerHeight),
+
+            statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 8),
+            statusLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            statusLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: terminalButton.leadingAnchor, constant: -4),
+
+            terminalButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -6),
+            terminalButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            terminalButton.widthAnchor.constraint(equalToConstant: 28),
+            terminalButton.heightAnchor.constraint(equalToConstant: 24),
         ])
     }
 
@@ -120,6 +257,25 @@ final class OutlineViewController: NSViewController {
         configureOutlineView()
         startObserving()
         reloadFromStore()
+        updateOutlookStatus()
+    }
+
+    private func configureChromeButton(
+        _ button: NSButton,
+        symbol: String,
+        tooltip: String,
+        action: Selector
+    ) {
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        button.symbolConfiguration = .init(pointSize: 14, weight: .regular)
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.bezelStyle = .accessoryBarAction
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = tooltip
+        button.action = action
+        button.target = nil
+        button.translatesAutoresizingMaskIntoConstraints = false
     }
 
     private func configureOutlineView() {
@@ -170,13 +326,30 @@ final class OutlineViewController: NSViewController {
             name: .plannerSelectionDidChange,
             object: selection
         )
-        // The Recent Mail row carries a count, so it has to redraw when the
-        // sweep lands.
+        // Both mail rows carry counts, so they redraw when the sweep lands.
         center.addObserver(
             self,
             selector: #selector(mailDidChange(_:)),
             name: .plannerMailDidChange,
             object: mail
+        )
+        center.addObserver(
+            self,
+            selector: #selector(eventsDidChange(_:)),
+            name: .plannerEventsDidChange,
+            object: events
+        )
+        center.addObserver(
+            self,
+            selector: #selector(mailDidChange(_:)),
+            name: .plannerMailSearchDidChange,
+            object: mail
+        )
+        center.addObserver(
+            self,
+            selector: #selector(outlookSyncProgressDidChange(_:)),
+            name: OutlookSyncProgressReporter.didChangeNotification,
+            object: nil
         )
     }
 
@@ -185,7 +358,9 @@ final class OutlineViewController: NSViewController {
     private func reloadFromStore() {
         let selectedUUID = selection.selectedNodeUUID
         projects = (try? model.allProjects()) ?? []
-        folders = model.mailFolders()
+        if quickSearchMailboxes.isEmpty {
+            quickSearchMailboxes = mail.quickSearches.map { QuickSearchMailbox(search: $0) }
+        }
         isApplyingProgrammaticSelection = true
         outlineView.reloadData()
         restoreExpansion()
@@ -197,24 +372,66 @@ final class OutlineViewController: NSViewController {
         isApplyingProgrammaticSelection = false
     }
 
-    /// The Mail section's contents changed: refetch the folders and rebuild
-    /// just that section, keeping the Projects tree (and its expansion) alone.
-    private func reloadMailSection() {
-        folders = model.mailFolders()
-        isApplyingProgrammaticSelection = true
-        outlineView.reloadItem(SidebarSection.mail, reloadChildren: true)
-        outlineView.expandItem(SidebarSection.mail)
-        if selection.mode == .mail {
-            revealMailbox(makeFirstResponder: false)
+    @objc private func mailDidChange(_ notification: Notification) {
+        updateOutlookStatus()
+        let existing = Dictionary(uniqueKeysWithValues: quickSearchMailboxes.map { ($0.id, $0) })
+        let updated = mail.quickSearches.map { search -> QuickSearchMailbox in
+            if let mailbox = existing[search.id] {
+                mailbox.name = search.name
+                return mailbox
+            }
+            return QuickSearchMailbox(search: search)
         }
-        isApplyingProgrammaticSelection = false
+        let structureChanged = updated.map(\.id) != quickSearchMailboxes.map(\.id)
+        quickSearchMailboxes = updated
+
+        if case let .quickSearch(id) = selection.mailbox,
+           !quickSearchMailboxes.contains(where: { $0.id == id }) {
+            selection.selectMailbox(.search)
+        }
+
+        if structureChanged {
+            outlineView.reloadItem(SidebarSection.mail, reloadChildren: true)
+            outlineView.expandItem(SidebarSection.mail)
+            if selection.mode == .mail { revealMailbox(makeFirstResponder: false) }
+            return
+        }
+
+        let mailboxes = children(of: SidebarSection.mail)
+        let rows = mailboxes
+            .map { outlineView.row(forItem: $0) }
+            .filter { $0 >= 0 }
+        guard !rows.isEmpty else { return }
+        outlineView.reloadData(
+            forRowIndexes: IndexSet(rows),
+            columnIndexes: IndexSet(integer: 0)
+        )
     }
 
-    @objc private func mailDidChange(_ notification: Notification) {
-        let row = outlineView.row(forItem: RecentMailbox.shared)
-        guard row >= 0 else { return }
-        outlineView.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+    @objc private func eventsDidChange(_ notification: Notification) {
+        updateOutlookStatus()
     }
+
+    @objc nonisolated private func outlookSyncProgressDidChange(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.updateOutlookStatus()
+        }
+    }
+
+    private func updateOutlookStatus() {
+        let presentation = OutlookSyncPresentation(
+            events: events.state,
+            mail: mail.state,
+            progress: OutlookSyncProgressReporter.shared.current
+        )
+        statusLabel.stringValue = presentation.text
+        statusLabel.toolTip = presentation.toolTip
+        statusLabel.setAccessibilityLabel(presentation.text)
+    }
+
+    var test_outlookStatusText: String { statusLabel.stringValue }
+    var test_outlookStatusToolTip: String? { statusLabel.toolTip }
+    var test_terminalButton: NSButton { terminalButton }
 
     @objc private func contextDidSave(_ notification: Notification) {
         if notification.userInfo?[NSInvalidatedAllObjectsKey] != nil {
@@ -225,13 +442,6 @@ final class OutlineViewController: NSViewController {
         let inserted = objects(in: notification, key: NSInsertedObjectsKey)
             .filter { !$0.objectID.isTemporaryID }
         let deleted = objects(in: notification, key: NSDeletedObjectsKey)
-
-        // Folder rows carry message counts, so folder *and* message changes
-        // both change what the Mail section says.
-        let updated = objects(in: notification, key: NSUpdatedObjectsKey)
-        if (inserted + deleted + updated).contains(where: { $0 is MailFolder || $0 is SavedMessage }) {
-            reloadMailSection()
-        }
 
         let insertedProjects = inserted.compactMap { $0 as? Project }
         let insertedTasks = inserted.compactMap { $0 as? TaskItem }
@@ -281,10 +491,6 @@ final class OutlineViewController: NSViewController {
             if object is Project || object is TaskItem {
                 outlineView.reloadItem(object)
             }
-        }
-        if outlineView.currentEditor() == nil,
-           (updated + refreshed).contains(where: { $0 is MailFolder || $0 is SavedMessage }) {
-            reloadMailSection()
         }
     }
 
@@ -396,8 +602,7 @@ final class OutlineViewController: NSViewController {
 
     // MARK: - Selection
 
-    /// One highlight: a project or task in the Projects section, or Recent
-    /// Mail / a folder in Mail. The trailing panes follow that row.
+    /// One highlight: a project or task, or Recent Mail.
     @objc private func plannerSelectionDidChange(_ notification: Notification) {
         let fields = notification.userInfo?[SelectionUserInfoKey.changedFields] as? Set<String> ?? []
         if fields.contains(SelectionField.mode.rawValue) {
@@ -414,8 +619,7 @@ final class OutlineViewController: NSViewController {
             isApplyingProgrammaticSelection = true
             reveal(uuid: selection.selectedNodeUUID, makeFirstResponder: true)
             isApplyingProgrammaticSelection = false
-        }
-        if fields.contains(SelectionField.mailbox.rawValue), selection.mode == .mail {
+        } else if fields.contains(SelectionField.mailbox.rawValue), selection.mode == .mail {
             isApplyingProgrammaticSelection = true
             revealMailbox(makeFirstResponder: true)
             isApplyingProgrammaticSelection = false
@@ -438,12 +642,15 @@ final class OutlineViewController: NSViewController {
     }
 
     private func revealMailbox(makeFirstResponder: Bool) {
-        let item: Any
-        if let uuid = selection.selectedFolderUUID,
-           let folder = folders.first(where: { $0.uuid == uuid }) {
-            item = folder
-        } else {
+        let item: NSObject
+        switch selection.mailbox {
+        case .recent:
             item = RecentMailbox.shared
+        case .search:
+            item = SearchMailbox.shared
+        case let .quickSearch(id):
+            guard let mailbox = quickSearchMailboxes.first(where: { $0.id == id }) else { return }
+            item = mailbox
         }
         let row = outlineView.row(forItem: item)
         guard row >= 0 else { return }
@@ -480,7 +687,7 @@ final class OutlineViewController: NSViewController {
     }
 
     /// Selecting a row picks the panes that can show it: a project or task
-    /// opens the calendar, a mailbox opens the reader. Mode is not a separate
+    /// opens the calendar, while Recent Mail opens the reader. Mode is not a separate
     /// command — it is the kind of row that is selected.
     private func publishOutlineSelection() {
         guard !isApplyingProgrammaticSelection else { return }
@@ -489,11 +696,13 @@ final class OutlineViewController: NSViewController {
             selection.selectNode(uuid: node.uuid)
         case is RecentMailbox:
             selection.selectMailbox(.recent)
-        case let folder as MailFolder:
-            selection.selectMailbox(.folder(folder.uuid))
+        case is SearchMailbox:
+            selection.selectMailbox(.search)
+        case let mailbox as QuickSearchMailbox:
+            selection.selectMailbox(.quickSearch(mailbox.id))
         default:
             // Clicking empty space clears the node in tasks mode; mail always
-            // has a mailbox, so there the highlight snaps back instead.
+                // has a selected field, so there the highlight snaps back instead.
             if selection.mode == .tasks {
                 selection.selectNode(uuid: nil)
             } else {
@@ -539,12 +748,8 @@ final class OutlineViewController: NSViewController {
               row >= 0,
               row == outlineView.selectedRow
         else { return }
-        // Recent Mail has no name to edit, so the gesture ignores it.
-        switch outlineView.item(atRow: row) {
-        case let node as OutlineNode: beginEditingTitle(of: node)
-        case let folder as MailFolder: beginEditingName(of: folder)
-        default: break
-        }
+        guard let node = outlineView.item(atRow: row) as? OutlineNode else { return }
+        beginEditingTitle(of: node)
     }
 
     @objc private func toggleClickedRow() {
@@ -555,7 +760,7 @@ final class OutlineViewController: NSViewController {
         let item = outlineView.item(atRow: row)
         if let task = item as? TaskItem, task.subtasks.isEmpty {
             selection.selectNode(uuid: task.uuid)
-            NSApp.sendAction(#selector(MainSplitViewController.showTaskInfo(_:)), to: nil, from: self)
+            NSApp.sendAction(#selector(MainSplitViewController.openTaskWindow(_:)), to: nil, from: self)
             return
         }
         if outlineView.isItemExpanded(item) {
@@ -631,11 +836,8 @@ final class OutlineViewController: NSViewController {
     }
 
     func beginEditingSelectedTitle() {
-        switch outlineView.item(atRow: outlineView.selectedRow) {
-        case let node as OutlineNode: beginEditingTitle(of: node)
-        case let folder as MailFolder: beginEditingName(of: folder)
-        default: break
-        }
+        guard let node = outlineView.item(atRow: outlineView.selectedRow) as? OutlineNode else { return }
+        beginEditingTitle(of: node)
     }
 
     func beginEditingTitle(of node: OutlineNode) {
@@ -643,13 +845,6 @@ final class OutlineViewController: NSViewController {
         beginEditingTitleHandler?(node)
         if let parent = node.outlineParent { outlineView.expandItem(parent) }
         beginEditing(item: node)
-    }
-
-    /// Recent Mail is not renamable, so the caller passes a folder.
-    func beginEditingName(of folder: MailFolder) {
-        cancelPendingRename()
-        beginEditingNameHandler?(folder)
-        beginEditing(item: folder)
     }
 
     private func beginEditing(item: AnyObject) {
@@ -710,7 +905,12 @@ extension OutlineViewController: NSOutlineViewDataSource {
         if section === SidebarSection.projects {
             return projects.isEmpty ? [SidebarPlaceholder.noProjects] : projects
         }
-        return [RecentMailbox.shared] + folders
+        // Recent first, then named quick searches, then the generic Search
+        // mailbox last — Search is the catch-all, not a pinned shortcut.
+        var mailboxes: [NSObject] = [RecentMailbox.shared]
+        mailboxes.append(contentsOf: quickSearchMailboxes)
+        mailboxes.append(SearchMailbox.shared)
+        return mailboxes
     }
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
@@ -762,7 +962,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         switch item {
         case is SidebarSection: return 26
-        case is RecentMailbox, is MailFolder: return 24
+        case is RecentMailbox, is SearchMailbox, is QuickSearchMailbox: return 24
         default: return 21
         }
     }
@@ -774,7 +974,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
         if let placeholder = item as? SidebarPlaceholder {
             return makePlaceholderCell(text: placeholder.text)
         }
-        if item is RecentMailbox || item is MailFolder {
+        if item is RecentMailbox || item is SearchMailbox || item is QuickSearchMailbox {
             return makeConfiguredMailboxCell(for: item)
         }
         let identifier = NSUserInterfaceItemIdentifier("TitleCell")
@@ -956,19 +1156,23 @@ extension OutlineViewController: NSOutlineViewDelegate {
             ?? makeMailboxCell(identifier: identifier)
         (cell.textField as? TitleTextField)?.allowsFirstResponder = false
 
-        if let folder = item as? MailFolder {
+        if item is SearchMailbox {
             cell.apply(
-                name: folder.name,
+                name: MailLabels.searchMailName,
+                symbol: "magnifyingglass",
+                count: mail.searchResults.count
+            )
+        } else if let mailbox = item as? QuickSearchMailbox {
+            cell.apply(
+                name: mailbox.name,
                 symbol: "folder",
-                count: folder.messages.count,
-                isEditable: true
+                count: 0
             )
         } else {
             cell.apply(
                 name: MailLabels.recentMailName,
                 symbol: "tray",
-                count: mail.messages.count,
-                isEditable: false
+                count: mail.messages.count
             )
         }
         return cell
@@ -1002,11 +1206,7 @@ extension OutlineViewController: NSOutlineViewDelegate {
         field.allowsFirstResponder = false
         field.delegate = self
         // The name absorbs the row's slack so the count stays pinned right.
-        // Without this the two mailbox kinds lay out differently for a reason
-        // that has nothing to do with either: `apply` makes folders editable
-        // and Recent Mail not, and an editable NSTextField reports no intrinsic
-        // width while a non-editable one reports its string width. Stating the
-        // priorities here decides the layout instead of inheriting that.
+        // Let the name absorb slack so the count stays pinned to the trailing edge.
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -1051,11 +1251,11 @@ private final class MailboxCellView: NSTableCellView {
     var countLabel: NSTextField!
     private var count = 0
 
-    func apply(name: String, symbol: String, count: Int, isEditable: Bool) {
+    func apply(name: String, symbol: String, count: Int) {
         iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
         textField?.stringValue = name
-        textField?.isEditable = isEditable
+        textField?.isEditable = false
         self.count = count
         refreshCount()
         setAccessibilityLabel(MailLabels.mailboxAccessibilityLabel(name: name, count: count))
@@ -1170,9 +1370,6 @@ extension OutlineViewController: NSTextFieldDelegate {
         case let node as OutlineNode:
             guard trimmed != node.title else { return }
             try? model.setTitle(node, trimmed)
-        case let folder as MailFolder:
-            guard trimmed != folder.name else { return }
-            try? model.renameMailFolder(folder, to: trimmed)
         default:
             break
         }
@@ -1189,7 +1386,6 @@ extension OutlineViewController: NSTextFieldDelegate {
         if let field = control as? TitleTextField {
             switch editedItem(for: field) {
             case let node as OutlineNode: restoreTitle(node, on: field)
-            case let folder as MailFolder: field.stringValue = folder.name
             default: break
             }
         }

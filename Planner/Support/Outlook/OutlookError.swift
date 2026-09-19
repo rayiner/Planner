@@ -93,7 +93,7 @@ nonisolated enum OutlookError: LocalizedError, Equatable, ExternallyResolvableEr
         return fromAppleEvent(code: code)
     }
 
-    private static func fromAppleEvent(code: Int) -> OutlookError {
+    static func fromAppleEvent(code: Int) -> OutlookError {
         switch code {
         // Consent revoked mid-fetch is the same refusal the preflight maps.
         case -1743: return .permissionDenied

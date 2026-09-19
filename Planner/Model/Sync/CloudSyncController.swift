@@ -220,8 +220,7 @@ final class CloudSyncController {
                 \(outcome.repair.titlesFilled, privacy: .public) titles, \
                 \(outcome.repair.dualParentsResolved, privacy: .public) dual parents, \
                 \(outcome.repair.cyclesBroken, privacy: .public) cycles, \
-                \(outcome.repair.orphansAdopted, privacy: .public) orphans, \
-                \(outcome.repair.messagesRefiled, privacy: .public) messages refiled
+                \(outcome.repair.orphansAdopted, privacy: .public) orphans
                 """
             )
         }

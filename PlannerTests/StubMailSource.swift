@@ -13,12 +13,23 @@ final class StubMailSource: MailSource, @unchecked Sendable {
 
     private let lock = NSLock()
     private var pendingEnvelopes: [CheckedContinuation<[MailMessage], Error>] = []
+    private var pendingSearches: [
+        (query: String, continuation: CheckedContinuation<[MailMessage], Error>)
+    ] = []
     private var pendingDetails: [(id: Int64, continuation: CheckedContinuation<MailMessageDetail, Error>)] = []
     private var _requestedRanges: [Range<Date>] = []
     private var _userInitiatedFlags: [Bool] = []
     private var _requestedDetailIDs: [Int64] = []
     private var _revealedIDs: [Int64] = []
+    private var _hiddenChanges: [(id: Int64, hidden: Bool)] = []
+    private var _availableCategories: [OutlookCategory] = []
+    private var _folders: [MailFolder] = []
+    private var _categoryChanges: [(id: Int64, categoryID: Int64, present: Bool)] = []
+    private var hiddenChangeError: Error?
+    private var hiddenChangeErrorsByID: [Int64: Error] = [:]
+    private var categoryChangeErrorsByID: [Int64: Error] = [:]
     private var _knownIDsPerRequest: [[Int64]] = []
+    private var _rebuildCount = 0
 
     /// Every range the coordinator has asked for, in order.
     var requestedRanges: [Range<Date>] {
@@ -41,12 +52,24 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         return _revealedIDs
     }
 
+    var hiddenChanges: [(id: Int64, hidden: Bool)] {
+        lock.withLock { _hiddenChanges }
+    }
+
+    var categoryChanges: [(id: Int64, categoryID: Int64, present: Bool)] {
+        lock.withLock { _categoryChanges }
+    }
+
     /// The ids the coordinator claimed to already hold envelopes for, per
     /// sweep. What the incremental plan is computed from, so a test can catch a
     /// change that quietly turns every refresh into a full re-read.
     var knownIDsPerRequest: [[Int64]] {
         lock.lock(); defer { lock.unlock() }
         return _knownIDsPerRequest
+    }
+
+    var rebuildCount: Int {
+        lock.withLock { _rebuildCount }
     }
 
     var pendingCount: Int {
@@ -57,6 +80,16 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     var pendingDetailCount: Int {
         lock.lock(); defer { lock.unlock() }
         return pendingDetails.count
+    }
+
+    var pendingSearchCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return pendingSearches.count
+    }
+
+    var requestedSearchQueries: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return pendingSearches.map(\.query)
     }
 
     /// Overrides the protocol's default, which drops `known` on the floor, so
@@ -75,6 +108,10 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     private func recordKnown(_ ids: [Int64]) {
         lock.lock(); defer { lock.unlock() }
         _knownIDsPerRequest.append(ids)
+    }
+
+    func rebuildIndex() async throws {
+        lock.withLock { _rebuildCount += 1 }
     }
 
     func envelopes(in range: Range<Date>, userInitiated: Bool) async throws -> [MailMessage] {
@@ -96,8 +133,60 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         }
     }
 
+    func search(query: String) async throws -> [MailMessage] {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            pendingSearches.append((query, continuation))
+            lock.unlock()
+        }
+    }
+
+    func availableCategories() async throws -> [OutlookCategory] {
+        lock.withLock { _availableCategories }
+    }
+
+    func folders() async throws -> [MailFolder] {
+        lock.withLock { _folders }
+    }
+
+    func setFolders(_ folders: [MailFolder]) {
+        lock.withLock { _folders = folders }
+    }
+
+    func setAvailableCategories(_ categories: [OutlookCategory]) {
+        lock.withLock { _availableCategories = categories }
+    }
+
     func reveal(messageID id: Int64) async throws {
         lock.withLock { _revealedIDs.append(id) }
+    }
+
+    func setHidden(_ hidden: Bool, messageID id: Int64) async throws {
+        let error: Error? = lock.withLock {
+            _hiddenChanges.append((id, hidden))
+            return hiddenChangeErrorsByID[id] ?? hiddenChangeError
+        }
+        if let error { throw error }
+    }
+
+    func failHiddenChanges(with error: Error?) {
+        lock.withLock { hiddenChangeError = error }
+    }
+
+    func failHiddenChange(id: Int64, with error: Error) {
+        lock.withLock { hiddenChangeErrorsByID[id] = error }
+    }
+
+    func setCategory(_ categoryID: Int64, present: Bool, messageID id: Int64) async throws {
+        let error: Error? = lock.withLock {
+            _categoryChanges.append((id, categoryID, present))
+            return categoryChangeErrorsByID[id]
+        }
+        if let error { throw error }
+    }
+
+    func failCategoryChange(id: Int64, with error: Error) {
+        lock.withLock { categoryChangeErrorsByID[id] = error }
     }
 
     /// Completes the oldest outstanding sweep.
@@ -128,6 +217,27 @@ final class StubMailSource: MailSource, @unchecked Sendable {
         pendingEnvelopes = []
         lock.unlock()
         for continuation in pending { continuation.resume(throwing: error) }
+    }
+
+    func finishSearch(with messages: [MailMessage]) {
+        lock.lock()
+        let continuation = pendingSearches.isEmpty ? nil : pendingSearches.removeFirst().continuation
+        lock.unlock()
+        continuation?.resume(returning: messages)
+    }
+
+    func finishSearch(throwing error: Error) {
+        lock.lock()
+        let continuation = pendingSearches.isEmpty ? nil : pendingSearches.removeFirst().continuation
+        lock.unlock()
+        continuation?.resume(throwing: error)
+    }
+
+    func finishLatestSearch(with messages: [MailMessage]) {
+        lock.lock()
+        let continuation = pendingSearches.popLast()?.continuation
+        lock.unlock()
+        continuation?.resume(returning: messages)
     }
 
     /// Completes the most recent outstanding sweep, leaving older ones hanging
@@ -164,11 +274,14 @@ final class StubMailSource: MailSource, @unchecked Sendable {
     func drain() {
         lock.lock()
         let envelopes = pendingEnvelopes
+        let searches = pendingSearches
         let details = pendingDetails
         pendingEnvelopes = []
+        pendingSearches = []
         pendingDetails = []
         lock.unlock()
         for continuation in envelopes { continuation.resume(returning: []) }
+        for entry in searches { entry.continuation.resume(returning: []) }
         for entry in details { entry.continuation.resume(throwing: MailSourceError.messageUnavailable) }
     }
 }
@@ -182,7 +295,12 @@ extension MailMessage {
         senderName: String = "Ada Lovelace",
         senderAddress: String = "ada@example.com",
         receivedAt: Date = Date(timeIntervalSince1970: 1_800_000_000),
-        isRead: Bool = false
+        isRead: Bool = false,
+        isHidden: Bool = false,
+        categoryIDs: Set<Int64> = [],
+        // Not 0: that is Outlook's built-in set, which no message belongs to,
+        // and a message with no account can take no category at all.
+        accountUID: Int64 = 1
     ) -> MailMessage {
         MailMessage(
             id: id,
@@ -190,7 +308,10 @@ extension MailMessage {
             senderName: senderName,
             senderAddress: senderAddress,
             receivedAt: receivedAt,
-            isRead: isRead
+            isRead: isRead,
+            isHidden: isHidden,
+            categoryIDs: categoryIDs,
+            accountUID: accountUID
         )
     }
 }

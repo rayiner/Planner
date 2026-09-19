@@ -4,20 +4,31 @@ import Foundation
 ///
 /// Planner owns one daemon process, talks NDJSON on its stdin/stdout, and
 /// keeps the index at `~/Library/Application Support/Planner/olsyncmail.sqlite`.
-/// Envelope lists and bodies come from that database after a `sync`; opening a
-/// message in Outlook is still a user-initiated Apple event, because that is a
-/// command, not a read.
+/// Envelope lists and bodies come from that database after a `sync` of every
+/// non-hidden Outlook message. The Recent Mail window only filters the list;
+/// search and MCP see the whole index. Opening a message and changing its
+/// `Hide` category are user-initiated Apple events.
 nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
     struct Configuration: Sendable, Equatable {
         /// `nil` means "whichever Exchange account Outlook lists first" — kept
         /// so an existing `defaults write` does not become a dead key, even
         /// though the indexer currently reads the default Outlook profile.
         var accountName: String?
+        /// A hand-set flat ceiling on one Recent Mail window. `nil` — the
+        /// normal case — scales the ceiling with the window instead; see
+        /// `messageLimit(for:)`.
+        var maximumMessages: Int?
+
         /// A ceiling on one Recent Mail window, so a firehose inbox cannot
         /// stall the list. The index itself is not capped.
-        var maximumMessages: Int
-
-        static let defaultMaximumMessages = 400
+        ///
+        /// Per day, because the window runs from one day to a month: a flat
+        /// number with comfortable headroom over three days is a silent
+        /// truncation over thirty, and a truncated window is worse than a slow
+        /// one — the list simply stops mid-month with nothing saying why. The
+        /// value is about three times the busiest mailbox measured (~50
+        /// messages a day), so it stays a backstop rather than a limit.
+        static let defaultMaximumMessagesPerDay = 150
 
         static let accountDefaultsKey = "mail.accountName"
         static let maximumDefaultsKey = "mail.maximumMessages"
@@ -28,8 +39,17 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
             let maximum = defaults.integer(forKey: maximumDefaultsKey)
             return Configuration(
                 accountName: (account?.isEmpty ?? true) ? nil : account,
-                maximumMessages: maximum > 0 ? maximum : defaultMaximumMessages
+                maximumMessages: maximum > 0 ? maximum : nil
             )
+        }
+
+        /// Whole days, rounded, so a window that crosses a daylight-saving
+        /// boundary is still the number of days the user asked for.
+        func messageLimit(for range: Range<Date>) -> Int {
+            if let maximumMessages { return maximumMessages }
+            let span = range.upperBound.timeIntervalSince(range.lowerBound) / 86_400
+            let days = max(1, Int(span.rounded()))
+            return days * Self.defaultMaximumMessagesPerDay
         }
     }
 
@@ -37,32 +57,32 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
     var displayName: String { configuration.accountName ?? "Inbox" }
 
     private let configuration: Configuration
-    private let databaseURL: URL
-    private let daemon: OlSyncMailDaemon?
+    private let session: OlSyncOutlookSession?
     private let lock = NSLock()
     /// Outlook record id → indexer row id. `message` is addressed by the
     /// latter; Recent Mail and reveal still use the former.
     private var rowIDs: [Int64: Int64] = [:]
-    private var ready = false
+    private var categoryCatalog: [OutlookCategory] = []
 
     init(
         configuration: Configuration = .fromDefaults(),
         databaseURL: URL = OlSyncMailProtocol.databaseURL(),
-        daemon: OlSyncMailDaemon? = nil
+        daemon: OlSyncMailDaemon? = nil,
+        session: OlSyncOutlookSession? = nil
     ) {
         self.configuration = configuration
-        self.databaseURL = databaseURL
-        if let daemon {
-            self.daemon = daemon
+        if let session {
+            self.session = session
+        } else if let daemon {
+            self.session = OlSyncOutlookSession(daemon: daemon, databaseURL: databaseURL)
         } else if let executable = OlSyncMailDaemon.resolveExecutable() {
-            self.daemon = OlSyncMailDaemon(executable: executable)
+            self.session = OlSyncOutlookSession(
+                daemon: OlSyncMailDaemon(executable: executable),
+                databaseURL: databaseURL
+            )
         } else {
-            self.daemon = nil
+            self.session = nil
         }
-    }
-
-    deinit {
-        daemon?.shutdown()
     }
 
     // MARK: - MailSource
@@ -76,18 +96,42 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
         known _: [MailMessage],
         userInitiated: Bool
     ) async throws -> [MailMessage] {
-        let daemon = try helper()
-        try await prepare(daemon: daemon)
-        try await synchronize(daemon: daemon, in: range, userInitiated: userInitiated)
-        return try await loadEnvelopes(daemon: daemon, in: range)
+        let session = try helper()
+        try await synchronize(session: session, userInitiated: userInitiated)
+        return try await loadEnvelopes(session: session, in: range)
+    }
+
+    func folders() async throws -> [MailFolder] {
+        let session = try helper()
+        return try await session.folders()
+    }
+
+    func search(query: String) async throws -> [MailMessage] {
+        let session = try helper()
+        let pageSize = 500
+        var hits: [[String: Any]] = []
+        while true {
+            let page = try await session.search(
+                query: query,
+                limit: pageSize,
+                offset: hits.count
+            )
+            hits.append(contentsOf: page.map(\.value))
+            if page.count < pageSize { break }
+        }
+        let categories = try await session.categories()
+        return messages(from: hits, categories: categories)
+    }
+
+    func availableCategories() async throws -> [OutlookCategory] {
+        lock.withLock { categoryCatalog }
     }
 
     func detail(forMessageID id: Int64) async throws -> MailMessageDetail {
-        let daemon = try helper()
-        try await prepare(daemon: daemon)
+        let session = try helper()
         let rowID = lock.withLock { rowIDs[id] } ?? id
         do {
-            let object = try await daemon.message(id: rowID)
+            let object = try await session.message(id: rowID).value
             return OlSyncMailProtocol.detail(from: object, fallbackID: id)
         } catch let error as OlSyncMailError {
             if case .failed(let message) = error, message.contains("no message") {
@@ -101,37 +145,35 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
         try Self.runOnMessage(OutlookMailScripting.reveal(messageID: id))
     }
 
-    // MARK: - Session
-
-    private func helper() throws -> OlSyncMailDaemon {
-        guard let daemon else { throw OlSyncMailError.helperMissing }
-        return daemon
+    func setHidden(_ hidden: Bool, messageID id: Int64) async throws {
+        try Self.runOSAScript(OutlookMailScripting.setHidden(hidden, messageID: id))
     }
 
-    private func prepare(daemon: OlSyncMailDaemon) async throws {
-        if lock.withLock({ ready }) { return }
-        let hello = try await daemon.hello()
-        let protocolVersion = UInt32(OlSyncMailProtocol.int64(hello["protocol"]) ?? 0)
-        guard protocolVersion == OlSyncMailProtocol.version else {
-            throw OlSyncMailError.protocolMismatch(protocolVersion)
+    func setCategory(_ categoryID: Int64, present: Bool, messageID id: Int64) async throws {
+        guard let recordID = lock.withLock({
+            categoryCatalog.first { $0.id == categoryID }?.outlookRecordID
+        }) else {
+            throw OlSyncMailError.badRequest("Unknown Outlook category.")
         }
-        do {
-            _ = try await daemon.open(database: databaseURL)
-        } catch OlSyncMailError.schemaMismatch {
-            try Self.removeDatabase(at: databaseURL)
-            _ = try await daemon.open(database: databaseURL)
-        }
-        lock.withLock { ready = true }
+        try Self.runOSAScript(
+            OutlookMailScripting.setCategory(recordID, present: present, messageID: id)
+        )
+    }
+
+    // MARK: - Session
+
+    private func helper() throws -> OlSyncOutlookSession {
+        guard let session else { throw OlSyncMailError.helperMissing }
+        return session
     }
 
     private func synchronize(
-        daemon: OlSyncMailDaemon,
-        in range: Range<Date>,
+        session: OlSyncOutlookSession,
         userInitiated: Bool
     ) async throws {
         let pending: [String: Any]
         do {
-            pending = try await daemon.refresh()
+            pending = try await session.refresh().value
         } catch {
             // No prior sync: refresh still needs Outlook's profile. Fall
             // through to `sync`, which reports the same permission errors.
@@ -139,21 +181,49 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
             PlannerLog.mail.info("olsyncmail refresh skipped: \(error.localizedDescription, privacy: .public)")
         }
         let changed = OlSyncMailProtocol.int64(pending["changed_since_last_sync"]) ?? 1
+        let indexed = OlSyncMailProtocol.int64(pending["indexed_messages"]) ?? 0
         let lastSync = OlSyncMailProtocol.int64(pending["last_sync"])
-        guard userInitiated || lastSync == nil || changed > 0 else {
+        guard userInitiated || lastSync == nil || indexed == 0 || changed > 0 else {
             PlannerLog.mail.info("olsyncmail: index is current")
             return
         }
-        let since = Int64(range.lowerBound.timeIntervalSince1970)
-        try await daemon.sync(since: since)
+        // The Recent Mail window only filters the list. Search and MCP read
+        // this index, so a launch sync has to take every non-hidden message.
+        try await session.syncMail()
     }
 
-    private func loadEnvelopes(daemon: OlSyncMailDaemon, in range: Range<Date>) async throws -> [MailMessage] {
+    func rebuildIndex() async throws {
+        try await helper().fullResync()
+    }
+
+    private func loadEnvelopes(
+        session: OlSyncOutlookSession,
+        in range: Range<Date>
+    ) async throws -> [MailMessage] {
         let query = OlSyncMailProtocol.windowQuery(in: range)
-        let limit = configuration.maximumMessages
-        let hits = try await daemon.search(query: query, limit: limit)
-        let recordIDs = hits.compactMap { OlSyncMailProtocol.int64($0["record_id"]) }
-        let readFlags = OlSyncMailReadFlags.load(database: databaseURL, recordIDs: recordIDs)
+        let limit = configuration.messageLimit(for: range)
+        let hits = try await session.search(query: query, limit: limit).map(\.value)
+        let categories = try await session.categories()
+        let messages = messages(from: hits, categories: categories, in: range)
+        PlannerLog.mail.info(
+            "olsyncmail search kept \(messages.count, privacy: .public) of \(hits.count, privacy: .public) hits"
+        )
+        return messages
+    }
+
+    /// Converts search hits and remembers the daemon's internal row ids so a
+    /// selected hit can immediately ask `message` for its body.
+    private func messages(
+        from hits: [[String: Any]],
+        categories: [OutlookCategory],
+        in range: Range<Date>? = nil
+    ) -> [MailMessage] {
+        let hiddenCategoryIDs = Set(categories.compactMap {
+            $0.name.caseInsensitiveCompare(OutlookCategory.hiddenName) == .orderedSame ? $0.id : nil
+        })
+        let availableCategories = categories.filter {
+            $0.name.caseInsensitiveCompare(OutlookCategory.hiddenName) != .orderedSame
+        }
         var mapping: [Int64: Int64] = [:]
         let messages: [MailMessage] = hits.compactMap { hit in
             let recordID = OlSyncMailProtocol.int64(hit["record_id"])
@@ -161,23 +231,20 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
             if let recordID, let rowID {
                 mapping[recordID] = rowID
             }
-            let isRead = recordID.flatMap { readFlags[$0] } ?? false
-            guard let message = OlSyncMailProtocol.envelope(hit: hit, isRead: isRead) else { return nil }
-            return range.contains(message.receivedAt) ? message : nil
+            let categoryIDs = OlSyncMailProtocol.categoryIDs(fromHit: hit)
+            guard let message = OlSyncMailProtocol.envelope(
+                hit: hit,
+                isHidden: !categoryIDs.isDisjoint(with: hiddenCategoryIDs),
+                categoryIDs: categoryIDs
+            ) else { return nil }
+            if let range, !range.contains(message.receivedAt) { return nil }
+            return message
         }
-        lock.withLock { rowIDs.merge(mapping, uniquingKeysWith: { _, new in new }) }
-        PlannerLog.mail.info(
-            "olsyncmail search kept \(messages.count, privacy: .public) of \(hits.count, privacy: .public) hits"
-        )
+        lock.withLock {
+            rowIDs.merge(mapping, uniquingKeysWith: { _, new in new })
+            categoryCatalog = availableCategories
+        }
         return messages
-    }
-
-    private static func removeDatabase(at url: URL) throws {
-        let extras = ["", "-wal", "-shm"]
-        for extra in extras {
-            let file = extra.isEmpty ? url : URL(fileURLWithPath: url.path + extra)
-            try? FileManager.default.removeItem(at: file)
-        }
     }
 
     private static func runOnMessage(_ source: String) throws {
@@ -191,5 +258,37 @@ nonisolated final class OutlookMailSource: MailSource, @unchecked Sendable {
             if mapped.isMissingObject { throw MailSourceError.messageUnavailable }
             throw mapped
         }
+    }
+
+    private static func runOSAScript(_ source: String) throws {
+        let process = Process()
+        let input = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-"]
+        process.standardInput = input
+        process.standardOutput = Pipe()
+        process.standardError = errors
+        do {
+            try process.run()
+        } catch {
+            throw OutlookError.scriptingUnavailable
+        }
+        input.fileHandleForWriting.write(Data(source.utf8))
+        try? input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        guard process.terminationStatus != 0 else { return }
+
+        let text = String(
+            data: errors.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        let code = text
+            .split(whereSeparator: { !$0.isNumber && $0 != "-" })
+            .compactMap { Int($0) }
+            .last
+        let mapped = code.map(OutlookError.fromAppleEvent(code:)) ?? .scriptingUnavailable
+        if mapped.isMissingObject { throw MailSourceError.messageUnavailable }
+        throw mapped
     }
 }

@@ -10,11 +10,6 @@ final class TaskItem: NSManagedObject, OutlineNode {
     @NSManaged var deadline: Date?
     @NSManaged var isCompleted: Bool
     @NSManaged var sortIndex: Int64
-    /// The `SavedMessage` this task came from, if any. A soft link by UUID
-    /// rather than a relationship, the same shape selection and reveal use:
-    /// deleting the message must leave the task intact, and a dangling link is
-    /// simply a chip the inspector does not draw.
-    @NSManaged var sourceMessageUUID: UUID?
     @NSManaged var createdAt: Date
     @NSManaged var updatedAt: Date
     @NSManaged var project: Project?

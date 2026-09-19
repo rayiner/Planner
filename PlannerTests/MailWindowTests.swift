@@ -61,15 +61,40 @@ final class MailWindowTests: XCTestCase {
         XCTAssertEqual(window.lowerBound, day(0))
     }
 
+    func testThirtyDayWindowReachesBackTwentyNineDays() {
+        let window = MailWindow.current(days: 30, now: anchor, calendar: calendar)
+        XCTAssertEqual(window.lowerBound, day(-29))
+        XCTAssertEqual(window.upperBound, day(1))
+    }
+
     func testDaysAboveMaximumClampDown() {
         let window = MailWindow.current(days: 99, now: anchor, calendar: calendar)
-        XCTAssertEqual(window.lowerBound, day(-6))
+        XCTAssertEqual(window.lowerBound, day(-(MailWindow.maximumDays - 1)))
     }
 
     func testNegativeDaysClampUpRatherThanInvertingTheRange() {
         let window = MailWindow.current(days: -5, now: anchor, calendar: calendar)
         XCTAssertLessThanOrEqual(window.lowerBound, window.upperBound)
         XCTAssertEqual(window.lowerBound, day(0))
+    }
+
+    // MARK: - Choices
+
+    func testTheChoicesRunFromOneDayToTheMaximum() {
+        XCTAssertEqual(MailWindow.choices.first, MailWindow.minimumDays)
+        XCTAssertEqual(MailWindow.choices.last, MailWindow.maximumDays)
+        XCTAssertTrue(MailWindow.choices.contains(MailWindow.defaultDays))
+        XCTAssertEqual(MailWindow.choices, MailWindow.choices.sorted())
+    }
+
+    /// A length that is not on the menu narrows to the one below it, so the
+    /// sweep never quietly widens past what was asked for.
+    func testAnUnlistedLengthSnapsDown() {
+        XCTAssertEqual(MailWindow.choice(for: 20), 7)
+        XCTAssertEqual(MailWindow.choice(for: 30), 30)
+        XCTAssertEqual(MailWindow.choice(for: 99), MailWindow.maximumDays)
+        XCTAssertEqual(MailWindow.choice(for: 0), MailWindow.minimumDays)
+        XCTAssertEqual(MailWindow.choice(for: -4), MailWindow.minimumDays)
     }
 
     // MARK: - Defaults

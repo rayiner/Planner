@@ -50,7 +50,13 @@ nonisolated extension Calendar {
     /// Exclusive end of the visible range: `count` weeks of days after `start`.
     /// `start` is the first visible day, not snapped to Monday.
     func endOfWeeks(from start: Date, count: Int) -> Date {
-        date(byAdding: .day, value: max(0, count) * 7, to: startOfDay(for: start))!
+        endOfDays(from: start, count: max(0, count) * 7)
+    }
+
+    /// Exclusive end of the visible range, in days. The calendar grid is as
+    /// many days tall as the pane allows, so it is rarely whole weeks.
+    func endOfDays(from start: Date, count: Int) -> Date {
+        date(byAdding: .day, value: max(0, count), to: startOfDay(for: start))!
     }
 
     /// `count` consecutive start-of-days beginning at `start`.
@@ -82,8 +88,12 @@ nonisolated extension Calendar {
     /// The visible span split so the header can weight them differently:
     /// ("Aug 10 – Sep 6", "2026").
     func weekRangeComponents(from start: Date, count: Int) -> (span: String, year: String) {
+        dayRangeComponents(from: start, days: max(1, count) * 7)
+    }
+
+    func dayRangeComponents(from start: Date, days: Int) -> (span: String, year: String) {
         let first = startOfDay(for: start)
-        let last = date(byAdding: .day, value: max(1, count) * 7 - 1, to: first)!
+        let last = date(byAdding: .day, value: max(1, days) - 1, to: first)!
 
         let dayMonth = DateFormatter()
         dayMonth.calendar = self
@@ -104,7 +114,11 @@ nonisolated extension Calendar {
 
     /// Title for the visible span, e.g. "Aug 10 – Sep 6, 2026".
     func weekRangeString(from weekStart: Date, count: Int) -> String {
-        let parts = weekRangeComponents(from: weekStart, count: count)
+        dayRangeString(from: weekStart, days: max(1, count) * 7)
+    }
+
+    func dayRangeString(from start: Date, days: Int) -> String {
+        let parts = dayRangeComponents(from: start, days: days)
         return "\(parts.span), \(parts.year)"
     }
 

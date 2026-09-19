@@ -82,7 +82,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
         ])
 
         let backgroundMenu = outline.outlineView.menu(forRow: -1)
-        XCTAssertEqual(backgroundMenu.items.map(\.title), ["New Project", "New Folder"])
+        XCTAssertEqual(backgroundMenu.items.map(\.title), ["New Project"])
         XCTAssertEqual(backgroundMenu.items.first?.action, #selector(MainSplitViewController.newProject(_:)))
     }
 
@@ -534,6 +534,7 @@ final class OutlineViewControllerTests: PersistenceTestCase {
             persistence: persistence,
             model: model,
             selection: selection,
+            events: EventCoordinator(source: NullEventSource()),
             mail: MailCoordinator(source: NullMailSource(), defaults: defaults),
             userDefaults: defaults
         )

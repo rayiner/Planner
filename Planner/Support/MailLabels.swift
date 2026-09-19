@@ -11,22 +11,7 @@ enum MailLabels {
     // MARK: - Mailboxes
 
     static let recentMailName = "Recent Mail"
-
-    /// The title over the message list, and the window title with it.
-    static func mailboxTitle(
-        mailbox: MailboxSelection,
-        windowDays: Int,
-        folderName: String?
-    ) -> String {
-        switch mailbox {
-        case .recent:
-            return recentMailName
-        case .folder:
-            // A folder deleted out from under the selection: name the state
-            // rather than showing an empty title bar.
-            return folderName ?? "No Folder"
-        }
-    }
+    static let searchMailName = "Search"
 
     /// The window-length pop-up's entries. Singular for one day, because "Last
     /// 1 Days" is the kind of thing that makes an app feel unfinished.
@@ -35,7 +20,7 @@ enum MailLabels {
     }
 
     /// How many messages are in view, for the toolbar and VoiceOver. The count
-    /// is what tells the user whether a seven-day window was a good idea.
+    /// is what tells the user whether the window they picked was a good idea.
     static func messageCount(_ count: Int) -> String {
         count == 1 ? "1 message" : "\(count) messages"
     }
@@ -52,8 +37,9 @@ enum MailLabels {
     ///
     /// "Today" and "Yesterday" earn their place — they are how people actually
     /// refer to recent mail — and everything else gets a weekday plus a date,
-    /// because in a seven-day window "Monday" alone is ambiguous the moment the
-    /// window is longer than a week's worth of habit.
+    /// because "Monday" alone stops identifying a day as soon as the window
+    /// reaches back further than a week, which the month-long one does four
+    /// times over.
     static func dateGroupTitle(
         for day: Date,
         now: Date = Date(),
@@ -113,9 +99,7 @@ enum MailLabels {
 
     /// The banner that says a message is on its way out of the window.
     ///
-    /// The point of Recent Mail is that it *expires*, so the reader says when —
-    /// otherwise "save it or lose it" is a rule the user has to be told once
-    /// and then remember.
+    /// The point of Recent Mail is that it *expires*, so the reader says when.
     static func expiryNotice(
         expiry: Date,
         now: Date = Date(),
@@ -128,9 +112,9 @@ enum MailLabels {
         case ..<0:
             return "This message has already left Recent Mail."
         case 0:
-            return "Leaves Recent Mail today. Save it to keep it."
+            return "Leaves Recent Mail today."
         case 1:
-            return "Leaves Recent Mail tomorrow. Save it to keep it."
+            return "Leaves Recent Mail tomorrow."
         default:
             return "Leaves Recent Mail on \(expiryFormatter(calendar).string(from: day))."
         }
@@ -149,34 +133,6 @@ enum MailLabels {
         return days <= 1
     }
 
-    static func savedChip(folderName: String) -> String {
-        "Saved to \(folderName)"
-    }
-
-    /// The reserved summary line while the model has not answered yet. Says
-    /// that something is coming rather than leaving a gap that reads as a
-    /// layout bug. Cleared, not replaced, when a summary fails: a row that
-    /// could not be summarized is not worth a second line of explanation.
-    static let summarizing = "Summarizing…"
-
-    static func conversationPosition(index: Int, of count: Int) -> String {
-        "Message \(index + 1) of \(count) in this conversation"
-    }
-
-    /// The people on a conversation, deduplicated and in order of appearance.
-    ///
-    /// Truncated after three: the row has one line for this, and a thread of
-    /// twelve would otherwise show twelve names and no subject.
-    static func threadParticipants(_ names: [String]) -> String {
-        var seen = Set<String>()
-        var ordered: [String] = []
-        for name in names where !name.isEmpty {
-            if seen.insert(name).inserted { ordered.append(name) }
-        }
-        guard ordered.count > 3 else { return ordered.joined(separator: ", ") }
-        return ordered.prefix(3).joined(separator: ", ") + " and \(ordered.count - 3) more"
-    }
-
     // MARK: - Empty states
 
     /// What an empty list means depends entirely on why it is empty, and the
@@ -188,16 +144,30 @@ enum MailLabels {
             : "No mail in the last \(days) days."
     }
 
-    static func emptyFolder(name: String) -> String {
-        "Nothing saved in “\(name)” yet."
+    static func emptyCategoryMail(name: String) -> String {
+        "No \(name.lowercased()) mail in this window."
+    }
+
+    static func hideActionTitle(count: Int) -> String {
+        count == 1 ? "Hide Message" : "Hide Messages"
+    }
+
+    static func unhideActionTitle(count: Int) -> String {
+        count == 1 ? "Unhide Message" : "Unhide Messages"
     }
 
     static let searchPlaceholder = "Search"
+    static let emptySearchPrompt = "Type a search and press Return."
+
+    static func hiddenMailVisibilityTitle(showing: Bool) -> String {
+        showing ? "Hide Hidden Mail" : "Show Hidden Mail"
+    }
 
     /// The field already shows what the user typed. Echoing it here turns a
     /// pasted paragraph into a wrapping manifesto in a 300-pt pane.
     static let emptySearch = "No messages match this search."
-    static let searchFailed = "Couldn’t search this folder."
+    static let searching = "Searching…"
+    static let searchFailed = "Couldn’t search messages."
 
     static let noMessageSelected = "Select a message to read it."
 
@@ -210,20 +180,12 @@ enum MailLabels {
         subject: String,
         receivedAt: Date,
         isRead: Bool,
-        savedFolderName: String?,
-        summary: String? = nil,
         calendar: Calendar = .current
     ) -> String {
         var parts = [sender, subject.isEmpty ? "No subject" : subject]
-        if let summary, !summary.isEmpty { parts.append(summary) }
         parts.append(readerTimestamp(for: receivedAt, calendar: calendar))
         if !isRead { parts.append("Unread") }
-        if let savedFolderName { parts.append(savedChip(folderName: savedFolderName)) }
         return parts.joined(separator: ", ")
-    }
-
-    static func threadAccessibilityLabel(subject: String, count: Int, latest: Date) -> String {
-        "\(subject), \(messageCount(count)), latest \(readerTimestamp(for: latest))"
     }
 
     // MARK: - Formatting

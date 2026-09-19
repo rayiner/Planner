@@ -23,6 +23,11 @@ final class EventCoordinator {
     /// Backstop so the UI can always leave `.loading`, even behind a source
     /// that neither returns nor throws. Sources set their own timeouts too;
     /// this one exists because a hung spinner is unrecoverable from the UI.
+    ///
+    /// Measured from the last word out of the indexer rather than from the
+    /// start of the fetch. A calendar refresh queues behind a running mail
+    /// index — one sync job at a time — so the wait routinely outlasts thirty
+    /// seconds while the helper is plainly working.
     static let timeoutSeconds = 30
 
     private let source: CalendarEventSource
@@ -116,10 +121,9 @@ final class EventCoordinator {
 
         let source = source
         let seconds = timeoutSeconds
-        // The source wraps a blocking Apple event that never observes
-        // cancellation, so a task-group timeout would sit behind it. The
-        // timer only flips the UI; a late real result still applies via
-        // the generation gate.
+        // The source can be inside an index sync when this task is cancelled.
+        // The timer flips the UI independently; a late real result still
+        // applies only if the generation gate accepts it.
         loadTask = Task { [weak self] in
             do {
                 let events = try await source.events(in: target, userInitiated: userInitiated)
@@ -133,7 +137,7 @@ final class EventCoordinator {
             }
         }
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            await OutlookSyncProgressReporter.shared.waitForSilence(seconds: seconds)
             guard !Task.isCancelled else { return }
             self?.timeoutIfStillLoading(generation: generation, seconds: seconds)
         }

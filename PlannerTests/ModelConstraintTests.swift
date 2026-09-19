@@ -274,6 +274,43 @@ final class ModelConstraintTests: PersistenceTestCase {
         try model.delete(subtask)
         XCTAssertEqual(undo?.undoActionName, "Delete")
     }
+
+    func testMoveTaskIntoAnotherProject() throws {
+        let source = try model.createProject()
+        let destination = try model.createProject()
+        let task = try model.createTask(in: source)
+
+        try model.move(task, under: destination)
+
+        XCTAssertEqual(task.project, destination)
+        XCTAssertNil(task.parentTask)
+        XCTAssertEqual(destination.outlineChildren.map(\.uuid), [task.uuid])
+        XCTAssertTrue(source.outlineChildren.isEmpty)
+    }
+
+    func testMoveTaskUnderAnotherTask() throws {
+        let project = try model.createProject()
+        let parent = try model.createTask(in: project)
+        let task = try model.createTask(in: project)
+
+        try model.move(task, under: parent)
+
+        XCTAssertEqual(task.parentTask, parent)
+        XCTAssertNil(task.project)
+        XCTAssertEqual(parent.outlineChildren.map(\.uuid), [task.uuid])
+    }
+
+    func testMoveTaskRefusesACycle() throws {
+        let project = try model.createProject()
+        let parent = try model.createTask(in: project)
+        let child = try model.createSubtask(under: parent)
+
+        XCTAssertThrowsError(try model.move(parent, under: child)) { error in
+            XCTAssertEqual(error as? ModelError, .cycle)
+        }
+        XCTAssertEqual(parent.project, project)
+        XCTAssertEqual(child.parentTask, parent)
+    }
 }
 
 @MainActor

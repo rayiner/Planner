@@ -76,7 +76,7 @@ final class MailHeaderTests: XCTestCase {
         )
         XCTAssertEqual(parsed.inReplyTo, "<0CB6B068-D474-484A-BFF2-90D0C855BD85@mololamken.com>")
         XCTAssertEqual(
-            MailThreading.referenceIDs(from: parsed.references).count,
+            MailHeaders.referenceIDs(from: parsed.references).count,
             2,
             "the folded second reference was lost"
         )

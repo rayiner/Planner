@@ -15,9 +15,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private let datePicker = NSDatePicker()
     private let dueCaptionLabel = NSTextField(labelWithString: "")
     private let deadlineRow = NSStackView()
-    /// "From: <subject>" on a task made from a message. A button rather than a
-    /// label because it is also the way back to the message it came from.
-    private let sourceMessageButton = NSButton()
     private let formatBar = NSSegmentedControl()
     private let notesScrollView = NSScrollView()
     private let notesTextView = NoteTextView(frame: .zero)
@@ -60,15 +57,20 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     private var boundDay: Date?
     private var noteSaveTimer: Timer?
     private var noteUndoManager = UndoManager()
+    /// The main inspector keeps the name in the toolbar. A detached task
+    /// window has no toolbar slot, so the name sits in the pane.
+    private let showsEmbeddedTitle: Bool
 
     init(
         persistence: PersistenceController,
         model: ModelController,
-        selection: SelectionModel
+        selection: SelectionModel,
+        showsEmbeddedTitle: Bool = false
     ) {
         self.persistence = persistence
         self.model = model
         self.selection = selection
+        self.showsEmbeddedTitle = showsEmbeddedTitle
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -108,13 +110,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
     override func viewDidLayout() {
         super.viewDidLayout()
         titleField.preferredToolbarWidth = max(120, view.bounds.width - 20)
-    }
-
-    /// Hosted in the inspector's toolbar slot. Not in the pane: the name
-    /// belongs with the chrome, the way the calendar title sits over the grid.
-    var titleToolbarView: NSView {
-        loadViewIfNeeded()
-        return titleField
     }
 
     override func viewWillDisappear() {
@@ -258,25 +253,18 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             notesPlaceholder.topAnchor.constraint(equalTo: notesScrollView.topAnchor, constant: 4),
         ])
 
-        sourceMessageButton.bezelStyle = .inline
-        sourceMessageButton.controlSize = .small
-        sourceMessageButton.font = .systemFont(ofSize: 11)
-        sourceMessageButton.lineBreakMode = .byTruncatingTail
-        sourceMessageButton.isHidden = true
-        // Routed through the responder chain: revealing a message is the split
-        // controller's job, since it owns both modes.
-        sourceMessageButton.target = nil
-        sourceMessageButton.action = #selector(MainSplitViewController.revealSourceMessage(_:))
-
-        let stack = NSStackView(views: [
+        var rows: [NSView] = [
             captionLabel,
-            sourceMessageButton,
             deadlineRow,
             formatBar,
             notesScrollView,
             noteSaveErrorLabel,
             bottomSpacer,
-        ])
+        ]
+        if showsEmbeddedTitle {
+            rows.insert(titleField, at: 0)
+        }
+        let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.distribution = .fill
@@ -293,7 +281,7 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         bottomSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(100), for: .vertical)
         bottomSpacer.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .vertical)
 
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -304,7 +292,13 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
             notesScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 64),
             noteSaveErrorLabel.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16),
             datePicker.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
-        ])
+        ]
+        if showsEmbeddedTitle {
+            constraints.append(
+                titleField.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -16)
+            )
+        }
+        NSLayoutConstraint.activate(constraints)
     }
 
     private func configureRow(_ row: NSStackView, views: [NSView], spacing: CGFloat) {
@@ -420,7 +414,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         titleField.isEnabled = false
         titleField.textColor = .secondaryLabelColor
         captionLabel.isHidden = true
-        sourceMessageButton.isHidden = true
         completedCheckbox.isHidden = true
         completedCheckbox.isEnabled = false
         completedCheckbox.state = .off
@@ -449,7 +442,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         let count = descendantTaskCount(of: project)
         captionLabel.stringValue = count == 1 ? "1 task" : "\(count) tasks"
         captionLabel.isHidden = false
-        sourceMessageButton.isHidden = true
         completedCheckbox.isHidden = true
         completedCheckbox.isEnabled = false
         completedCheckbox.state = .off
@@ -476,7 +468,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         titleField.isEnabled = true
         titleField.textColor = .labelColor
         captionLabel.isHidden = true
-        updateSourceMessageChip(for: task)
         completedCheckbox.isHidden = false
         completedCheckbox.isEnabled = true
         completedCheckbox.state = task.isCompleted ? .on : .off
@@ -515,22 +506,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
         updateNotesPlaceholder()
     }
 
-    /// The chip on a task made from a message, and the way back to it.
-    ///
-    /// Hidden when the link dangles — the message has been removed from its
-    /// folder since. The link is a UUID rather than a relationship precisely so
-    /// that case is a missing chip rather than a deleted task.
-    private func updateSourceMessageChip(for task: TaskItem) {
-        guard let message = model.sourceMessage(of: task) else {
-            sourceMessageButton.isHidden = true
-            return
-        }
-        let subject = message.subject.isEmpty ? "(No subject)" : message.subject
-        sourceMessageButton.title = "From: \(subject)"
-        sourceMessageButton.toolTip = "Show this message in Mail"
-        sourceMessageButton.isHidden = false
-    }
-
     /// A day has a note and nothing else: no completion flag, no due date.
     private func pushDay(_ day: Date, replaceNotes: Bool) {
         isUpdatingUI = true
@@ -541,7 +516,6 @@ final class InspectorViewController: NSViewController, NSTextViewDelegate {
 
         let formatter = DateFormatter()
         formatter.calendar = Calendar.current
-        sourceMessageButton.isHidden = true
         formatter.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
         titleField.stringValue = formatter.string(from: day)
         titleField.isEnabled = true
@@ -927,12 +901,6 @@ extension InspectorViewController {
     func test_saveNoteIfMatching(_ objectID: NSManagedObjectID) {
         guard boundTaskObjectID == objectID else { return }
         persistBoundNote()
-    }
-}
-
-extension InspectorViewController {
-    var test_sourceMessageChip: String? {
-        sourceMessageButton.isHidden ? nil : sourceMessageButton.title
     }
 }
 
